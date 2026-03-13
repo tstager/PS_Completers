@@ -144,6 +144,48 @@ $GitNativeCompleter = {
         git symbolic-ref --short HEAD 2>$null
     }
 
+    $getHookNames = {
+        $defaultHookNames = @(
+            'applypatch-msg',
+            'pre-applypatch',
+            'post-applypatch',
+            'pre-commit',
+            'pre-merge-commit',
+            'prepare-commit-msg',
+            'commit-msg',
+            'post-commit',
+            'pre-rebase',
+            'post-checkout',
+            'post-merge',
+            'pre-push',
+            'pre-receive',
+            'update',
+            'proc-receive',
+            'post-receive',
+            'post-update',
+            'reference-transaction',
+            'push-to-checkout',
+            'pre-auto-gc',
+            'post-rewrite',
+            'sendemail-validate',
+            'fsmonitor-watchman'
+        )
+
+        $repoHookNames = @()
+        $hooksPath = git rev-parse --git-path hooks 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($hooksPath)) {
+            $repoHookNames = @(
+                Get-ChildItem -Path $hooksPath -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -notlike '*.sample' } |
+                    ForEach-Object { $_.BaseName }
+            )
+        }
+
+        @($defaultHookNames + $repoHookNames) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    }
+
     $getNewBranchSuggestions = {
         $currentBranch = & $getCurrentBranch
         $names = @(
@@ -173,6 +215,7 @@ $GitNativeCompleter = {
         'push',
         'pull',
         'fetch',
+        'hook',
         'switch',
         'checkout',
         'branch',
@@ -200,7 +243,7 @@ $GitNativeCompleter = {
         if (-not $subcommands -or $subcommands.Count -eq 0) {
             $subcommands = @(
                 'add', 'bisect', 'branch', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'diff',
-                'fetch', 'grep', 'init', 'log', 'merge', 'mv', 'pull', 'push', 'rebase', 'reset', 'restore',
+                'fetch', 'grep', 'hook', 'init', 'log', 'merge', 'mv', 'pull', 'push', 'rebase', 'reset', 'restore',
                 'revert', 'rm', 'show', 'stash', 'status', 'switch', 'tag', 'worktree'
             )
         }
@@ -233,7 +276,7 @@ $GitNativeCompleter = {
     $subcommand = $tokens[1]
 
     if ($wordToComplete -like '-*') {
-        if ($subcommand -ne 'worktree' -or $argIndex -le 1) {
+        if ($subcommand -notin @('worktree', 'hook') -or $argIndex -le 1) {
             & $completeFlags $subcommand
             return
         }
@@ -289,6 +332,75 @@ $GitNativeCompleter = {
             }
             default {
                 & $completeList $worktreeSubcommands
+                return
+            }
+        }
+    }
+
+    if ($subcommand -eq 'hook') {
+        $hookSubcommands = @('run')
+
+        if ($argIndex -le 1) {
+            & $completeList $hookSubcommands
+            return
+        }
+
+        $hookAction = $tokens[2]
+
+        if ($wordToComplete -like '-*') {
+            $hookActionFlags = @{
+                'run' = @('--ignore-missing', '--to-stdin')
+            }
+
+            if ($hookActionFlags.ContainsKey($hookAction)) {
+                & $completeList $hookActionFlags[$hookAction]
+            }
+            else {
+                & $completeList $hookSubcommands
+            }
+            return
+        }
+
+        switch ($hookAction) {
+            'run' {
+                if (($hasTrailingSpace -and $tokens[-1] -eq '--to-stdin') -or
+                    (-not $hasTrailingSpace -and $argIndex -ge 3 -and $tokens[$argIndex] -eq '--to-stdin')) {
+                    return
+                }
+
+                $hookRunArgs = @()
+                if ($argIndex -ge 3) {
+                    $hookRunArgs = @($tokens[3..$argIndex])
+                }
+
+                $hookName = $null
+                for ($i = 0; $i -lt $hookRunArgs.Count; $i++) {
+                    $token = $hookRunArgs[$i]
+
+                    if ($token -eq '--') {
+                        break
+                    }
+
+                    if ($token -eq '--to-stdin') {
+                        $i++
+                        continue
+                    }
+
+                    if ($token -like '--to-stdin=*' -or $token.StartsWith('-')) {
+                        continue
+                    }
+
+                    $hookName = $token
+                    break
+                }
+
+                if (-not $hookName) {
+                    & $completeList (& $getHookNames)
+                }
+                return
+            }
+            default {
+                & $completeList $hookSubcommands
                 return
             }
         }
