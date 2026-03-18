@@ -43,6 +43,52 @@ $GitNativeCompleter = {
             ForEach-Object { & $newResult $_ }
     }
 
+    $completeOrderedList = {
+        param([string]$prefix, [string[]]$values)
+
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($value in $values) {
+            if ([string]::IsNullOrWhiteSpace($value)) {
+                continue
+            }
+
+            if (-not $seen.Add($value)) {
+                continue
+            }
+
+            if ($value -like "$prefix*") {
+                & $newResult $value
+            }
+        }
+    }
+
+    $completeFileSystemPaths = {
+        param(
+            [string]$pathPrefix,
+            [string]$completionPrefix = '',
+            [switch]$DirectoriesOnly
+        )
+
+        [System.Management.Automation.CompletionCompleters]::CompleteFilename($pathPrefix) |
+            Where-Object {
+                -not $DirectoriesOnly -or (Test-Path -LiteralPath $_.CompletionText -PathType Container)
+            } |
+            ForEach-Object {
+                if ([string]::IsNullOrEmpty($completionPrefix)) {
+                    $_
+                }
+                else {
+                    $completionText = "$completionPrefix$($_.CompletionText)"
+                    [System.Management.Automation.CompletionResult]::new(
+                        $completionText,
+                        $completionText,
+                        'ParameterValue',
+                        $completionText
+                    )
+                }
+            }
+    }
+
     $getRefs = {
         @(
             git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags 2>$null
@@ -58,6 +104,14 @@ $GitNativeCompleter = {
         @(
             git ls-files 2>$null
             git ls-files --others --exclude-standard 2>$null
+        ) | Where-Object { $_ }
+    }
+
+    $getWorktreePaths = {
+        @(
+            git worktree list --porcelain 2>$null |
+                Where-Object { $_ -like 'worktree *' } |
+                ForEach-Object { $_.Substring(9) }
         ) | Where-Object { $_ }
     }
 
@@ -78,37 +132,215 @@ $GitNativeCompleter = {
         '--no-pager'
     )
 
-    $subcommandFlags = @{
-        'add'      = @('--all', '-A', '--patch', '-p', '--interactive', '-i', '--update', '-u', '--intent-to-add', '-N')
-        'branch'   = @('--all', '-a', '--delete', '-d', '-D', '--move', '-m', '-M', '--list', '-l', '--set-upstream-to')
-        'checkout' = @('--detach', '-b', '-B', '--track', '-t', '--orphan', '--patch', '-p')
-        'switch'   = @('--detach', '-c', '-C', '--track', '--guess', '--discard-changes', '--force', '-f')
-        'commit'   = @('--all', '-a', '--amend', '--message', '-m', '--patch', '-p', '--reuse-message', '-C', '--fixup', '--squash', '--signoff', '-s')
-        'config'   = @('--global', '--system', '--local', '--worktree', '--unset', '--unset-all', '--add', '--replace-all', '--get', '--get-all', '--list', '-l', '--type')
-        'diff'     = @('--cached', '--staged', '--name-only', '--name-status', '--stat', '--color', '--no-color', '--patch', '-p')
-        'fetch'    = @('--all', '--prune', '--prune-tags', '--tags', '--force', '--dry-run', '-n', '--quiet', '-q', '--verbose', '-v')
-        'log'      = @('--oneline', '--graph', '--decorate', '--stat', '--patch', '-p', '--name-only', '--name-status', '--follow', '--since', '--until')
-        'merge'    = @('--no-ff', '--ff-only', '--squash', '--no-commit', '--abort', '--continue', '--strategy', '-s')
-        'pull'     = @('--rebase', '--no-rebase', '--ff-only', '--all', '--prune', '--tags', '--quiet', '-q', '--verbose', '-v')
-        'push'     = @('--all', '--tags', '--force', '-f', '--force-with-lease', '--set-upstream', '-u', '--delete', '--dry-run', '-n', '--follow-tags', '--atomic')
-        'rebase'   = @('--continue', '--abort', '--skip', '--interactive', '-i', '--onto', '--rebase-merges', '--autosquash', '--autostash')
-        'reset'    = @('--soft', '--mixed', '--hard', '--merge', '--keep', '--patch', '-p')
-        'restore'  = @('--staged', '--worktree', '--source', '--patch', '-p')
-        'rm'       = @('--cached', '--force', '-f', '--recursive', '-r', '--dry-run', '-n')
-        'show'     = @('--stat', '--name-only', '--name-status', '--patch', '-p', '--oneline')
-        'stash'    = @('--all', '-a', '--include-untracked', '-u', '--patch', '-p', '--keep-index', '--message', '-m')
-        'status'   = @('--short', '-s', '--branch', '-b', '--porcelain', '--show-stash', '--untracked-files')
-        'tag'      = @('--list', '-l', '--annotate', '-a', '--delete', '-d', '--force', '-f', '--sort', '--contains')
-        'worktree' = @('--porcelain', '--verbose', '-v', '--expire', '--reason', '--detach', '-d', '--checkout', '--force', '-f', '--lock', '--orphan', '--track', '--guess-remote', '--quiet', '-q')
+    if (-not (Get-Variable -Name GitHelpMetadataCache -Scope Global -ErrorAction SilentlyContinue)) {
+        $global:GitHelpMetadataCache = @{}
     }
 
-    $completeFlags = {
-        param([string]$command)
-        $flags = @($globalGitFlags)
-        if ($subcommandFlags.ContainsKey($command)) {
-            $flags += $subcommandFlags[$command]
+    $documentedNestedSubcommands = @{
+        'hook'            = @('run')
+        'maintenance'     = @('is-needed', 'register', 'run', 'start', 'stop', 'unregister')
+        'notes'           = @('add', 'append', 'copy', 'edit', 'get-ref', 'list', 'merge', 'prune', 'remove', 'show')
+        'reflog'          = @('delete', 'drop', 'exists', 'expire', 'list', 'show', 'write')
+        'remote'          = @('add', 'get-url', 'prune', 'remove', 'rename', 'rm', 'set-branches', 'set-head', 'set-url', 'show', 'update')
+        'sparse-checkout' = @('add', 'check-rules', 'clean', 'disable', 'init', 'list', 'reapply', 'set')
+        'stash'           = @('apply', 'branch', 'clear', 'create', 'drop', 'export', 'import', 'list', 'pop', 'push', 'save', 'show', 'store')
+        'submodule'       = @('absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update')
+        'worktree'        = @('add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock')
+    }
+
+    $getTopLevelSubcommands = {
+        if ($global:GitHelpMetadataCache.ContainsKey('<root>')) {
+            return $global:GitHelpMetadataCache['<root>'].Subcommands
         }
-        & $completeList $flags
+
+        $subcommands = @(
+            git --list-cmds=main,others,alias,nohelpers 2>$null
+        )
+
+        if (-not $subcommands -or $subcommands.Count -eq 0) {
+            $subcommands = @(
+                'add', 'bisect', 'branch', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'diff',
+                'fetch', 'grep', 'hook', 'init', 'log', 'merge', 'mv', 'pull', 'push', 'rebase', 'reset', 'restore',
+                'revert', 'rm', 'show', 'stash', 'status', 'switch', 'tag', 'worktree'
+            )
+        }
+
+        $metadata = [pscustomobject]@{
+            Flags       = @($globalGitFlags)
+            Subcommands = @(
+                $subcommands |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Sort-Object -Unique
+            )
+        }
+
+        $global:GitHelpMetadataCache['<root>'] = $metadata
+        $metadata.Subcommands
+    }
+
+    $getCommandMetadata = {
+        param([string[]]$commandPath)
+
+        $cacheKey = if ($commandPath.Count -gt 0) {
+            $commandPath -join ' '
+        }
+        else {
+            '<root>'
+        }
+
+        if ($cacheKey -eq '<root>' -and -not $global:GitHelpMetadataCache.ContainsKey($cacheKey)) {
+            $null = & $getTopLevelSubcommands
+        }
+
+        if ($global:GitHelpMetadataCache.ContainsKey($cacheKey)) {
+            return $global:GitHelpMetadataCache[$cacheKey]
+        }
+
+        $helpLines = @(
+            & git @commandPath -h 2>&1 |
+                ForEach-Object { $_.ToString() }
+        )
+
+        $flags = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $helpLines) {
+            foreach ($match in [regex]::Matches($line, '(?<!\w)(--\[(?:no-)\][A-Za-z0-9][A-Za-z0-9-]*|--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])')) {
+                $option = $match.Value
+                if ($option -match '^--\[no-\](.+)$') {
+                    $flags.Add("--$($Matches[1])")
+                    $flags.Add("--no-$($Matches[1])")
+                }
+                else {
+                    $flags.Add($option)
+                }
+            }
+        }
+
+        $subcommands = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $helpLines) {
+            if ($line -notmatch '^\s*(?:usage:|or:)\s+git\s+') {
+                continue
+            }
+
+            $usage = $line -replace '^\s*(?:usage:|or:)\s+git\s+', ''
+            $usageTokens = @(
+                [regex]::Matches($usage, '\S+') |
+                    ForEach-Object { $_.Value }
+            )
+
+            if ($usageTokens.Count -le $commandPath.Count) {
+                continue
+            }
+
+            $matchesPath = $true
+            for ($i = 0; $i -lt $commandPath.Count; $i++) {
+                if ($usageTokens[$i] -ne $commandPath[$i]) {
+                    $matchesPath = $false
+                    break
+                }
+            }
+
+            if (-not $matchesPath) {
+                continue
+            }
+
+            $usageRemainder = ($usageTokens[$commandPath.Count..($usageTokens.Count - 1)] -join ' ')
+
+            $alternativesMatch = [regex]::Match(
+                $usageRemainder,
+                '^\s*[\[(]*(?<commands>[A-Za-z0-9][A-Za-z0-9-]*(?:\s*\|\s*[A-Za-z0-9][A-Za-z0-9-]*)+)'
+            )
+            if ($alternativesMatch.Success) {
+                foreach ($candidate in ($alternativesMatch.Groups['commands'].Value -split '\|')) {
+                    $cleanCandidate = $candidate.Trim()
+                    if ($cleanCandidate -match '^[A-Za-z0-9][A-Za-z0-9-]*$') {
+                        $subcommands.Add($cleanCandidate)
+                    }
+                }
+                continue
+            }
+
+            $singleCommandMatch = [regex]::Match(
+                $usageRemainder,
+                '^\s*[\[(]*(?<command>[A-Za-z0-9][A-Za-z0-9-]*)'
+            )
+            if ($singleCommandMatch.Success) {
+                $subcommands.Add($singleCommandMatch.Groups['command'].Value)
+            }
+        }
+
+        if ($documentedNestedSubcommands.ContainsKey($cacheKey)) {
+            foreach ($documentedSubcommand in $documentedNestedSubcommands[$cacheKey]) {
+                $subcommands.Add($documentedSubcommand)
+            }
+        }
+
+        $metadata = [pscustomobject]@{
+            Flags       = @($flags | Sort-Object -Unique)
+            Subcommands = @($subcommands | Sort-Object -Unique)
+        }
+
+        $global:GitHelpMetadataCache[$cacheKey] = $metadata
+        $metadata
+    }
+
+    $getCommandContext = {
+        param([string[]]$argsBeforeCursor)
+
+        $commandPath = @()
+        $metadata = & $getCommandMetadata $commandPath
+        $lastNonFlagArgument = $null
+
+        foreach ($argument in $argsBeforeCursor) {
+            if ($argument.StartsWith('-')) {
+                continue
+            }
+
+            $lastNonFlagArgument = $argument
+            if ($metadata.Subcommands -contains $argument) {
+                $commandPath += $argument
+                $metadata = & $getCommandMetadata $commandPath
+            }
+        }
+
+        [pscustomobject]@{
+            CommandPath         = @($commandPath)
+            Metadata            = $metadata
+            LastNonFlagArgument = $lastNonFlagArgument
+        }
+    }
+
+    $getArgumentsAfterPath = {
+        param([string[]]$argsBeforeCursor, [string[]]$commandPath)
+
+        $remainingPath = [System.Collections.Generic.Queue[string]]::new()
+        foreach ($segment in $commandPath) {
+            $remainingPath.Enqueue($segment)
+        }
+
+        $arguments = [System.Collections.Generic.List[string]]::new()
+        foreach ($argument in $argsBeforeCursor) {
+            if ($remainingPath.Count -gt 0 -and $argument -eq $remainingPath.Peek()) {
+                $null = $remainingPath.Dequeue()
+                continue
+            }
+
+            if ($remainingPath.Count -gt 0) {
+                continue
+            }
+
+            $arguments.Add($argument)
+        }
+
+        @($arguments)
+    }
+
+    $getPositionalArgumentsAfterPath = {
+        param([string[]]$argsBeforeCursor, [string[]]$commandPath)
+
+        @(
+            & $getArgumentsAfterPath $argsBeforeCursor $commandPath |
+                Where-Object { -not $_.StartsWith('-') }
+        )
     }
 
     $getConfigKeys = {
@@ -208,6 +440,105 @@ $GitNativeCompleter = {
         $names
     }
 
+    $getInitBranchSuggestions = {
+        $configuredBranch = git config --get init.defaultBranch 2>$null
+        @(
+            $configuredBranch
+            'main'
+            'master'
+            'develop'
+            'trunk'
+        ) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    }
+
+    $getInitFlagCompletions = {
+        param([string[]]$metadataFlags)
+
+        $preferredFlags = @(
+            '--quiet',
+            '-q',
+            '--bare',
+            '--template=',
+            '--separate-git-dir',
+            '--object-format=',
+            '--ref-format=',
+            '-b',
+            '--initial-branch=',
+            '--shared',
+            '--shared='
+        )
+
+        $remainingFlags = @(
+            $metadataFlags |
+                Where-Object { $_ -notin @('--template', '--object-format', '--ref-format', '--initial-branch') }
+        )
+
+        @($preferredFlags + $remainingFlags)
+    }
+
+    $completeInitOptionValues = {
+        param(
+            [string]$optionName,
+            [string]$valuePrefix,
+            [switch]$Attached
+        )
+
+        switch ($optionName) {
+            '--template' {
+                $completionPrefix = if ($Attached) { '--template=' } else { '' }
+                & $completeFileSystemPaths $valuePrefix $completionPrefix -DirectoriesOnly
+                return
+            }
+            '--separate-git-dir' {
+                $completionPrefix = if ($Attached) { '--separate-git-dir=' } else { '' }
+                & $completeFileSystemPaths $valuePrefix $completionPrefix -DirectoriesOnly
+                return
+            }
+            '--object-format' {
+                $values = @('sha1', 'sha256')
+                if ($Attached) {
+                    & $completeOrderedList $wordToComplete ($values | ForEach-Object { "--object-format=$_" })
+                }
+                else {
+                    & $completeOrderedList $valuePrefix $values
+                }
+                return
+            }
+            '--ref-format' {
+                $values = @('files', 'reftable')
+                if ($Attached) {
+                    & $completeOrderedList $wordToComplete ($values | ForEach-Object { "--ref-format=$_" })
+                }
+                else {
+                    & $completeOrderedList $valuePrefix $values
+                }
+                return
+            }
+            { $_ -in @('-b', '--initial-branch') } {
+                $values = @(& $getInitBranchSuggestions)
+                if ($Attached) {
+                    & $completeOrderedList $wordToComplete ($values | ForEach-Object { "--initial-branch=$_" })
+                }
+                else {
+                    & $completeOrderedList $valuePrefix $values
+                }
+                return
+            }
+            '--shared' {
+                $values = @('false', 'true', 'umask', 'group', 'all', 'world', 'everybody', '0640', '0660', '0770')
+                if ($Attached) {
+                    & $completeOrderedList $wordToComplete ($values | ForEach-Object { "--shared=$_" })
+                }
+                else {
+                    & $completeOrderedList $valuePrefix $values
+                }
+                return
+            }
+        }
+    }
+
     $preferredSubcommands = @(
         'status',
         'add',
@@ -236,23 +567,7 @@ $GitNativeCompleter = {
             return
         }
 
-        $subcommands = @(
-            git --list-cmds=main, others, alias, nohelpers 2>$null
-        )
-
-        if (-not $subcommands -or $subcommands.Count -eq 0) {
-            $subcommands = @(
-                'add', 'bisect', 'branch', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'diff',
-                'fetch', 'grep', 'hook', 'init', 'log', 'merge', 'mv', 'pull', 'push', 'rebase', 'reset', 'restore',
-                'revert', 'rm', 'show', 'stash', 'status', 'switch', 'tag', 'worktree'
-            )
-        }
-
-        $allSubcommands = @(
-            $subcommands |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Sort-Object -Unique
-        )
+        $allSubcommands = @(& $getTopLevelSubcommands)
 
         $orderedSubcommands = @()
         foreach ($name in $preferredSubcommands) {
@@ -273,142 +588,168 @@ $GitNativeCompleter = {
         return
     }
 
-    $subcommand = $tokens[1]
+    $argsBeforeCursor = @()
+    if ($argIndex -ge 1) {
+        $argsBeforeCursor = @($tokens[1..$argIndex])
+    }
+
+    $commandContext = & $getCommandContext $argsBeforeCursor
+    $commandPath = @($commandContext.CommandPath)
+    $commandText = $commandPath -join ' '
+    $subcommand = if ($commandPath.Count -gt 0) { $commandPath[0] } else { $null }
+    $argsAfterPath = @(& $getArgumentsAfterPath $argsBeforeCursor $commandPath)
+    $positionalsAfterPath = @(& $getPositionalArgumentsAfterPath $argsBeforeCursor $commandPath)
+
+    if ($commandText -eq 'init') {
+        $attachedInitValueMatch = [regex]::Match(
+            $wordToComplete,
+            '^(?<option>--template|--separate-git-dir|--object-format|--ref-format|--initial-branch|--shared)=(?<value>.*)$'
+        )
+        if ($attachedInitValueMatch.Success) {
+            & $completeInitOptionValues $attachedInitValueMatch.Groups['option'].Value $attachedInitValueMatch.Groups['value'].Value -Attached
+            return
+        }
+
+        if ($hasTrailingSpace -and $argsAfterPath.Count -gt 0) {
+            $previousInitArgument = $argsAfterPath[-1]
+            if ($previousInitArgument -in @('--template', '--separate-git-dir', '--object-format', '--ref-format', '-b', '--initial-branch')) {
+                & $completeInitOptionValues $previousInitArgument $wordToComplete
+                return
+            }
+        }
+    }
 
     if ($wordToComplete -like '-*') {
-        if ($subcommand -notin @('worktree', 'hook') -or $argIndex -le 1) {
-            & $completeFlags $subcommand
+        if ($commandText -eq 'init') {
+            & $completeOrderedList $wordToComplete (& $getInitFlagCompletions $commandContext.Metadata.Flags)
+        }
+        else {
+            & $completeList $commandContext.Metadata.Flags
+        }
+        return
+    }
+
+    if ($commandContext.Metadata.Subcommands.Count -gt 0) {
+        $isAtSubcommandBoundary = [string]::IsNullOrWhiteSpace($commandContext.LastNonFlagArgument)
+        if (-not $isAtSubcommandBoundary -and $commandPath.Count -gt 0) {
+            $isAtSubcommandBoundary = $commandContext.LastNonFlagArgument -eq $commandPath[-1]
+        }
+
+        if ($commandPath.Count -eq 0) {
+            $isAtSubcommandBoundary = $true
+        }
+
+        if ($isAtSubcommandBoundary) {
+            & $completeList $commandContext.Metadata.Subcommands
             return
         }
     }
 
-    if ($subcommand -eq 'worktree') {
-        $worktreeSubcommands = @('add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock')
+    $shouldCompleteLeafFlags = (
+        $hasTrailingSpace -and
+        [string]::IsNullOrEmpty($wordToComplete) -and
+        $commandPath.Count -gt 0 -and
+        $positionalsAfterPath.Count -eq 0 -and
+        $commandContext.Metadata.Subcommands.Count -eq 0
+    )
 
-        if ($argIndex -le 1) {
-            & $completeList $worktreeSubcommands
+    if ($commandText -eq 'hook run') {
+        if ($argsAfterPath.Count -gt 0 -and $argsAfterPath[-1] -eq '--to-stdin') {
             return
         }
 
-        $worktreeAction = $tokens[2]
+        $hookName = $null
+        for ($i = 0; $i -lt $argsAfterPath.Count; $i++) {
+            $token = $argsAfterPath[$i]
 
-        if ($wordToComplete -like '-*') {
-            $worktreeActionFlags = @{
-                'add'    = @('--detach', '-d', '--checkout', '--force', '-f', '--lock', '--orphan', '--track', '--guess-remote', '--quiet', '-q')
-                'list'   = @('--porcelain', '--verbose', '-v')
-                'lock'   = @('--reason')
-                'move'   = @('--force', '-f')
-                'prune'  = @('--expire', '--verbose', '-v')
-                'remove' = @('--force', '-f')
-                'repair' = @()
-                'unlock' = @()
+            if ($token -eq '--') {
+                break
             }
 
-            if ($worktreeActionFlags.ContainsKey($worktreeAction)) {
-                & $completeList $worktreeActionFlags[$worktreeAction]
+            if ($token -eq '--to-stdin') {
+                $i++
+                continue
             }
-            else {
-                & $completeList $worktreeSubcommands
+
+            if ($token -like '--to-stdin=*' -or $token.StartsWith('-')) {
+                continue
             }
-            return
+
+            $hookName = $token
+            break
         }
 
-        switch ($worktreeAction) {
-            'add' {
-                if ($argIndex -ge 3) {
-                    & $completeList (& $getRefs)
-                }
-                return
-            }
-            { $_ -in @('lock', 'move', 'remove', 'repair', 'unlock') } {
-                & $completeList (& $getWorktreePaths)
-                return
-            }
-            'list' {
-                return
-            }
-            'prune' {
-                return
-            }
-            default {
-                & $completeList $worktreeSubcommands
-                return
-            }
-        }
-    }
-
-    if ($subcommand -eq 'hook') {
-        $hookSubcommands = @('run')
-
-        if ($argIndex -le 1) {
-            & $completeList $hookSubcommands
-            return
+        if (-not $hookName) {
+            & $completeList (& $getHookNames)
         }
 
-        $hookAction = $tokens[2]
-
-        if ($wordToComplete -like '-*') {
-            $hookActionFlags = @{
-                'run' = @('--ignore-missing', '--to-stdin')
-            }
-
-            if ($hookActionFlags.ContainsKey($hookAction)) {
-                & $completeList $hookActionFlags[$hookAction]
-            }
-            else {
-                & $completeList $hookSubcommands
-            }
-            return
-        }
-
-        switch ($hookAction) {
-            'run' {
-                if (($hasTrailingSpace -and $tokens[-1] -eq '--to-stdin') -or
-                    (-not $hasTrailingSpace -and $argIndex -ge 3 -and $tokens[$argIndex] -eq '--to-stdin')) {
-                    return
-                }
-
-                $hookRunArgs = @()
-                if ($argIndex -ge 3) {
-                    $hookRunArgs = @($tokens[3..$argIndex])
-                }
-
-                $hookName = $null
-                for ($i = 0; $i -lt $hookRunArgs.Count; $i++) {
-                    $token = $hookRunArgs[$i]
-
-                    if ($token -eq '--') {
-                        break
-                    }
-
-                    if ($token -eq '--to-stdin') {
-                        $i++
-                        continue
-                    }
-
-                    if ($token -like '--to-stdin=*' -or $token.StartsWith('-')) {
-                        continue
-                    }
-
-                    $hookName = $token
-                    break
-                }
-
-                if (-not $hookName) {
-                    & $completeList (& $getHookNames)
-                }
-                return
-            }
-            default {
-                & $completeList $hookSubcommands
-                return
-            }
-        }
+        return
     }
 
     if ($subcommand -eq 'config') {
         & $completeList (& $getConfigKeys)
         return
+    }
+
+    switch ($commandText) {
+        'worktree add' {
+            if ($positionalsAfterPath.Count -ge 1) {
+                & $completeList (& $getRefs)
+            }
+            return
+        }
+        { $_ -in @('worktree lock', 'worktree move', 'worktree remove', 'worktree repair', 'worktree unlock') } {
+            & $completeList (& $getWorktreePaths)
+            return
+        }
+        'worktree list' {
+            return
+        }
+        'worktree prune' {
+            return
+        }
+        'remote remove' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            return
+        }
+        'remote rename' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            return
+        }
+        'remote set-head' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            elseif ($positionalsAfterPath.Count -lt 2) {
+                & $completeList (& $getRefs)
+            }
+            return
+        }
+        { $_ -in @('remote show', 'remote prune', 'remote update', 'remote get-url') } {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            return
+        }
+        'remote set-branches' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            else {
+                & $completeList (& $getRefs)
+            }
+            return
+        }
+        'remote set-url' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+            }
+            return
+        }
     }
 
     switch ($subcommand) {
@@ -426,7 +767,7 @@ $GitNativeCompleter = {
             & $completeList (& $getRefs)
             return
         }
-        { $_ -in @('push', 'pull', 'fetch', 'remote') } {
+        { $_ -in @('push', 'pull', 'fetch') } {
             & $completeList (& $getRemotes)
             return
         }
@@ -445,7 +786,17 @@ $GitNativeCompleter = {
             return
         }
         default {
-            & $completeList (& $getRefs)
+            if ($commandText -eq 'init' -and $shouldCompleteLeafFlags) {
+                & $completeOrderedList '' (& $getInitFlagCompletions $commandContext.Metadata.Flags)
+                & $completeFileSystemPaths '' -DirectoriesOnly
+                return
+            }
+
+            if ($shouldCompleteLeafFlags) {
+                & $completeList $commandContext.Metadata.Flags
+                return
+            }
+
             return
         }
     }
