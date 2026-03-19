@@ -12,6 +12,8 @@ if (-not (Get-Variable -Name IcaclsCompletionCatalog -Scope Script -ErrorAction 
         ModifyOptions       = @()
         IntegrityLevels     = @()
         SimplePermissions   = @()
+        SpecificPermissions = @()
+        InheritanceFlags    = @()
     }
 }
 
@@ -176,6 +178,62 @@ function Get-IcaclsSimplePermissionsFromLines {
     @($permissions | Sort-Object -Unique)
 }
 
+function Get-IcaclsSpecificPermissionsFromLines {
+    param([string[]]$Lines)
+
+    $permissions = New-Object System.Collections.Generic.List[string]
+    $inSpecificRights = $false
+
+    foreach ($line in $Lines) {
+        if ($line -match '^\s*a comma-separated list in parentheses of specific rights:') {
+            $inSpecificRights = $true
+            continue
+        }
+
+        if (-not $inSpecificRights) {
+            continue
+        }
+
+        if ($line -match '^\s*inheritance rights may precede either form') {
+            break
+        }
+
+        if ($line -match '^\s*([A-Z]+)\s+-') {
+            $permissions.Add($matches[1])
+        }
+    }
+
+    @($permissions | Sort-Object -Unique)
+}
+
+function Get-IcaclsInheritanceFlagsFromLines {
+    param([string[]]$Lines)
+
+    $flags = New-Object System.Collections.Generic.List[string]
+    $inInheritanceFlags = $false
+
+    foreach ($line in $Lines) {
+        if ($line -match '^\s*inheritance rights may precede either form') {
+            $inInheritanceFlags = $true
+            continue
+        }
+
+        if (-not $inInheritanceFlags) {
+            continue
+        }
+
+        if ($line -match '^\s*Examples:') {
+            break
+        }
+
+        if ($line -match '^\s*(\([A-Z]+\))\s+-') {
+            $flags.Add($matches[1])
+        }
+    }
+
+    @($flags | Sort-Object -Unique)
+}
+
 function Initialize-IcaclsCompletionCatalog {
     if ($script:IcaclsCompletionCatalog.Initialized) {
         return
@@ -234,6 +292,8 @@ function Initialize-IcaclsCompletionCatalog {
     )
     $script:IcaclsCompletionCatalog.IntegrityLevels = @(Get-IcaclsIntegrityLevelsFromLines -Lines $helpLines)
     $script:IcaclsCompletionCatalog.SimplePermissions = @(Get-IcaclsSimplePermissionsFromLines -Lines $helpLines)
+    $script:IcaclsCompletionCatalog.SpecificPermissions = @(Get-IcaclsSpecificPermissionsFromLines -Lines $helpLines)
+    $script:IcaclsCompletionCatalog.InheritanceFlags = @(Get-IcaclsInheritanceFlagsFromLines -Lines $helpLines)
     $script:IcaclsCompletionCatalog.Initialized = $true
 }
 
@@ -305,6 +365,42 @@ function Get-IcaclsCurrentToken {
     }
 
     $Fallback
+}
+
+function Get-IcaclsTokensBeforeCurrent {
+    param(
+        [string[]]$Tokens,
+        [string]$CurrentWord,
+        [bool]$HasTrailingSpace
+    )
+
+    if ($HasTrailingSpace) {
+        return @($Tokens)
+    }
+
+    if (-not $Tokens -or $Tokens.Count -eq 0) {
+        return @()
+    }
+
+    if (-not [string]::IsNullOrEmpty($CurrentWord)) {
+        for ($suffixLength = 1; $suffixLength -le $Tokens.Count; $suffixLength++) {
+            $suffix = (@($Tokens | Select-Object -Last $suffixLength) -join '')
+            if ($suffix -eq $CurrentWord) {
+                $prefixLength = $Tokens.Count - $suffixLength
+                if ($prefixLength -le 0) {
+                    return @()
+                }
+
+                return @($Tokens | Select-Object -First $prefixLength)
+            }
+        }
+    }
+
+    if ($Tokens.Count -gt 1) {
+        return @($Tokens | Select-Object -First ($Tokens.Count - 1))
+    }
+
+    @()
 }
 
 function Get-IcaclsActiveCommand {
@@ -421,17 +517,143 @@ function Get-IcaclsIntegrityLevelCompletions {
 function Get-IcaclsPermissionCompletions {
     param([string]$WordToComplete)
 
-    if ([string]::IsNullOrWhiteSpace($WordToComplete) -or -not $WordToComplete.Contains(':')) {
+    if ([string]::IsNullOrWhiteSpace($WordToComplete)) {
         return @()
     }
 
-    $parts = $WordToComplete -split ':', 2
+    $isQuoted = $WordToComplete.StartsWith('"')
+    $normalizedWord = $WordToComplete.Trim('"')
+    if (-not $normalizedWord.Contains(':')) {
+        return @()
+    }
+
+    $parts = $normalizedWord -split ':', 2
     $identity = $parts[0]
     $permissionPrefix = $parts[1]
 
+    if ([string]::IsNullOrEmpty($identity)) {
+        return @()
+    }
+
+    $completions = if ($permissionPrefix.StartsWith('(')) {
+        @(Get-IcaclsParenthesizedPermissionCompletions -Identity $identity -PermissionPrefix $permissionPrefix)
+    } else {
+        @(
+            $script:IcaclsCompletionCatalog.SimplePermissions |
+                Where-Object { $_ -like "$permissionPrefix*" } |
+                ForEach-Object { "${identity}:$_" }
+        )
+    }
+
+    if ($isQuoted) {
+        return $completions | ForEach-Object { '"' + $_ + '"' }
+    }
+
+    $completions
+}
+
+function Get-IcaclsParenthesizedPermissionCompletions {
+    param(
+        [string]$Identity,
+        [string]$PermissionPrefix
+    )
+
+    $remaining = $PermissionPrefix
+    $inheritancePrefix = ''
+    $usedFlags = @{}
+
+    while ($remaining -match '^\(([A-Z]+)\)') {
+        $candidateFlag = "($($matches[1]))"
+        if ($script:IcaclsCompletionCatalog.InheritanceFlags -notcontains $candidateFlag) {
+            break
+        }
+
+        $inheritancePrefix += $candidateFlag
+        $usedFlags[$candidateFlag.ToUpperInvariant()] = $true
+        $remaining = $remaining.Substring($matches[0].Length)
+    }
+
+    $suggestions = New-Object System.Collections.Generic.List[string]
+
+    if ($remaining.Length -eq 0) {
+        foreach ($flag in $script:IcaclsCompletionCatalog.InheritanceFlags) {
+            if (-not $usedFlags.ContainsKey($flag.ToUpperInvariant())) {
+                $suggestions.Add("${Identity}:${inheritancePrefix}$flag")
+            }
+        }
+
+        foreach ($permission in $script:IcaclsCompletionCatalog.SimplePermissions) {
+            $suggestions.Add("${Identity}:${inheritancePrefix}$permission")
+        }
+
+        foreach ($permission in $script:IcaclsCompletionCatalog.SpecificPermissions) {
+            $suggestions.Add("${Identity}:${inheritancePrefix}($permission)")
+        }
+
+        return @($suggestions | Sort-Object -Unique)
+    }
+
+    if ($remaining -match '^\(([A-Z]*)$') {
+        $partial = $matches[1]
+
+        foreach ($flag in $script:IcaclsCompletionCatalog.InheritanceFlags) {
+            if ($usedFlags.ContainsKey($flag.ToUpperInvariant())) {
+                continue
+            }
+
+            if ($flag -like "($partial*)") {
+                $suggestions.Add("${Identity}:${inheritancePrefix}$flag")
+            }
+        }
+
+        $specificPrefix = "($partial"
+        foreach ($permission in $script:IcaclsCompletionCatalog.SpecificPermissions) {
+            if ($specificPrefix -eq '(' -or $permission -like "$partial*") {
+                $suggestions.Add("${Identity}:${inheritancePrefix}($permission)")
+            }
+        }
+
+        return @($suggestions | Sort-Object -Unique)
+    }
+
+    if ($remaining -match '^\(([A-Z,]*)$') {
+        $content = $matches[1]
+        $segments = @($content.Split(',', [System.StringSplitOptions]::None))
+        $completedSegments = @()
+        if ($segments.Count -gt 1) {
+            $completedSegments = @($segments | Select-Object -First ($segments.Count - 1))
+        }
+
+        $currentSegment = $segments[-1]
+        $usedPermissions = @{}
+        foreach ($segment in $completedSegments) {
+            if (-not [string]::IsNullOrWhiteSpace($segment)) {
+                $usedPermissions[$segment.ToUpperInvariant()] = $true
+            }
+        }
+
+        $prefixText = if ($completedSegments.Count -gt 0) {
+            '(' + (($completedSegments -join ',') + ',')
+        } else {
+            '('
+        }
+
+        foreach ($permission in $script:IcaclsCompletionCatalog.SpecificPermissions) {
+            if ($usedPermissions.ContainsKey($permission.ToUpperInvariant())) {
+                continue
+            }
+
+            if ($permission -like "$currentSegment*") {
+                $suggestions.Add("${Identity}:${inheritancePrefix}${prefixText}$permission)")
+            }
+        }
+
+        return @($suggestions | Sort-Object -Unique)
+    }
+
     $script:IcaclsCompletionCatalog.SimplePermissions |
-        Where-Object { $_ -like "$permissionPrefix*" } |
-        ForEach-Object { "${identity}:$_" }
+        Where-Object { $_ -like "$remaining*" } |
+        ForEach-Object { "${Identity}:${inheritancePrefix}$_" }
 }
 
 Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBlock {
@@ -442,19 +664,31 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
-    $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-IcaclsCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+    $rawCurrentWord = $wordToComplete
+    $lineCurrentWord = Get-IcaclsCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+    $currentWord = if (
+        (-not [string]::IsNullOrEmpty($lineCurrentWord)) -and
+        (
+            [string]::IsNullOrWhiteSpace($wordToComplete) -or
+            ($lineCurrentWord.Length -gt $wordToComplete.Length)
+        )
+    ) {
+        $lineCurrentWord
     } else {
         $wordToComplete
     }
     $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
-
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
+    $tokensBeforeCurrent = Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace
+    $permissionIdentityPrefix = $null
+    if (
+        (-not [string]::IsNullOrWhiteSpace($rawCurrentWord)) -and
+        (-not $rawCurrentWord.Contains(':')) -and
+        ($currentWord.Contains(':')) -and
+        ($tokens.Count -ge 2) -and
+        $tokens[-2].EndsWith(':') -and
+        (($tokens[-2] + $tokens[-1]) -eq $currentWord)
+    ) {
+        $permissionIdentityPrefix = $tokens[-2]
     }
 
     $activeCommand = Get-IcaclsActiveCommand -Tokens $tokensBeforeCurrent -KnownCommands $script:IcaclsCompletionCatalog.Commands
@@ -489,17 +723,56 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
                 }
             }
             '/grant' {
-                return Get-IcaclsPermissionCompletions -WordToComplete $currentWord | ForEach-Object {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
                     New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
             }
             '/grant:r' {
-                return Get-IcaclsPermissionCompletions -WordToComplete $currentWord | ForEach-Object {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
                     New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
             }
             '/deny' {
-                return Get-IcaclsPermissionCompletions -WordToComplete $currentWord | ForEach-Object {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
                     New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
             }
