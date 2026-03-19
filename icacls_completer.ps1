@@ -668,10 +668,8 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     $lineCurrentWord = Get-IcaclsCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
     $currentWord = if (
         (-not [string]::IsNullOrEmpty($lineCurrentWord)) -and
-        (
-            [string]::IsNullOrWhiteSpace($wordToComplete) -or
-            ($lineCurrentWord.Length -gt $wordToComplete.Length)
-        )
+        (-not [string]::IsNullOrWhiteSpace($wordToComplete)) -and
+        ($lineCurrentWord.Length -gt $wordToComplete.Length)
     ) {
         $lineCurrentWord
     } else {
