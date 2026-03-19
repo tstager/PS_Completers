@@ -678,7 +678,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
         $wordToComplete
     }
     $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
-    $tokensBeforeCurrent = Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace
+    $tokensBeforeCurrent = @(Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace)
     $permissionIdentityPrefix = $null
     if (
         (-not [string]::IsNullOrWhiteSpace($rawCurrentWord)) -and
