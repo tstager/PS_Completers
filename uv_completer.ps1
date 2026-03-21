@@ -2,9 +2,9 @@ Set-StrictMode -Version Latest
 
 if (-not (Get-Variable -Name UvCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:UvCompletionCache = @{
-        ExecutablePath = $null
-        Probed         = $false
-        PathData       = @{}
+        ExecutablePaths = @{}
+        ProbedPaths     = @{}
+        PathData        = @{}
         StaticTree     = @{
             ''       = @('auth', 'run', 'init', 'add', 'remove', 'version', 'sync', 'lock', 'export', 'tree', 'format', 'tool', 'python', 'pip', 'venv', 'build', 'publish', 'cache', 'self', 'help')
             'auth'   = @('login', 'logout', 'token', 'dir')
@@ -25,25 +25,87 @@ if (-not (Get-Variable -Name UvCompletionCache -Scope Script -ErrorAction Silent
 function Get-UvCacheKey {
     param([string[]]$Path)
 
-    (@($Path) | ForEach-Object { $_.ToLowerInvariant() }) -join ' '
+    $pathItems = @($Path)
+    if ($null -eq $Path) {
+        $pathItems = @()
+    }
+    $pathItems = @($pathItems | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    ($pathItems | ForEach-Object { $_.ToLowerInvariant() }) -join ' '
+}
+
+function Get-UvPathDataCacheKey {
+    param(
+        [string]$SourceName = 'uv',
+        [string[]]$Path
+    )
+
+    $sourceKey = if ([string]::IsNullOrWhiteSpace($SourceName)) {
+        'uv'
+    } else {
+        $SourceName.ToLowerInvariant()
+    }
+
+    $pathKey = Get-UvCacheKey -Path $Path
+    if ([string]::IsNullOrWhiteSpace($pathKey)) {
+        return $sourceKey
+    }
+
+    '{0}|{1}' -f $sourceKey, $pathKey
+}
+
+function Get-UvSourceName {
+    param([string]$CommandName)
+
+    if ([string]::IsNullOrWhiteSpace($CommandName)) {
+        return 'uv'
+    }
+
+    $leafName = Split-Path -Leaf $CommandName
+    if ($leafName.Equals('uvx', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $leafName.Equals('uvx.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return 'uvx'
+    }
+
+    'uv'
+}
+
+function Get-UvSyntheticRootPath {
+    param([string]$SourceName)
+
+    if ($SourceName -eq 'uvx') {
+        return @('tool', 'run')
+    }
+
+    @()
 }
 
 function Get-UvExecutablePath {
-    if ($script:UvCompletionCache.Probed) {
-        return $script:UvCompletionCache.ExecutablePath
+    param([string]$CommandName = 'uv')
+
+    $sourceName = Get-UvSourceName -CommandName $CommandName
+    if ($script:UvCompletionCache.ProbedPaths.ContainsKey($sourceName)) {
+        return $script:UvCompletionCache.ExecutablePaths[$sourceName]
     }
 
-    $script:UvCompletionCache.Probed = $true
+    $script:UvCompletionCache.ProbedPaths[$sourceName] = $true
 
-    foreach ($name in @('uv.exe', 'uv')) {
+    $script:UvCompletionCache.ExecutablePaths[$sourceName] = $null
+    $candidateNames = if ($sourceName -eq 'uvx') {
+        @('uvx.exe', 'uvx')
+    } else {
+        @('uv.exe', 'uv')
+    }
+
+    foreach ($name in $candidateNames) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
         if ($command) {
-            $script:UvCompletionCache.ExecutablePath = $command.Source
+            $script:UvCompletionCache.ExecutablePaths[$sourceName] = $command.Source
             break
         }
     }
 
-    $script:UvCompletionCache.ExecutablePath
+    $script:UvCompletionCache.ExecutablePaths[$sourceName]
 }
 
 function New-UvPathData {
@@ -55,9 +117,9 @@ function New-UvPathData {
     )
 
     @{
-        Commands            = @($Commands)
+        Commands            = @(@($Commands) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         CommandDescriptions = $CommandDescriptions
-        Options             = @($Options)
+        Options             = @(@($Options) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         ValuesByOption      = $ValuesByOption
     }
 }
@@ -96,7 +158,7 @@ function Get-UvUniqueStrings {
         [void]$result.Add($item)
     }
 
-    $result.ToArray()
+    @($result.ToArray())
 }
 
 function Get-UvOptionTokensFromLine {
@@ -144,6 +206,7 @@ function Add-UvPossibleValues {
     if ($valueText -match '^(.*?)]') {
         $valueText = $matches[1]
     }
+    $valueText = $valueText -replace '^(?:possible\s+values:|values:)\s*', ''
 
     $values = $valueText -split ',' |
         ForEach-Object { $_.Trim() } |
@@ -166,6 +229,7 @@ function Get-UvParsedHelpData {
     $section = ''
     $currentOption = $null
     $collectingValuesFor = $null
+    $collectingValueListFor = $null
     $valueBuffer = ''
 
     foreach ($line in @($HelpLines)) {
@@ -185,6 +249,22 @@ function Get-UvParsedHelpData {
             }
 
             continue
+        }
+
+        if ($collectingValueListFor) {
+            if ($line -match '^\s*$') {
+                $collectingValueListFor = $null
+            } elseif ($line -match '^\s*-\s+(.+?)(?:\s*:|\s*$)') {
+                Add-UvPossibleValues -ValueMap $valuesByOption -OptionKey $collectingValueListFor -RawValueText $matches[1].Trim()
+                continue
+            } elseif ((@(Get-UvOptionTokensFromLine -Line $line)).Count -gt 0 -or
+                $line -match '^\s*(Commands|Arguments|Examples?|Options|[A-Za-z][A-Za-z ]+ options):\s*$') {
+                $collectingValueListFor = $null
+            } elseif (-not ($line -match '^\s+')) {
+                $collectingValueListFor = $null
+            } else {
+                continue
+            }
         }
 
         if ($line -match '^\s*$') {
@@ -223,6 +303,11 @@ function Get-UvParsedHelpData {
                 } else {
                     $collectingValuesFor = $currentOption
                 }
+            } elseif ($currentOption -and $line -match '\[possible\s*$') {
+                $valueBuffer = ''
+                $collectingValuesFor = $currentOption
+            } elseif ($currentOption -and $line -match '^\s*Possible values:\s*$') {
+                $collectingValueListFor = $currentOption
             }
         }
     }
@@ -240,16 +325,25 @@ function Get-UvParsedHelpData {
 }
 
 function Invoke-UvHelp {
-    param([string[]]$Path)
+    param(
+        [string]$CommandName = 'uv',
+        [string[]]$Path
+    )
 
-    $uvPath = Get-UvExecutablePath
+    $uvPath = Get-UvExecutablePath -CommandName $CommandName
     if (-not $uvPath) {
         return @()
     }
 
+    $pathItems = @($Path)
+    if ($null -eq $Path) {
+        $pathItems = @()
+    }
+    $pathItems = @($pathItems | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
     $arguments = @()
-    if (@($Path).Count -gt 0) {
-        $arguments += $Path
+    if (@($pathItems).Count -gt 0) {
+        $arguments += $pathItems
     }
     $arguments += '--help'
 
@@ -272,21 +366,40 @@ function Get-UvStaticSubcommands {
 }
 
 function Get-UvPathData {
-    param([string[]]$Path)
+    param(
+        [string]$SourceName = 'uv',
+        [string[]]$Path
+    )
 
-    $key = Get-UvCacheKey -Path $Path
+    $path = @($Path)
+    if ($null -eq $Path) {
+        $path = @()
+    }
+    $path = @($path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    $key = Get-UvPathDataCacheKey -SourceName $SourceName -Path $path
     if ($script:UvCompletionCache.PathData.ContainsKey($key)) {
         return $script:UvCompletionCache.PathData[$key]
     }
 
-    $helpLines = @(Invoke-UvHelp -Path $Path)
+    $helpLines = @()
+    $pathKey = Get-UvCacheKey -Path $path
+    $uvxRootKey = Get-UvCacheKey -Path @('tool', 'run')
+    if ($SourceName -eq 'uvx' -and $pathKey -eq $uvxRootKey) {
+        $helpLines += @(Invoke-UvHelp -CommandName 'uvx')
+        $helpLines += ''
+        $helpLines += @(Invoke-UvHelp -CommandName 'uv' -Path $path)
+    } else {
+        $helpLines += @(Invoke-UvHelp -CommandName $SourceName -Path $path)
+    }
+
     $parsed = if ($helpLines.Count -gt 0) {
         Get-UvParsedHelpData -HelpLines $helpLines
     } else {
         New-UvPathData
     }
 
-    $staticCommands = Get-UvStaticSubcommands -Path $Path
+    $staticCommands = Get-UvStaticSubcommands -Path $path
     $data = New-UvPathData `
         -Commands (Get-UvUniqueStrings -Items ($staticCommands + $parsed.Commands)) `
         -CommandDescriptions $parsed.CommandDescriptions `
@@ -299,11 +412,12 @@ function Get-UvPathData {
 
 function Find-UvSubcommand {
     param(
+        [string]$SourceName = 'uv',
         [string[]]$Path,
         [string]$Token
     )
 
-    foreach ($command in (Get-UvPathData -Path $Path).Commands) {
+    foreach ($command in (Get-UvPathData -SourceName $SourceName -Path $Path).Commands) {
         if ($command.Equals($Token, [System.StringComparison]::OrdinalIgnoreCase)) {
             return $command
         }
@@ -316,10 +430,17 @@ function Get-UvCommandContext {
     param(
         [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
+        [int]$CursorPosition,
+        [string]$SourceName = 'uv',
+        [string[]]$RootPath = @(),
+        [bool]$SupportsHelpCommand = $true
     )
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($WordToComplete)
+    $hasTrailingSpace = $false
+    if ([string]::IsNullOrEmpty($WordToComplete) -and $CommandAst.CommandElements.Count -gt 0) {
+        $lastElement = $CommandAst.CommandElements[$CommandAst.CommandElements.Count - 1]
+        $hasTrailingSpace = $CursorPosition -gt $lastElement.Extent.EndOffset
+    }
     $tokens = New-Object System.Collections.Generic.List[string]
 
     for ($index = 1; $index -lt $CommandAst.CommandElements.Count; $index++) {
@@ -353,6 +474,10 @@ function Get-UvCommandContext {
     }
 
     $commandPath = New-Object System.Collections.Generic.List[string]
+    foreach ($token in @($RootPath)) {
+        [void]$commandPath.Add($token)
+    }
+
     $helpMode = $false
 
     foreach ($token in @($pathTokens)) {
@@ -360,19 +485,22 @@ function Get-UvCommandContext {
             continue
         }
 
-        if ($commandPath.Count -eq 0 -and -not $helpMode -and $token.Equals('help', [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($SupportsHelpCommand -and
+            $commandPath.Count -eq @($RootPath).Count -and
+            -not $helpMode -and
+            $token.Equals('help', [System.StringComparison]::OrdinalIgnoreCase)) {
             $helpMode = $true
             continue
         }
 
-        $nextCommand = Find-UvSubcommand -Path $commandPath.ToArray() -Token $token
+        $nextCommand = Find-UvSubcommand -SourceName $SourceName -Path $commandPath.ToArray() -Token $token
         if ($nextCommand) {
             [void]$commandPath.Add($nextCommand)
         }
     }
 
     @{
-        Path            = $commandPath.ToArray()
+        Path            = if ($commandPath.Count -gt 0) { @($commandPath.ToArray()) } else { @() }
         PreviousToken   = $previousToken
         HelpMode        = $helpMode
         HasTrailingSpace = $hasTrailingSpace
@@ -381,6 +509,7 @@ function Get-UvCommandContext {
 
 function Get-UvOptionValues {
     param(
+        [string]$SourceName = 'uv',
         [string[]]$Path,
         [string]$Option
     )
@@ -393,12 +522,12 @@ function Get-UvOptionValues {
     $pathKey = Get-UvCacheKey -Path $Path
     $values = @()
 
-    $pathData = Get-UvPathData -Path $Path
+    $pathData = Get-UvPathData -SourceName $SourceName -Path $Path
     if ($pathData.ValuesByOption.ContainsKey($optionKey)) {
         $values += $pathData.ValuesByOption[$optionKey]
     }
 
-    $rootData = Get-UvPathData -Path @()
+    $rootData = Get-UvPathData -SourceName $SourceName -Path @()
     if ($rootData.ValuesByOption.ContainsKey($optionKey)) {
         $values += $rootData.ValuesByOption[$optionKey]
     }
@@ -426,6 +555,29 @@ function Get-UvOptionAssignmentContext {
     }
 
     $null
+}
+
+function Get-UvEffectiveWordToComplete {
+    param(
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+        return $WordToComplete
+    }
+
+    if ($CommandAst.CommandElements.Count -eq 0) {
+        return $WordToComplete
+    }
+
+    $lastElement = $CommandAst.CommandElements[$CommandAst.CommandElements.Count - 1]
+    if ($lastElement.Extent.EndOffset -ne $CursorPosition) {
+        return $WordToComplete
+    }
+
+    Get-UvTokenText -Element $lastElement
 }
 
 function New-UvCompletionResults {
@@ -476,26 +628,42 @@ function New-UvAssignedValueCompletionResults {
 function Complete-Uv {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    if (-not (Get-UvExecutablePath)) {
+    $sourceName = 'uv'
+    if ($commandAst.CommandElements.Count -gt 0) {
+        $sourceName = Get-UvSourceName -CommandName (Get-UvTokenText -Element $commandAst.CommandElements[0])
+    }
+
+    if (-not (Get-UvExecutablePath -CommandName $sourceName)) {
         return
     }
 
-    $context = Get-UvCommandContext -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+    $effectiveWordToComplete = Get-UvEffectiveWordToComplete `
+        -WordToComplete $wordToComplete `
+        -CommandAst $commandAst `
+        -CursorPosition $cursorPosition
+
+    $context = Get-UvCommandContext `
+        -WordToComplete $effectiveWordToComplete `
+        -CommandAst $commandAst `
+        -CursorPosition $cursorPosition `
+        -SourceName $sourceName `
+        -RootPath (Get-UvSyntheticRootPath -SourceName $sourceName) `
+        -SupportsHelpCommand ($sourceName -ne 'uvx')
     $path = $context.Path
     $previousToken = $context.PreviousToken
-    $pathData = Get-UvPathData -Path $path
-    $assignmentContext = Get-UvOptionAssignmentContext -WordToComplete $wordToComplete
+    $pathData = Get-UvPathData -SourceName $sourceName -Path $path
+    $assignmentContext = Get-UvOptionAssignmentContext -WordToComplete $effectiveWordToComplete
 
     if ($assignmentContext) {
         New-UvAssignedValueCompletionResults `
             -Option $assignmentContext.Option `
-            -Items (Get-UvOptionValues -Path $path -Option $assignmentContext.Option) `
+            -Items (Get-UvOptionValues -SourceName $sourceName -Path $path -Option $assignmentContext.Option) `
             -ValuePrefix $assignmentContext.ValuePrefix
         return
     }
 
     if ($previousToken -and $previousToken.StartsWith('-')) {
-        New-UvCompletionResults -Items (Get-UvOptionValues -Path $path -Option $previousToken) -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $wordToComplete -Tooltips @{}
+        New-UvCompletionResults -Items (Get-UvOptionValues -SourceName $sourceName -Path $path -Option $previousToken) -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $wordToComplete -Tooltips @{}
         return
     }
 
@@ -504,16 +672,21 @@ function Complete-Uv {
         return
     }
 
-    if ($wordToComplete.StartsWith('-')) {
-        New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -WordToComplete $wordToComplete -Tooltips @{}
+    if ($effectiveWordToComplete.StartsWith('-')) {
+        New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -WordToComplete $effectiveWordToComplete -Tooltips @{}
         return
     }
 
-    New-UvCompletionResults -Items $pathData.Commands -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $wordToComplete -Tooltips $pathData.CommandDescriptions
-    New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -WordToComplete $wordToComplete -Tooltips @{}
+    if ([string]::IsNullOrEmpty($effectiveWordToComplete) -and @($pathData.Commands).Count -eq 0 -and @($pathData.Options).Count -gt 0) {
+        New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $effectiveWordToComplete -Tooltips @{}
+        return
+    }
+
+    New-UvCompletionResults -Items $pathData.Commands -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $effectiveWordToComplete -Tooltips $pathData.CommandDescriptions
+    New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -WordToComplete $effectiveWordToComplete -Tooltips @{}
 }
 
-Register-ArgumentCompleter -Native -CommandName 'uv', 'uv.exe' -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName 'uv', 'uv.exe', 'uvx', 'uvx.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     Complete-Uv -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
