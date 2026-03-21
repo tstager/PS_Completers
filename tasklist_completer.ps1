@@ -13,6 +13,21 @@ if (-not (Get-Variable -Name TasklistCompletionCatalog -Scope Script -ErrorActio
         FilterNames            = @()
         FilterOperatorsByName  = @{}
         FilterValueHintsByName = @{}
+        RuntimeSnapshot        = @()
+        RuntimeSnapshotUpdated = [datetime]::MinValue
+        RuntimeSnapshotTtlSeconds = 15
+        UserNames             = @()
+        UserNamesUpdated      = [datetime]::MinValue
+        UserNamesTtlSeconds   = 30
+        ServiceNames          = @()
+        ServiceNamesUpdated   = [datetime]::MinValue
+        ServiceNamesTtlSeconds = 60
+        WindowTitles          = @()
+        WindowTitlesUpdated   = [datetime]::MinValue
+        WindowTitlesTtlSeconds = 10
+        ModuleNames           = @()
+        ModuleNamesUpdated    = [datetime]::MinValue
+        ModuleNamesTtlSeconds = 30
     }
 }
 
@@ -53,6 +68,22 @@ function New-TasklistCompletionResult {
         $ResultType,
         $ToolTip
     )
+}
+
+function New-TasklistValueItem {
+    param(
+        [string]$CompletionText,
+        [string]$ToolTip
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ToolTip)) {
+        $ToolTip = $CompletionText
+    }
+
+    [pscustomobject]@{
+        CompletionText = $CompletionText
+        ToolTip        = $ToolTip
+    }
 }
 
 function Get-TasklistDefaultSwitchTokens {
@@ -280,6 +311,103 @@ function Initialize-TasklistCompletionCatalog {
     $script:TasklistCompletionCatalog.Initialized = $true
 }
 
+function Update-TasklistRuntimeSnapshotCache {
+    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated
+    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.RuntimeSnapshotTtlSeconds) {
+        return
+    }
+
+    $csvLines = @(& tasklist.exe '/FO' 'CSV' '/NH' 2>$null)
+    if (-not $csvLines -or $csvLines.Count -eq 0) {
+        $script:TasklistCompletionCatalog.RuntimeSnapshot = @()
+        $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated = Get-Date
+        return
+    }
+
+    $rows = @(
+        $csvLines |
+            ConvertFrom-Csv -Header @('ImageName', 'PID', 'SessionName', 'SessionId', 'MemUsage')
+    )
+
+    $script:TasklistCompletionCatalog.RuntimeSnapshot = @($rows)
+    $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated = Get-Date
+}
+
+function Update-TasklistUserNameCache {
+    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.UserNamesUpdated
+    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.UserNamesTtlSeconds) {
+        return
+    }
+
+    $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $userNames = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($process in @(Get-Process -IncludeUserName -ErrorAction SilentlyContinue)) {
+        if ($process.UserName -and $process.UserName -ne 'N/A' -and $nameSet.Add($process.UserName)) {
+            $userNames.Add($process.UserName)
+        }
+    }
+
+    if ($env:USERDOMAIN -and $env:USERNAME) {
+        $currentUserName = "$($env:USERDOMAIN)\$($env:USERNAME)"
+        if ($nameSet.Add($currentUserName)) {
+            $userNames.Add($currentUserName)
+        }
+    }
+
+    $script:TasklistCompletionCatalog.UserNames = @($userNames | Sort-Object)
+    $script:TasklistCompletionCatalog.UserNamesUpdated = Get-Date
+}
+
+function Update-TasklistServiceNameCache {
+    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.ServiceNamesUpdated
+    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ServiceNamesTtlSeconds) {
+        return
+    }
+
+    $serviceNames = @(
+        Get-Service -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name |
+            Sort-Object -Unique
+    )
+
+    $script:TasklistCompletionCatalog.ServiceNames = @($serviceNames)
+    $script:TasklistCompletionCatalog.ServiceNamesUpdated = Get-Date
+}
+
+function Update-TasklistWindowTitleCache {
+    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.WindowTitlesUpdated
+    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.WindowTitlesTtlSeconds) {
+        return
+    }
+
+    $windowTitles = @(
+        Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) } |
+            Select-Object -ExpandProperty MainWindowTitle |
+            Sort-Object -Unique
+    )
+
+    $script:TasklistCompletionCatalog.WindowTitles = @($windowTitles)
+    $script:TasklistCompletionCatalog.WindowTitlesUpdated = Get-Date
+}
+
+function Update-TasklistModuleNameCache {
+    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.ModuleNamesUpdated
+    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ModuleNamesTtlSeconds) {
+        return
+    }
+
+    $moduleNames = @(
+        Get-Process -Module -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty ModuleName |
+            Sort-Object -Unique
+    )
+
+    $script:TasklistCompletionCatalog.ModuleNames = @($moduleNames)
+    $script:TasklistCompletionCatalog.ModuleNamesUpdated = Get-Date
+}
+
 function Get-TasklistTokenState {
     param(
         [string]$Line,
@@ -395,6 +523,147 @@ function Format-TasklistFilterExpressionCompletion {
     '"' + $Expression
 }
 
+function Test-TasklistClosedQuotedExpression {
+    param([string]$Expression)
+
+    if ([string]::IsNullOrEmpty($Expression)) {
+        return $false
+    }
+
+    $trimmedExpression = $Expression.Trim()
+    if (-not $trimmedExpression.StartsWith('"')) {
+        return $false
+    }
+
+    $quoteCount = 0
+    foreach ($character in $trimmedExpression.ToCharArray()) {
+        if ($character -eq '"') {
+            $quoteCount++
+        }
+    }
+
+    ($quoteCount -ge 2) -and (($quoteCount % 2) -eq 0) -and $trimmedExpression.EndsWith('"')
+}
+
+function Get-TasklistFilterValueItems {
+    param(
+        [string]$FilterName,
+        [string]$TypedValue
+    )
+
+    switch ($FilterName.ToUpperInvariant()) {
+        'STATUS' {
+            @(
+                $script:TasklistCompletionCatalog.FilterValueHintsByName['STATUS'] |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Status value $_"
+                    }
+            )
+        }
+        'CPUTIME' {
+            @(
+                New-TasklistValueItem -CompletionText '00:00:00' -ToolTip 'CPU time in hh:mm:ss format'
+                New-TasklistValueItem -CompletionText '00:01:00' -ToolTip 'CPU time in hh:mm:ss format'
+                New-TasklistValueItem -CompletionText '01:00:00' -ToolTip 'CPU time in hh:mm:ss format'
+            )
+        }
+        'MEMUSAGE' {
+            @(
+                New-TasklistValueItem -CompletionText '1024' -ToolTip 'Memory usage in KB'
+                New-TasklistValueItem -CompletionText '4096' -ToolTip 'Memory usage in KB'
+                New-TasklistValueItem -CompletionText '65536' -ToolTip 'Memory usage in KB'
+            )
+        }
+        'IMAGENAME' {
+            Update-TasklistRuntimeSnapshotCache
+            @(
+                $script:TasklistCompletionCatalog.RuntimeSnapshot |
+                    ForEach-Object { $_.ImageName } |
+                    Where-Object { $_ } |
+                    Sort-Object -Unique |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Image name $_"
+                    }
+            )
+        }
+        'PID' {
+            Update-TasklistRuntimeSnapshotCache
+            @(
+                $script:TasklistCompletionCatalog.RuntimeSnapshot |
+                    ForEach-Object { [string]$_.PID } |
+                    Where-Object { $_ } |
+                    Sort-Object -Unique |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Process ID $_"
+                    }
+            )
+        }
+        'SESSION' {
+            Update-TasklistRuntimeSnapshotCache
+            @(
+                $script:TasklistCompletionCatalog.RuntimeSnapshot |
+                    ForEach-Object { [string]$_.SessionId } |
+                    Where-Object { $_ } |
+                    Sort-Object -Unique |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Session ID $_"
+                    }
+            )
+        }
+        'SESSIONNAME' {
+            Update-TasklistRuntimeSnapshotCache
+            @(
+                $script:TasklistCompletionCatalog.RuntimeSnapshot |
+                    ForEach-Object { $_.SessionName } |
+                    Where-Object { $_ } |
+                    Sort-Object -Unique |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Session name $_"
+                    }
+            )
+        }
+        'USERNAME' {
+            Update-TasklistUserNameCache
+            @(
+                $script:TasklistCompletionCatalog.UserNames |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "User name $_"
+                    }
+            )
+        }
+        'SERVICES' {
+            Update-TasklistServiceNameCache
+            @(
+                $script:TasklistCompletionCatalog.ServiceNames |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Service name $_"
+                    }
+            )
+        }
+        'WINDOWTITLE' {
+            Update-TasklistWindowTitleCache
+            @(
+                $script:TasklistCompletionCatalog.WindowTitles |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Window title $_"
+                    }
+            )
+        }
+        'MODULES' {
+            Update-TasklistModuleNameCache
+            @(
+                $script:TasklistCompletionCatalog.ModuleNames |
+                    ForEach-Object {
+                        New-TasklistValueItem -CompletionText $_ -ToolTip "Module name $_"
+                    }
+            )
+        }
+        default {
+            @()
+        }
+    }
+}
+
 function Get-TasklistSwitchCompletions {
     param([string]$CurrentWord)
 
@@ -493,27 +762,23 @@ function Get-TasklistFilterExpressionCompletions {
         return @()
     }
 
-    $valueHints = @()
-    if ($script:TasklistCompletionCatalog.FilterValueHintsByName.ContainsKey($filterName)) {
-        $valueHints = @($script:TasklistCompletionCatalog.FilterValueHintsByName[$filterName])
-    }
-
-    if ($valueHints.Count -eq 0) {
-        return @()
-    }
-
     $typedValue = if ($parts.Count -gt 2) {
         ($parts[2..($parts.Count - 1)] -join ' ')
     } else {
         ''
     }
 
+    $valueItems = @(Get-TasklistFilterValueItems -FilterName $filterName -TypedValue $typedValue)
+    if ($valueItems.Count -eq 0) {
+        return @()
+    }
+
     @(
-        $valueHints |
-            Where-Object { $_ -like "$typedValue*" } |
+        $valueItems |
+            Where-Object { $_.CompletionText -like "$typedValue*" } |
             ForEach-Object {
-                $completionText = Format-TasklistFilterExpressionCompletion -Expression "$filterName $resolvedOperator $_" -CloseQuote $true
-                New-TasklistCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip "$filterName $resolvedOperator $_"
+                $completionText = Format-TasklistFilterExpressionCompletion -Expression "$filterName $resolvedOperator $($_.CompletionText)" -CloseQuote $true
+                New-TasklistCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $_.ToolTip
             }
     )
 }
@@ -541,11 +806,30 @@ function Get-TasklistFilterExpressionWord {
         return $null
     }
 
-    $expressionTokens = @()
+    $expressionTokensBeforeCurrent = @()
     if ($fiIndex + 1 -lt $TokensBeforeCurrent.Count) {
-        $expressionTokens += @($TokensBeforeCurrent[($fiIndex + 1)..($TokensBeforeCurrent.Count - 1)])
+        $expressionTokensBeforeCurrent = @($TokensBeforeCurrent[($fiIndex + 1)..($TokensBeforeCurrent.Count - 1)])
     }
 
+    $hasCompletedQuotedExpression = $false
+    $containsFollowingSwitch = $false
+    if ($expressionTokensBeforeCurrent.Count -gt 0) {
+        $hasCompletedQuotedExpression =
+            (Test-TasklistClosedQuotedExpression -Expression ($expressionTokensBeforeCurrent -join ' ')) -and
+            ($HasTrailingDelimiter -or -not [string]::IsNullOrEmpty($CurrentToken))
+
+        $containsFollowingSwitch = [bool]@(
+            $expressionTokensBeforeCurrent |
+                Where-Object { -not [string]::IsNullOrEmpty($_) -and $_.StartsWith('/') } |
+                Select-Object -First 1
+        )
+    }
+
+    if ($hasCompletedQuotedExpression -or $containsFollowingSwitch) {
+        return $null
+    }
+
+    $expressionTokens = @($expressionTokensBeforeCurrent)
     if (-not [string]::IsNullOrEmpty($CurrentToken)) {
         $expressionTokens += $CurrentToken
     }
