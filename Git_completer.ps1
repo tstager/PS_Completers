@@ -291,6 +291,10 @@ $GitNativeCompleter = {
         $lastNonFlagArgument = $null
 
         foreach ($argument in $argsBeforeCursor) {
+            if ($argument -eq '--') {
+                break
+            }
+
             if ($argument.StartsWith('-')) {
                 continue
             }
@@ -341,6 +345,69 @@ $GitNativeCompleter = {
             & $getArgumentsAfterPath $argsBeforeCursor $commandPath |
                 Where-Object { -not $_.StartsWith('-') }
         )
+    }
+
+    $analyzeArguments = {
+        param(
+            [string[]]$arguments,
+            [string[]]$optionsWithValues = @()
+        )
+
+        $valueOptions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($optionName in $optionsWithValues) {
+            if (-not [string]::IsNullOrWhiteSpace($optionName)) {
+                $null = $valueOptions.Add($optionName)
+            }
+        }
+
+        $positionals = [System.Collections.Generic.List[string]]::new()
+        $pendingValueOption = $null
+        $afterDoubleDash = $false
+
+        foreach ($argument in $arguments) {
+            if ($afterDoubleDash) {
+                $positionals.Add($argument)
+                continue
+            }
+
+            if ($argument -eq '--') {
+                $afterDoubleDash = $true
+                continue
+            }
+
+            if ($pendingValueOption) {
+                $pendingValueOption = $null
+                continue
+            }
+
+            if ($argument.StartsWith('-')) {
+                $optionName = $argument
+                $hasAttachedValue = $false
+
+                $attachedLongOptionMatch = [regex]::Match(
+                    $argument,
+                    '^(?<option>--[A-Za-z0-9][A-Za-z0-9-]*)='
+                )
+                if ($attachedLongOptionMatch.Success) {
+                    $optionName = $attachedLongOptionMatch.Groups['option'].Value
+                    $hasAttachedValue = $true
+                }
+
+                if ($valueOptions.Contains($optionName) -and -not $hasAttachedValue) {
+                    $pendingValueOption = $optionName
+                }
+
+                continue
+            }
+
+            $positionals.Add($argument)
+        }
+
+        [pscustomobject]@{
+            Positionals        = @($positionals)
+            PendingValueOption = $pendingValueOption
+            AfterDoubleDash    = $afterDoubleDash
+        }
     }
 
     $getConfigKeys = {
@@ -610,12 +677,23 @@ $GitNativeCompleter = {
             return
         }
 
-        if ($hasTrailingSpace -and $argsAfterPath.Count -gt 0) {
+        if ($argsAfterPath.Count -gt 0) {
             $previousInitArgument = $argsAfterPath[-1]
-            if ($previousInitArgument -in @('--template', '--separate-git-dir', '--object-format', '--ref-format', '-b', '--initial-branch')) {
+            if ($previousInitArgument -in @('--template', '--separate-git-dir', '--object-format', '--ref-format', '-b', '--initial-branch', '--shared')) {
                 & $completeInitOptionValues $previousInitArgument $wordToComplete
                 return
             }
+        }
+    }
+
+    if ($subcommand -eq 'config') {
+        $attachedConfigFileMatch = [regex]::Match(
+            $wordToComplete,
+            '^(?<option>--file)=(?<value>.*)$'
+        )
+        if ($attachedConfigFileMatch.Success) {
+            & $completeFileSystemPaths $attachedConfigFileMatch.Groups['value'].Value '--file='
+            return
         }
     }
 
@@ -627,6 +705,30 @@ $GitNativeCompleter = {
             & $completeList $commandContext.Metadata.Flags
         }
         return
+    }
+
+    if ($subcommand -eq 'config') {
+        $configAnalysis = & $analyzeArguments $argsAfterPath @('-f', '--file', '--blob', '--type', '--default', '--comment')
+
+        if ($configAnalysis.PendingValueOption -in @('-f', '--file')) {
+            & $completeFileSystemPaths $wordToComplete
+            return
+        }
+
+        switch ($commandText) {
+            'config' {
+                if ($configAnalysis.Positionals.Count -eq 0) {
+                    & $completeOrderedList $wordToComplete @($commandContext.Metadata.Subcommands + (& $getConfigKeys))
+                    return
+                }
+            }
+            { $_ -in @('config get', 'config set', 'config unset') } {
+                if ($configAnalysis.Positionals.Count -eq 0) {
+                    & $completeList (& $getConfigKeys)
+                    return
+                }
+            }
+        }
     }
 
     if ($commandContext.Metadata.Subcommands.Count -gt 0) {
@@ -686,11 +788,6 @@ $GitNativeCompleter = {
         return
     }
 
-    if ($subcommand -eq 'config') {
-        & $completeList (& $getConfigKeys)
-        return
-    }
-
     switch ($commandText) {
         'worktree add' {
             if ($positionalsAfterPath.Count -ge 1) {
@@ -708,7 +805,7 @@ $GitNativeCompleter = {
         'worktree prune' {
             return
         }
-        'remote remove' {
+        { $_ -in @('remote remove', 'remote rm') } {
             if ($positionalsAfterPath.Count -lt 1) {
                 & $completeList (& $getRemotes)
             }
@@ -754,8 +851,9 @@ $GitNativeCompleter = {
 
     switch ($subcommand) {
         { $_ -in @('checkout', 'switch') } {
-            if (($subcommand -eq 'checkout' -and ($tokens -contains '-b' -or $tokens -contains '-B')) -or
-                ($subcommand -eq 'switch' -and ($tokens -contains '-c' -or $tokens -contains '-C'))) {
+            $branchCreationOptions = if ($subcommand -eq 'checkout') { @('-b', '-B') } else { @('-c', '-C') }
+            $branchCreationAnalysis = & $analyzeArguments $argsAfterPath $branchCreationOptions
+            if ($branchCreationAnalysis.PendingValueOption -in $branchCreationOptions) {
                 & $completeList (& $getNewBranchSuggestions)
                 return
             }
@@ -776,13 +874,7 @@ $GitNativeCompleter = {
             return
         }
         'branch' {
-            if ($tokens -contains '-d' -or $tokens -contains '-D' -or $tokens -contains '--delete' -or
-                $tokens -contains '-m' -or $tokens -contains '-M' -or $tokens -contains '--move') {
-                & $completeList (& $getRefs)
-            }
-            else {
-                & $completeList (& $getRefs)
-            }
+            & $completeList (& $getRefs)
             return
         }
         default {

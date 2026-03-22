@@ -107,14 +107,14 @@ Examples from the built-in nested map include:
 - `worktree add|list|lock|move|prune|remove|repair|unlock`
 
 ### Context-aware value completions
-- `git config ...` completes a fixed list of common config keys such as `user.name`, `user.email`, `core.editor`, `init.defaultBranch`, `pull.rebase`, and several alias examples.
+- `git config ...` offers modern `config` subcommands plus a fixed list of common config keys such as `user.name`, `user.email`, `core.editor`, `init.defaultBranch`, `pull.rebase`, and several alias examples at the first argument slot. `git config get|set|unset ...` continue key completion in the key slot, and `git config --file` / `git config --file=` complete file paths.
 - `git hook run ...` completes hook names from a default hook list plus files found under `git rev-parse --git-path hooks` (excluding `*.sample`).
 - `git remote remove`, `rename`, `show`, `prune`, `update`, `get-url`, `set-head`, `set-branches`, and `set-url` complete remote names from `git remote`.
 - `git remote set-head` and `git remote set-branches` also complete refs once the remote argument has been supplied.
 - `git worktree add` completes refs after the first positional argument.
 - `git worktree lock`, `move`, `remove`, `repair`, and `unlock` complete worktree paths from `git worktree list --porcelain`.
 - `git checkout` / `git switch` complete refs by default.
-- `git checkout -b|-B` and `git switch -c|-C` switch to new-branch-name suggestions such as `feature/`, `bugfix/`, `hotfix/`, `chore/`, `docs/`, `refactor/`, `test/`, plus `<current-branch>-fix` and `<current-branch>-update` when the current branch can be resolved.
+- `git checkout -b|-B` and `git switch -c|-C` switch to new-branch-name suggestions such as `feature/`, `bugfix/`, `hotfix/`, `chore/`, `docs/`, `refactor/`, `test/`, plus `<current-branch>-fix` and `<current-branch>-update` when the current branch can be resolved. After the new branch name has been supplied, completion returns to refs for the optional start point.
 - `git merge`, `rebase`, `reset`, `show`, `log`, `diff`, `cherry-pick`, and `revert` complete refs.
 - `git push`, `pull`, and `fetch` complete remotes.
 - `git add`, `restore`, `rm`, and `mv` complete tracked and untracked file paths from `git ls-files`.
