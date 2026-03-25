@@ -1161,6 +1161,10 @@ function Find-BunSubcommand {
 
     $helpData = Get-BunHelpData -Path $Path
     foreach ($command in @($helpData.Commands)) {
+        if ([string]::IsNullOrWhiteSpace($command)) {
+            continue
+        }
+
         if ($command.Equals($Token, [System.StringComparison]::OrdinalIgnoreCase)) {
             return $command
         }
