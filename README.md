@@ -55,6 +55,7 @@ To make selected completers available in future sessions, dot-source them from y
 | `where.exe` | [where_completer.ps1](where_completer/where_completer.ps1) | [where_completer.md](where_completer/where_completer.md) | Native PowerShell argument completer for `where.exe`. |
 | `wsl` | [wsl_completer.ps1](wsl_completer/wsl_completer.ps1) | [wsl_completer.md](wsl_completer/wsl_completer.md) | Native PowerShell argument completer for Windows Subsystem for Linux. |
 | `wt`, `wt.exe` | [wt_completer.ps1](wt_completer/wt_completer.ps1) | [wt_completer.md](wt_completer/wt_completer.md) | Native PowerShell argument completer for Windows Terminal. |
+| `xcopy`, `xcopy.exe` | [xcopy_completer.ps1](xcopy_completer/xcopy_completer.ps1) | [xcopy_completer.md](xcopy_completer/xcopy_completer.md) | Native PowerShell argument completer for `xcopy` with help-driven switches and inline `/D:` and `/EXCLUDE:` completion. |
 
 ## Notes
 
