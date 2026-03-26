@@ -1,17 +1,17 @@
-Register-ArgumentCompleter -Native -CommandName just -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName @("just", "just.exe", "j") -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $prev = $env:JUST_COMPLETE;
     $env:JUST_COMPLETE = "powershell";
 
-    $args = $commandAst.Extent.Text
-    $args = $args.Substring(0, [math]::Min($cursorPosition, $args.Length));
+    $args1 = $commandAst.Extent.Text
+    $args1 = $args1.Substring(0, [math]::Min($cursorPosition, $args1.Length));
     if ($wordToComplete -eq "") {
-        $args += " ''";
+        $args1 += " ''";
     }
 
     $results = Invoke-Expression @"
-& "C:\\Users\\Trent\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Casey.Just_Microsoft.Winget.Source_8wekyb3d8bbwe\\just.exe" -- $args
+& "C:\\Users\\Trent\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Casey.Just_Microsoft.Winget.Source_8wekyb3d8bbwe\\just.exe" -- $args1
 "@;
     if ($null -eq $prev) {
         Remove-Item Env:\JUST_COMPLETE;
