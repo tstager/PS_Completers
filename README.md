@@ -48,6 +48,7 @@ To make selected completers available in future sessions, dot-source them from y
 | `robocopy`, `robocopy.exe` | [robocopy_completer.ps1](robocopy_completer/robocopy_completer.ps1) | [robocopy_completer.md](robocopy_completer/robocopy_completer.md) | Native PowerShell argument completer for Robocopy. |
 | `schtasks`, `schtasks.exe` | [schtasks_completer.ps1](schtasks_completer/schtasks_completer.ps1) | [schtasks_completer.md](schtasks_completer/schtasks_completer.md) | Native PowerShell argument completer for Scheduled Tasks CLI usage. |
 | `sed`, `sed.exe` | [sed_completer.ps1](sed_completer/sed_completer.ps1) | [sed_completer.md](sed_completer/sed_completer.md) | Native PowerShell argument completer for GNU sed. |
+| `tar`, `tar.exe` | [tar_completer.ps1](tar_completer/tar_completer.ps1) | [tar_completer.md](tar_completer/tar_completer.md) | Native PowerShell argument completer for Windows `bsdtar` with mode-aware option, value, and operand completion. |
 | `tasklist`, `tasklist.exe` | [tasklist_completer.ps1](tasklist_completer/tasklist_completer.ps1) | [tasklist_completer.md](tasklist_completer/tasklist_completer.md) | Native PowerShell argument completer for Task List. |
 | `tskill`, `tskill.exe` | [tskill_completer.ps1](tskill_completer/tskill_completer.ps1) | [tskill_completer.md](tskill_completer/tskill_completer.md) | Native PowerShell argument completer for Terminal Server task termination. |
 | `uv`, `uv.exe`, `uvx`, `uvx.exe` | [uv_completer.ps1](uv_completer/uv_completer.ps1) | [uv_completer.md](uv_completer/uv_completer.md) | Native PowerShell argument completer for Astral's `uv` and `uvx`. |
@@ -56,6 +57,7 @@ To make selected completers available in future sessions, dot-source them from y
 | `wsl` | [wsl_completer.ps1](wsl_completer/wsl_completer.ps1) | [wsl_completer.md](wsl_completer/wsl_completer.md) | Native PowerShell argument completer for Windows Subsystem for Linux. |
 | `wt`, `wt.exe` | [wt_completer.ps1](wt_completer/wt_completer.ps1) | [wt_completer.md](wt_completer/wt_completer.md) | Native PowerShell argument completer for Windows Terminal. |
 | `xcopy`, `xcopy.exe` | [xcopy_completer.ps1](xcopy_completer/xcopy_completer.ps1) | [xcopy_completer.md](xcopy_completer/xcopy_completer.md) | Native PowerShell argument completer for `xcopy` with help-driven switches and inline `/D:` and `/EXCLUDE:` completion. |
+| `zip`, `zip.exe` | [zip_completer.ps1](zip_completer/zip_completer.ps1) | [zip_completer.md](zip_completer/zip_completer.md) | Native PowerShell argument completer for Info-ZIP `zip` with help-driven options and value-aware archive/path completion. |
 
 ## Notes
 
