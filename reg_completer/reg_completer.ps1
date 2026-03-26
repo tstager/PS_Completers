@@ -325,6 +325,7 @@ function Get-RegStaticCommandSpecs {
             AllowedRoots = @('HKLM')
             Options     = @(
                 @{ Token = '/?'; Description = 'Show help for REG FLAGS.' }
+                @{ Token = '/s'; Description = 'Apply the selected flags recursively to subkeys.' }
                 @{ Token = '/reg:32'; Description = 'Use the 32-bit registry view.' }
                 @{ Token = '/reg:64'; Description = 'Use the 64-bit registry view.' }
             )

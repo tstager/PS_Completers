@@ -50,7 +50,7 @@ The script is self-contained and follows the repository's help-driven completer 
 - Completes remote-machine key prefixes at the root-hive level such as `\\SERVER\HKLM\`, but does not attempt remote registry enumeration beyond the remote hive choice.
 - Uses provider-backed local registry enumeration for subkeys and value names where the path is resolvable through `Registry::`.
 - Returns no-op placeholder completions for free-form slots like `/d` and `/f` so PowerShell does not fall back to filesystem completion in those positions.
-- `reg flags` intentionally offers `QUERY`, `SET`, and the documented set tokens, but does not suggest `/s` because the local help example mentions it without listing it in the formal syntax/parameter section.
+- `reg flags` offers `QUERY`, `SET`, the documented set tokens, and `/s` because the local help example shows `/s` even though the formal syntax/parameter section does not list it.
 
 ## Loading
 
