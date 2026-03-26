@@ -11,6 +11,8 @@ This completer is intentionally thin. It does not maintain a repository-local co
 - Registers with: `Register-ArgumentCompleter -Native`
 - Command names:
   - `just`
+  - `j` - Alias needs to be set in Shell.
+  - `just.exe`
 
 The script registers a single native completer script block for `just`.
 
@@ -22,7 +24,7 @@ The completer script block:
 2. Saves the current `JUST_COMPLETE` environment variable value, if any.
 3. Sets `JUST_COMPLETE=powershell` so `just.exe` emits PowerShell-oriented completion rows.
 4. Reads the command line text from `$commandAst.Extent.Text` and truncates it to the current cursor position.
-5. If the current word is empty, appends ` ''` so the upstream completer still sees an empty trailing argument position.
+5. If the current word is empty, appends `' '` so the upstream completer still sees an empty trailing argument position.
 6. Invokes the hardcoded WinGet-installed `just.exe` path with:
 
    ```powershell
