@@ -254,7 +254,14 @@ function Add-ZipOptionRecord {
         [switch]$Overwrite
     )
 
-    $key = Get-ZipCanonicalOptionKey -Token $Metadata.Key
+    $rawToken = $null
+    if ($Metadata.ContainsKey('Token') -and -not [string]::IsNullOrWhiteSpace([string]$Metadata.Token)) {
+        $rawToken = [string]$Metadata.Token
+    } elseif ($Metadata.ContainsKey('Key') -and -not [string]::IsNullOrWhiteSpace([string]$Metadata.Key)) {
+        $rawToken = [string]$Metadata.Key
+    }
+
+    $key = Get-ZipCanonicalOptionKey -Token $rawToken
     if ([string]::IsNullOrWhiteSpace($key)) {
         return
     }
@@ -285,11 +292,11 @@ function Add-ZipOptionRecord {
 
     $Catalog[$key]['Key'] = $key
     if (-not $Catalog[$key].ContainsKey('Token')) {
-        $Catalog[$key]['Token'] = $Metadata.Key
+        $Catalog[$key]['Token'] = $rawToken
     }
 
     if (-not $Catalog[$key].ContainsKey('CompletionText')) {
-        $Catalog[$key]['CompletionText'] = $Metadata.Key
+        $Catalog[$key]['CompletionText'] = $rawToken
     }
 
     if (-not $Catalog[$key].ContainsKey('Display')) {
@@ -339,6 +346,175 @@ function Get-ZipHelpOptionMetadata {
     $catalog
 }
 
+function Get-ZipStructuredValueKind {
+    param(
+        [string]$ValueCode,
+        [string]$Token,
+        [string]$LongName,
+        [string]$Description
+    )
+
+    $normalizedValueCode = if ($null -eq $ValueCode) { '' } else { $ValueCode.Trim().ToLowerInvariant() }
+    $normalizedToken = if ($null -eq $Token) { '' } else { $Token.ToLowerInvariant() }
+    $normalizedLongName = if ($null -eq $LongName) { '' } else { $LongName.ToLowerInvariant() }
+    $normalizedDescription = if ($null -eq $Description) { '' } else { $Description.ToLowerInvariant() }
+
+    if ($normalizedValueCode -eq 'list') {
+        if ($normalizedToken -in @('-i', '-x') -or $normalizedLongName -in @('include', 'exclude')) {
+            return 'PatternList'
+        }
+
+        return 'List'
+    }
+
+    if ($normalizedValueCode -ne 'req') {
+        return $null
+    }
+
+    if ($normalizedToken -eq '-b' -or $normalizedLongName -eq 'temp-path' -or $normalizedDescription -match '\btemp archive\b.*\bdir\b') {
+        return 'Directory'
+    }
+
+    if ($normalizedToken -in @('-t', '-tt') -or $normalizedDescription -match '\bdate\b') {
+        return 'Date'
+    }
+
+    if ($normalizedToken -eq '-n' -or $normalizedDescription -match '\bsuffix') {
+        return 'SuffixList'
+    }
+
+    if ($normalizedToken -eq '-o' -or $normalizedToken -eq '-O' -or $normalizedLongName -in @('output-file', 'out') -or $normalizedDescription -match '\bzipfile\b') {
+        return 'ArchivePath'
+    }
+
+    if ($normalizedToken -eq '-lf' -or $normalizedLongName -eq 'logfile-path' -or $normalizedDescription -match '\bpath\b') {
+        return 'Path'
+    }
+
+    if ($normalizedToken -eq '-s' -or $normalizedLongName -eq 'split-size' -or $normalizedToken -eq '-Z' -or $normalizedLongName -eq 'compression-method') {
+        return 'List'
+    }
+
+    return 'Text'
+}
+
+function Get-ZipStructuredDisplay {
+    param(
+        [string]$Token,
+        [string]$ValueCode,
+        [string]$Description
+    )
+
+    $display = $Token
+    $normalizedValueCode = if ($null -eq $ValueCode) { '' } else { $ValueCode.Trim().ToLowerInvariant() }
+    $normalizedDescription = if ($null -eq $Description) { '' } else { $Description.ToLowerInvariant() }
+
+    if ($normalizedValueCode -eq 'req') {
+        $placeholder = 'value'
+        if ($normalizedDescription -match '\bdate\b') {
+            $placeholder = 'date'
+        } elseif ($normalizedDescription -match '\bpassword\b') {
+            $placeholder = 'password'
+        } elseif ($normalizedDescription -match '\bmethod\b') {
+            $placeholder = 'method'
+        } elseif ($normalizedDescription -match '\bsize\b') {
+            $placeholder = 'size'
+        } elseif ($normalizedDescription -match '\bpath\b' -or $normalizedDescription -match '\bdir\b') {
+            $placeholder = 'path'
+        } elseif ($normalizedDescription -match '\bzipfile\b' -or $normalizedDescription -match '\barchive\b') {
+            $placeholder = 'archive'
+        } elseif ($normalizedDescription -match '\bcommand\b') {
+            $placeholder = 'command'
+        }
+
+        if ($Token.StartsWith('--')) {
+            return $Token + '=' + $placeholder
+        }
+
+        return $Token + ' ' + $placeholder
+    }
+
+    if ($normalizedValueCode -eq 'list') {
+        return $Token + ' pattern pattern ...'
+    }
+
+    $display
+}
+
+function Get-ZipStructuredOptionMetadata {
+    param([string[]]$Lines)
+
+    $catalog = @{}
+    $availableOptionsIndex = -1
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index].Trim().Equals('available options:', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $availableOptionsIndex = $index
+            break
+        }
+    }
+
+    if ($availableOptionsIndex -lt 0 -or ($availableOptionsIndex + 2) -ge $Lines.Count) {
+        return $catalog
+    }
+
+    $headerLine = $Lines[$availableOptionsIndex + 1]
+    $shortStart = $headerLine.IndexOf('sh')
+    $longStart = $headerLine.IndexOf('long')
+    $valueStart = $headerLine.IndexOf('val')
+    $negStart = $headerLine.IndexOf('neg')
+    $descriptionStart = $headerLine.IndexOf('description')
+    if ($shortStart -lt 0 -or $longStart -lt 0 -or $valueStart -lt 0 -or $negStart -lt 0 -or $descriptionStart -lt 0) {
+        return $catalog
+    }
+
+    for ($index = $availableOptionsIndex + 3; $index -lt $Lines.Count; $index++) {
+        $line = $Lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^___BEGIN___' -or $line -match '^PS\s') {
+            break
+        }
+
+        $paddedLine = $line.PadRight($descriptionStart)
+        $shortName = $paddedLine.Substring($shortStart, $longStart - $shortStart).Trim()
+        $longName = $paddedLine.Substring($longStart, $valueStart - $longStart).Trim()
+        $valueCode = $paddedLine.Substring($valueStart, $negStart - $valueStart).Trim()
+        $description = if ($paddedLine.Length -gt $descriptionStart) {
+            $paddedLine.Substring($descriptionStart).Trim()
+        } else {
+            ''
+        }
+
+        if ([string]::IsNullOrWhiteSpace($shortName) -and [string]::IsNullOrWhiteSpace($longName)) {
+            continue
+        }
+
+        foreach ($token in @(
+            if (-not [string]::IsNullOrWhiteSpace($shortName) -and $shortName -ne '--') { '-' + $shortName }
+            if (-not [string]::IsNullOrWhiteSpace($longName) -and $longName -ne '----') { '--' + $longName }
+        )) {
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                continue
+            }
+
+            $metadata = @{
+                Key            = $token
+                Token          = $token
+                CompletionText = $token
+                Display        = Get-ZipStructuredDisplay -Token $token -ValueCode $valueCode -Description $description
+                Description    = $description
+            }
+
+            $valueKind = Get-ZipStructuredValueKind -ValueCode $valueCode -Token $token -LongName $longName -Description $description
+            if (-not [string]::IsNullOrWhiteSpace($valueKind)) {
+                $metadata['ValueKind'] = $valueKind
+            }
+
+            Add-ZipOptionRecord -Catalog $catalog -Metadata $metadata
+        }
+    }
+
+    $catalog
+}
+
 function Initialize-ZipCompletionCatalog {
     if ($script:ZipCompletionCatalog.Initialized) {
         return
@@ -348,6 +524,10 @@ function Initialize-ZipCompletionCatalog {
     $helpLines = Invoke-ZipHelpText
     if ($helpLines -and $helpLines.Count -gt 0) {
         foreach ($entry in (Get-ZipHelpOptionMetadata -Lines $helpLines).Values) {
+            Add-ZipOptionRecord -Catalog $catalog -Metadata $entry
+        }
+
+        foreach ($entry in (Get-ZipStructuredOptionMetadata -Lines $helpLines).Values) {
             Add-ZipOptionRecord -Catalog $catalog -Metadata $entry
         }
     }
@@ -375,7 +555,7 @@ function Initialize-ZipCompletionCatalog {
         foreach ($entry in $catalog.Values) {
             [pscustomobject]$entry
         }
-    ) | Sort-Object -Property CompletionText, Display -Unique
+    ) | Sort-Object -CaseSensitive -Property CompletionText, Display -Unique
 
     $script:ZipCompletionCatalog.OptionInfoByKey = @{}
     $valueKeys = New-Object System.Collections.Generic.List[string]
@@ -549,6 +729,13 @@ function Test-ZipLooksLikeOption {
     -not [string]::IsNullOrWhiteSpace($cleanToken) -and $cleanToken.StartsWith('-') -and $cleanToken -ne '-' -and $cleanToken -ne '--'
 }
 
+function Test-ZipShouldCompleteOptions {
+    param([string]$Token)
+
+    $cleanToken = Remove-ZipOuterQuotes $Token
+    -not [string]::IsNullOrWhiteSpace($cleanToken) -and $cleanToken.StartsWith('-')
+}
+
 function Get-ZipCompletionContext {
     param([string[]]$Arguments)
 
@@ -637,7 +824,7 @@ function Get-ZipCompletionContext {
 function Get-ZipUniqueCompletions {
     param([System.Management.Automation.CompletionResult[]]$Results)
 
-    $seen = @{}
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $unique = @()
 
     foreach ($result in $Results) {
@@ -645,11 +832,9 @@ function Get-ZipUniqueCompletions {
             continue
         }
 
-        if ($seen.ContainsKey($result.CompletionText)) {
+        if (-not $seen.Add($result.CompletionText)) {
             continue
         }
-
-        $seen[$result.CompletionText] = $true
         $unique += $result
     }
 
@@ -879,9 +1064,20 @@ function Get-ZipOptionCompletions {
         Remove-ZipOuterQuotes $WordToComplete
     }
 
+    $longOnly = $cleanWord.StartsWith('--')
+    $shortOnly = -not $longOnly -and $cleanWord.StartsWith('-')
+
     foreach ($option in $script:ZipCompletionCatalog.Options) {
         $completionText = [string]$option.CompletionText
         $displayText = [string]$option.Display
+        if ($longOnly -and -not $completionText.StartsWith('--')) {
+            continue
+        }
+
+        if ($shortOnly -and $completionText.StartsWith('--')) {
+            continue
+        }
+
         if ($completionText.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase) -or
             $displayText.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase)) {
             New-ZipCompletionResult `
@@ -935,7 +1131,7 @@ function Complete-Zip {
             return @(Get-ZipPatternCompletions -CurrentValue $currentWord)
         }
 
-        if (-not [string]::IsNullOrEmpty($currentWord) -and (Test-ZipLooksLikeOption -Token $currentWord)) {
+        if (-not [string]::IsNullOrEmpty($currentWord) -and (Test-ZipShouldCompleteOptions -Token $currentWord)) {
             return @(Get-ZipOptionCompletions -WordToComplete $currentWord)
         }
     }

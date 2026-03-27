@@ -4,11 +4,12 @@
 
 `zip_completer.ps1` registers a native PowerShell argument completer for Info-ZIP `zip` / `zip.exe`.
 
-The script is standalone and self-contained. It builds a cached option catalog from local `zip -h`, `zip -h2`, and `zip -so` output, then layers in a small amount of static metadata for value-taking options and useful long-option aliases.
+The script is standalone and self-contained. It builds a cached option catalog from local `zip -h`, `zip -h2`, and `zip -so` output, structurally parses the `zip -so` option table, and then layers in a small amount of static metadata for richer value completion where the local help is not specific enough.
 
 ## What it completes
 
 - native options discovered from local help
+- help-oriented switches such as `-h`, `-H`, `-?`, `-h2`, `-so`, and `-L`
 - first positional archive path (`zipfile`)
 - subsequent input file and directory paths
 - directory values for:
@@ -46,7 +47,9 @@ The script is standalone and self-contained. It builds a cached option catalog f
   - `--output-file=archive.zip`
   - `--out archive.zip`
   - `--out=archive.zip`
+- Treats an in-progress `-` token as a short-option prefix.
 - Treats `--` as an option terminator and falls back to literal path completion after it.
+- Treats an in-progress `--` token as a long-option prefix, while a completed `-- ` still switches to literal path completion.
 - Keeps `-i` / `-x` list completion active until the next option, `@`, or end of line, matching the local help grammar.
 
 ## Loading
@@ -59,6 +62,8 @@ The script is standalone and self-contained. It builds a cached option catalog f
 
 ```powershell
 zip <Tab>
+zip -<Tab>
+zip --<Tab>
 zip archive.zip <Tab>
 zip -b <Tab>
 zip -t<Tab>
