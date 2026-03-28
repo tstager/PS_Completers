@@ -33,6 +33,7 @@ To make selected completers available in future sessions, dot-source them from y
 | --- | --- | --- | --- |
 | `7z`, `7z.exe` | [7z_completer.ps1](7z_completer/7z_completer.ps1) | [7z_completer.md](7z_completer/7z_completer.md) | Native PowerShell argument completer for 7-Zip. |
 | `bun`, `bun.exe` | [bun_completer.ps1](bun_completer/bun_completer.ps1) | [bun_completer.md](bun_completer/bun_completer.md) | Hybrid Bun completer that merges parsed help output with static commands and local project metadata. |
+| `copilot`, `copilot.exe` | [copilot_completer.ps1](copilot_completer/copilot_completer.ps1) | [copilot_completer.md](copilot_completer/copilot_completer.md) | Hybrid GitHub Copilot CLI completer with a static argv tree plus dynamic local values for models, marketplaces, and installed plugins. |
 | `dism` | [dism_completer.ps1](dism_completer/dism_completer.ps1) | [dism_completer.md](dism_completer/dism_completer.md) | Native PowerShell argument completer for Deployment Image Servicing and Management. |
 | `dotnet` | [dotnet_completer.ps1](dotnet_completer/dotnet_completer.ps1) | [dotnet_completer.md](dotnet_completer/dotnet_completer.md) | Large static completion table for the .NET CLI. |
 | `dsc` | [DSC_completer.ps1](DSC_completer/DSC_completer.ps1) | [DSC_completer.md](DSC_completer/DSC_completer.md) | Native PowerShell argument completer for the `dsc` CLI. |
