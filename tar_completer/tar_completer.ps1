@@ -947,8 +947,6 @@ function Complete-Tar {
     Invoke-TarPositionalCompletion -Mode $state.Mode -CurrentValue $currentToken -IncludeOptions:((-not $state.OptionTerminated) -and [string]::IsNullOrEmpty($currentToken))
 }
 
-Initialize-TarCompletionCatalog
-
 Register-ArgumentCompleter -Native -CommandName 'tar', 'tar.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 

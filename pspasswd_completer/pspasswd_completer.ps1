@@ -181,20 +181,25 @@ function Complete-PsPasswd {
 
 function Ensure-PsPasswdCommandAlias {
     $existingAlias = Get-Alias -Name pspasswd -ErrorAction SilentlyContinue
-    if ($existingAlias) { return }
+    if ($existingAlias) {
+        return
+    }
 
     $exeCommand = Get-Command -Name pspasswd.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) { return }
+    if (-not $exeCommand) {
+        return
+    }
 
     $bareCommand = Get-Command -Name pspasswd -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') { return }
+    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
+        return
+    }
 
     Set-Alias -Name pspasswd -Value pspasswd.exe -Option AllScope -Scope Global
 }
 
-Ensure-PsPasswdCommandAlias
-
 Register-ArgumentCompleter -Native -CommandName @('pspasswd', 'pspasswd.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
+    Ensure-PsPasswdCommandAlias
     Complete-PsPasswd -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

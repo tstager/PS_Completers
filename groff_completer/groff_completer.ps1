@@ -896,11 +896,8 @@ function Complete-Groff {
     @(Get-GroffOperandCompletions -CurrentValue $currentWord)
 }
 
-foreach ($commandName in @('groff', 'groff.exe')) {
-    Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
-        Complete-Groff -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
-    }
+Register-ArgumentCompleter -Native -CommandName @('groff', 'groff.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Ensure-GroffCommandAlias
+    Complete-Groff -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }
-
-Ensure-GroffCommandAlias

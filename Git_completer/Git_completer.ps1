@@ -3,7 +3,7 @@
 # This implementation uses git's own capabilities to fetch relevant completions,
 # ensuring that it stays up-to-date with the installed version of git.
    
-$GitNativeCompleter = {
+function Complete-GitNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -894,4 +894,7 @@ $GitNativeCompleter = {
     }
 }
 
-Register-ArgumentCompleter -Native -CommandName git -ScriptBlock $GitNativeCompleter
+Register-ArgumentCompleter -Native -CommandName @('git', 'git.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-GitNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}

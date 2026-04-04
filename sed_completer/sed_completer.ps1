@@ -993,10 +993,8 @@ function Complete-SedNative {
     @(Get-SedPositionalCompletions -State $state -CurrentWord $currentWord)
 }
 
-foreach ($commandName in @('sed', 'sed.exe')) {
-    Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
+Register-ArgumentCompleter -Native -CommandName @('sed', 'sed.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
 
-        Complete-SedNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
-    }
+    Complete-SedNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

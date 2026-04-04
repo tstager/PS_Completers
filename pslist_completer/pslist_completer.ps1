@@ -76,26 +76,6 @@ function Get-PslistCommandPath {
     $null
 }
 
-function Ensure-PslistCommandAlias {
-    $existingAlias = Get-Alias -Name pslist -ErrorAction SilentlyContinue
-    if ($existingAlias) {
-        return
-    }
-
-    $pslistExeCommand = Get-Command -Name pslist.exe -ErrorAction SilentlyContinue
-    if (-not $pslistExeCommand) {
-        return
-    }
-
-    $pslistCommand = Get-Command -Name pslist -ErrorAction SilentlyContinue
-    if ($pslistCommand -and
-        ($pslistCommand.CommandType -ne 'Application' -or $pslistCommand.Name -ne 'pslist.exe')) {
-        return
-    }
-
-    Set-Alias -Name pslist -Value pslist.exe -Option AllScope -Scope Global
-}
-
 function Invoke-PslistHelpText {
     $commandPath = Get-PslistCommandPath
     if (-not $commandPath) {
@@ -673,10 +653,29 @@ function Complete-Pslist {
     @($results.ToArray())
 }
 
-Ensure-PslistCommandAlias
+function Ensure-PslistCommandAlias {
+    $existingAlias = Get-Alias -Name pslist -ErrorAction SilentlyContinue
+    if ($existingAlias) {
+        return
+    }
+
+    $pslistExeCommand = Get-Command -Name pslist.exe -ErrorAction SilentlyContinue
+    if (-not $pslistExeCommand) {
+        return
+    }
+
+    $pslistCommand = Get-Command -Name pslist -ErrorAction SilentlyContinue
+    if ($pslistCommand -and
+        ($pslistCommand.CommandType -ne 'Application' -or $pslistCommand.Name -ne 'pslist.exe')) {
+        return
+    }
+
+    Set-Alias -Name pslist -Value pslist.exe -Option AllScope -Scope Global
+}
 
 Register-ArgumentCompleter -Native -CommandName @('pslist', 'pslist.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
+    Ensure-PslistCommandAlias
     Complete-Pslist -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }

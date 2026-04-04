@@ -97,12 +97,25 @@ function Get-PsShutdownSwitchSpecs {
 
 if (-not (Get-Variable -Name PsShutdownCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
     $script:PsShutdownCompletionCatalog = @{
-        Actions             = @(Get-PsShutdownActionSpecs)
+        Initialized         = $false
+        Actions             = @()
         ActionLookup        = @{}
-        Switches            = @(Get-PsShutdownSwitchSpecs)
+        Switches            = @()
         SwitchLookup        = @{}
         ValueTakingSwitches = @{}
     }
+}
+
+function Initialize-PsShutdownCompletionCatalog {
+    if ($script:PsShutdownCompletionCatalog.Initialized) {
+        return
+    }
+
+    $script:PsShutdownCompletionCatalog.Actions = @(Get-PsShutdownActionSpecs)
+    $script:PsShutdownCompletionCatalog.ActionLookup = @{}
+    $script:PsShutdownCompletionCatalog.Switches = @(Get-PsShutdownSwitchSpecs)
+    $script:PsShutdownCompletionCatalog.SwitchLookup = @{}
+    $script:PsShutdownCompletionCatalog.ValueTakingSwitches = @{}
 
     foreach ($action in $script:PsShutdownCompletionCatalog.Actions) {
         $script:PsShutdownCompletionCatalog.ActionLookup[$action.Token.ToLowerInvariant()] = $action
@@ -115,6 +128,8 @@ if (-not (Get-Variable -Name PsShutdownCompletionCatalog -Scope Script -ErrorAct
             $script:PsShutdownCompletionCatalog.ValueTakingSwitches[$lowerToken] = $switchSpec.ValueKind
         }
     }
+
+    $script:PsShutdownCompletionCatalog.Initialized = $true
 }
 
 function Get-PsShutdownCommandState {
@@ -516,6 +531,8 @@ function Complete-PsShutdown {
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
+
+    Initialize-PsShutdownCompletionCatalog
 
     $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
     $tokens = @($allTokens | Select-Object -Skip 1)

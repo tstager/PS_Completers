@@ -4,7 +4,7 @@
 
 Set-StrictMode -Version Latest
 
-$WslCompleter = {
+function Complete-WslNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     # Ensure wsl.exe is available
@@ -66,4 +66,7 @@ $WslCompleter = {
     & $complete $all
 }
 
-Register-ArgumentCompleter -Native -CommandName wsl -ScriptBlock $WslCompleter
+Register-ArgumentCompleter -Native -CommandName @('wsl', 'wsl.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-WslNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}

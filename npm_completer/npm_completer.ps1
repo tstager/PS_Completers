@@ -1,108 +1,112 @@
 Set-StrictMode -Version Latest
 
-if (-not (Get-Variable -Name NpmCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
-    $script:NpmCompletionCache = @{
-        ExecutablePath          = $null
-        ExecutablePathProbed    = $false
-        HelpDataByPath          = @{}
-        DiscoveredCommandAliasesByPath = @{}
-        PackageJsonByPath       = @{}
-        WorkspaceNamesByRoot    = @{}
-        NodeModulesByRoot       = @{}
-        ConfigKeys              = @()
-        ConfigKeysLoaded        = $false
-        StaticTree              = @{
-            ''            = @(
-                'access', 'adduser', 'audit', 'bugs', 'cache', 'ci', 'completion', 'config', 'dedupe', 'deprecate',
-                'diff', 'dist-tag', 'docs', 'doctor', 'edit', 'exec', 'explain', 'explore', 'find-dupes', 'fund',
-                'get', 'help', 'help-search', 'init', 'install', 'install-ci-test', 'install-test', 'link', 'll',
-                'login', 'logout', 'ls', 'org', 'outdated', 'owner', 'pack', 'ping', 'pkg', 'prefix', 'profile',
-                'prune', 'publish', 'query', 'rebuild', 'repo', 'restart', 'root', 'run', 'sbom', 'search', 'set',
-                'shrinkwrap', 'star', 'stars', 'start', 'stop', 'team', 'test', 'token', 'trust', 'undeprecate',
-                'uninstall', 'unpublish', 'unstar', 'update', 'version', 'view', 'whoami'
-            )
-            'access'      = @('list', 'get', 'set', 'grant', 'revoke')
-            'access list' = @('packages', 'collaborators')
-            'access get'  = @('status')
-            'cache'       = @('add', 'clean', 'ls', 'verify', 'npx')
-            'cache npx'   = @('ls', 'rm', 'info')
-            'config'      = @('set', 'get', 'delete', 'list', 'edit', 'fix')
-            'dist-tag'    = @('add', 'rm', 'ls')
-            'org'         = @('set', 'rm', 'ls')
-            'owner'       = @('add', 'rm', 'ls')
-            'pkg'         = @('set', 'get', 'delete', 'fix')
-            'profile'     = @('enable-2fa', 'disable-2fa', 'get', 'set')
-            'team'        = @('create', 'destroy', 'add', 'rm', 'ls')
+function Get-NpmCompletionCache {
+    if (-not (Get-Variable -Name NpmCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+        $script:NpmCompletionCache = @{
+                ExecutablePath          = $null
+                ExecutablePathProbed    = $false
+                HelpDataByPath          = @{}
+                DiscoveredCommandAliasesByPath = @{}
+                PackageJsonByPath       = @{}
+                WorkspaceNamesByRoot    = @{}
+                NodeModulesByRoot       = @{}
+                ConfigKeys              = @()
+                ConfigKeysLoaded        = $false
+                StaticTree              = @{
+                    ''            = @(
+                        'access', 'adduser', 'audit', 'bugs', 'cache', 'ci', 'completion', 'config', 'dedupe', 'deprecate',
+                        'diff', 'dist-tag', 'docs', 'doctor', 'edit', 'exec', 'explain', 'explore', 'find-dupes', 'fund',
+                        'get', 'help', 'help-search', 'init', 'install', 'install-ci-test', 'install-test', 'link', 'll',
+                        'login', 'logout', 'ls', 'org', 'outdated', 'owner', 'pack', 'ping', 'pkg', 'prefix', 'profile',
+                        'prune', 'publish', 'query', 'rebuild', 'repo', 'restart', 'root', 'run', 'sbom', 'search', 'set',
+                        'shrinkwrap', 'star', 'stars', 'start', 'stop', 'team', 'test', 'token', 'trust', 'undeprecate',
+                        'uninstall', 'unpublish', 'unstar', 'update', 'version', 'view', 'whoami'
+                    )
+                    'access'      = @('list', 'get', 'set', 'grant', 'revoke')
+                    'access list' = @('packages', 'collaborators')
+                    'access get'  = @('status')
+                    'cache'       = @('add', 'clean', 'ls', 'verify', 'npx')
+                    'cache npx'   = @('ls', 'rm', 'info')
+                    'config'      = @('set', 'get', 'delete', 'list', 'edit', 'fix')
+                    'dist-tag'    = @('add', 'rm', 'ls')
+                    'org'         = @('set', 'rm', 'ls')
+                    'owner'       = @('add', 'rm', 'ls')
+                    'pkg'         = @('set', 'get', 'delete', 'fix')
+                    'profile'     = @('enable-2fa', 'disable-2fa', 'get', 'set')
+                    'team'        = @('create', 'destroy', 'add', 'rm', 'ls')
+                }
+                StaticCommandAliases    = @{
+                    ''       = @{
+                        'c'          = 'config'
+                        'dist-tags'  = 'dist-tag'
+                        'author'     = 'owner'
+                        'ogr'        = 'org'
+                        'x'          = 'exec'
+                        'run-script' = 'run'
+                        'rum'        = 'run'
+                        'urn'        = 'run'
+                        'find'       = 'search'
+                        's'          = 'search'
+                        'se'         = 'search'
+                        'add'        = 'install'
+                        'i'          = 'install'
+                        'in'         = 'install'
+                        'ins'        = 'install'
+                        'inst'       = 'install'
+                        'insta'      = 'install'
+                        'instal'     = 'install'
+                        'isnt'       = 'install'
+                        'isnta'      = 'install'
+                        'isntal'     = 'install'
+                        'isntall'    = 'install'
+                        'unlink'     = 'uninstall'
+                        'remove'     = 'uninstall'
+                        'rm'         = 'uninstall'
+                        'r'          = 'uninstall'
+                        'un'         = 'uninstall'
+                        'info'       = 'view'
+                        'show'       = 'view'
+                        'v'          = 'view'
+                    }
+                    'config' = @{
+                        'ls' = 'list'
+                    }
+                }
+                StaticOptionValues      = @{
+                    '--location'                 = @('global', 'user', 'project')
+                    'config|--location'          = @('global', 'user', 'project')
+                    'install|--install-strategy' = @('hoisted', 'nested', 'shallow', 'linked')
+                    'install|--omit'             = @('dev', 'optional', 'peer')
+                    'install|--include'          = @('prod', 'dev', 'optional', 'peer')
+                    'install|--allow-git'        = @('all', 'none', 'root')
+                    'publish|--access'           = @('restricted', 'public')
+                    'search|--color'             = @('always')
+                }
+                StaticPositionalValues  = @{
+                    'access set|0'        = @('status=public', 'status=private', 'mfa=none', 'mfa=publish', 'mfa=automation')
+                    'access grant|0'      = @('read-only', 'read-write')
+                    'profile enable-2fa|0' = @('auth-only', 'auth-and-writes')
+                    'org set|2'           = @('developer', 'admin', 'owner')
+                }
+                OptionAliases           = $null
+                OptionsExpectingValue   = @(
+                    '--access', '--allow-git', '--before', '--cache', '--call', '--cpu', '--editor', '--expect-result-count',
+                    '--include', '--install-strategy', '--libc', '--location', '--min-release-age', '--omit', '--os',
+                    '--otp', '--package', '--provenance-file', '--registry', '--script-shell', '--searchlimit',
+                    '--searchexclude', '--searchopts', '--tag', '--workspace', '-L', '-c', '-w'
+                )
+                WorkspaceCacheTtlSeconds = 30
+                NodeModulesCacheTtlSeconds = 30
+                ConfigKeyCacheTtlSeconds = 300
+                ConfigKeysLoadedAt      = [datetime]::MinValue
         }
-        StaticCommandAliases    = @{
-            ''       = @{
-                'c'          = 'config'
-                'dist-tags'  = 'dist-tag'
-                'author'     = 'owner'
-                'ogr'        = 'org'
-                'x'          = 'exec'
-                'run-script' = 'run'
-                'rum'        = 'run'
-                'urn'        = 'run'
-                'find'       = 'search'
-                's'          = 'search'
-                'se'         = 'search'
-                'add'        = 'install'
-                'i'          = 'install'
-                'in'         = 'install'
-                'ins'        = 'install'
-                'inst'       = 'install'
-                'insta'      = 'install'
-                'instal'     = 'install'
-                'isnt'       = 'install'
-                'isnta'      = 'install'
-                'isntal'     = 'install'
-                'isntall'    = 'install'
-                'unlink'     = 'uninstall'
-                'remove'     = 'uninstall'
-                'rm'         = 'uninstall'
-                'r'          = 'uninstall'
-                'un'         = 'uninstall'
-                'info'       = 'view'
-                'show'       = 'view'
-                'v'          = 'view'
-            }
-            'config' = @{
-                'ls' = 'list'
-            }
-        }
-        StaticOptionValues      = @{
-            '--location'                 = @('global', 'user', 'project')
-            'config|--location'          = @('global', 'user', 'project')
-            'install|--install-strategy' = @('hoisted', 'nested', 'shallow', 'linked')
-            'install|--omit'             = @('dev', 'optional', 'peer')
-            'install|--include'          = @('prod', 'dev', 'optional', 'peer')
-            'install|--allow-git'        = @('all', 'none', 'root')
-            'publish|--access'           = @('restricted', 'public')
-            'search|--color'             = @('always')
-        }
-        StaticPositionalValues  = @{
-            'access set|0'        = @('status=public', 'status=private', 'mfa=none', 'mfa=publish', 'mfa=automation')
-            'access grant|0'      = @('read-only', 'read-write')
-            'profile enable-2fa|0' = @('auth-only', 'auth-and-writes')
-            'org set|2'           = @('developer', 'admin', 'owner')
-        }
-        OptionAliases           = $null
-        OptionsExpectingValue   = @(
-            '--access', '--allow-git', '--before', '--cache', '--call', '--cpu', '--editor', '--expect-result-count',
-            '--include', '--install-strategy', '--libc', '--location', '--min-release-age', '--omit', '--os',
-            '--otp', '--package', '--provenance-file', '--registry', '--script-shell', '--searchlimit',
-            '--searchexclude', '--searchopts', '--tag', '--workspace', '-L', '-c', '-w'
-        )
-        WorkspaceCacheTtlSeconds = 30
-        NodeModulesCacheTtlSeconds = 30
-        ConfigKeyCacheTtlSeconds = 300
-        ConfigKeysLoadedAt      = [datetime]::MinValue
+
+        $script:NpmCompletionCache.OptionAliases = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+        $script:NpmCompletionCache.OptionAliases['-L'] = '--location'
+        $script:NpmCompletionCache.OptionAliases['-w'] = '--workspace'
     }
 
-    $script:NpmCompletionCache.OptionAliases = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
-    $script:NpmCompletionCache.OptionAliases['-L'] = '--location'
-    $script:NpmCompletionCache.OptionAliases['-w'] = '--workspace'
+    $script:NpmCompletionCache
 }
 
 function Get-NpmTokenText {
@@ -217,35 +221,23 @@ function Get-NpmCacheKey {
     (($pathItems | ForEach-Object { $_.ToLowerInvariant() }) -join ' ')
 }
 
-function Get-NpmCommandPathTargets {
-    $targets = New-Object System.Collections.Generic.List[string]
-    [void]$targets.Add('npm')
-    [void]$targets.Add('npm.cmd')
-
-    if (Get-Command -Name 'npm.exe' -ErrorAction SilentlyContinue) {
-        [void]$targets.Add('npm.exe')
-    }
-
-    Get-NpmUniqueStrings -Items $targets
-}
-
 function Get-NpmExecutablePath {
-    if ($script:NpmCompletionCache.ExecutablePathProbed) {
-        return $script:NpmCompletionCache.ExecutablePath
+    if ((Get-NpmCompletionCache).ExecutablePathProbed) {
+        return (Get-NpmCompletionCache).ExecutablePath
     }
 
-    $script:NpmCompletionCache.ExecutablePathProbed = $true
-    $script:NpmCompletionCache.ExecutablePath = $null
+    (Get-NpmCompletionCache).ExecutablePathProbed = $true
+    (Get-NpmCompletionCache).ExecutablePath = $null
 
     foreach ($commandName in @('npm.cmd', 'npm', 'npm.exe')) {
         $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
         if ($command) {
-            $script:NpmCompletionCache.ExecutablePath = $command.Source
+            (Get-NpmCompletionCache).ExecutablePath = $command.Source
             break
         }
     }
 
-    $script:NpmCompletionCache.ExecutablePath
+    (Get-NpmCompletionCache).ExecutablePath
 }
 
 function ConvertTo-NpmCmdArgument {
@@ -488,20 +480,20 @@ function Get-NpmHelpData {
     param([string[]]$Path)
 
     $cacheKey = Get-NpmCacheKey -Path $Path
-    if ($script:NpmCompletionCache.HelpDataByPath.ContainsKey($cacheKey)) {
-        return $script:NpmCompletionCache.HelpDataByPath[$cacheKey]
+    if ((Get-NpmCompletionCache).HelpDataByPath.ContainsKey($cacheKey)) {
+        return (Get-NpmCompletionCache).HelpDataByPath[$cacheKey]
     }
 
-    if (@($Path).Count -gt 1 -and -not $script:NpmCompletionCache.StaticTree.ContainsKey($cacheKey)) {
+    if (@($Path).Count -gt 1 -and -not (Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
         $parentPath = @($Path[0..($Path.Count - 2)])
         $helpData = Get-NpmHelpData -Path $parentPath
-        $script:NpmCompletionCache.HelpDataByPath[$cacheKey] = $helpData
+        (Get-NpmCompletionCache).HelpDataByPath[$cacheKey] = $helpData
         return $helpData
     }
 
     $helpData = New-NpmHelpData
     if (@($Path).Count -eq 0) {
-        $script:NpmCompletionCache.HelpDataByPath[$cacheKey] = $helpData
+        (Get-NpmCompletionCache).HelpDataByPath[$cacheKey] = $helpData
         return $helpData
     }
 
@@ -570,11 +562,11 @@ function Get-NpmHelpData {
         }
 
         $parentKey = Get-NpmCacheKey -Path $parentPath
-        if (-not $script:NpmCompletionCache.DiscoveredCommandAliasesByPath.ContainsKey($parentKey)) {
-            $script:NpmCompletionCache.DiscoveredCommandAliasesByPath[$parentKey] = @{}
+        if (-not (Get-NpmCompletionCache).DiscoveredCommandAliasesByPath.ContainsKey($parentKey)) {
+            (Get-NpmCompletionCache).DiscoveredCommandAliasesByPath[$parentKey] = @{}
         }
 
-        $aliasMap = $script:NpmCompletionCache.DiscoveredCommandAliasesByPath[$parentKey]
+        $aliasMap = (Get-NpmCompletionCache).DiscoveredCommandAliasesByPath[$parentKey]
         $canonicalCommand = $Path[-1]
         foreach ($alias in @($helpData.Aliases)) {
             if (-not $alias.Equals($canonicalCommand, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -583,7 +575,7 @@ function Get-NpmHelpData {
         }
     }
 
-    $script:NpmCompletionCache.HelpDataByPath[$cacheKey] = $helpData
+    (Get-NpmCompletionCache).HelpDataByPath[$cacheKey] = $helpData
     $helpData
 }
 
@@ -593,14 +585,14 @@ function Get-NpmCommandAliasMap {
     $cacheKey = Get-NpmCacheKey -Path $Path
 
     $aliasMap = @{}
-    if ($script:NpmCompletionCache.StaticCommandAliases.ContainsKey($cacheKey)) {
-        foreach ($entry in $script:NpmCompletionCache.StaticCommandAliases[$cacheKey].GetEnumerator()) {
+    if ((Get-NpmCompletionCache).StaticCommandAliases.ContainsKey($cacheKey)) {
+        foreach ($entry in (Get-NpmCompletionCache).StaticCommandAliases[$cacheKey].GetEnumerator()) {
             $aliasMap[$entry.Key] = $entry.Value
         }
     }
 
-    if ($script:NpmCompletionCache.DiscoveredCommandAliasesByPath.ContainsKey($cacheKey)) {
-        foreach ($entry in $script:NpmCompletionCache.DiscoveredCommandAliasesByPath[$cacheKey].GetEnumerator()) {
+    if ((Get-NpmCompletionCache).DiscoveredCommandAliasesByPath.ContainsKey($cacheKey)) {
+        foreach ($entry in (Get-NpmCompletionCache).DiscoveredCommandAliasesByPath[$cacheKey].GetEnumerator()) {
             $aliasMap[$entry.Key] = $entry.Value
         }
     }
@@ -612,13 +604,13 @@ function Get-NpmCanonicalSubcommands {
     param([string[]]$Path)
 
     $cacheKey = Get-NpmCacheKey -Path $Path
-    $staticCommands = if ($script:NpmCompletionCache.StaticTree.ContainsKey($cacheKey)) {
-        @($script:NpmCompletionCache.StaticTree[$cacheKey])
+    $staticCommands = if ((Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
+        @((Get-NpmCompletionCache).StaticTree[$cacheKey])
     } else {
         @()
     }
 
-    if (@($Path).Count -gt 0 -and -not $script:NpmCompletionCache.StaticTree.ContainsKey($cacheKey)) {
+    if (@($Path).Count -gt 0 -and -not (Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
         return $staticCommands
     }
 
@@ -666,8 +658,8 @@ function Normalize-NpmOptionName {
         return $Option
     }
 
-    if ($script:NpmCompletionCache.OptionAliases.ContainsKey($Option)) {
-        return $script:NpmCompletionCache.OptionAliases[$Option]
+    if ((Get-NpmCompletionCache).OptionAliases.ContainsKey($Option)) {
+        return (Get-NpmCompletionCache).OptionAliases[$Option]
     }
 
     $Option.ToLowerInvariant()
@@ -684,8 +676,8 @@ function Test-NpmOptionRequiresValue {
     }
 
     $normalizedOption = Normalize-NpmOptionName -Option $Option
-    if ((Test-NpmStringArrayContains -Items $script:NpmCompletionCache.OptionsExpectingValue -Value $Option -CaseSensitive) -or
-        (Test-NpmStringArrayContains -Items $script:NpmCompletionCache.OptionsExpectingValue -Value $normalizedOption -CaseSensitive)) {
+    if ((Test-NpmStringArrayContains -Items (Get-NpmCompletionCache).OptionsExpectingValue -Value $Option -CaseSensitive) -or
+        (Test-NpmStringArrayContains -Items (Get-NpmCompletionCache).OptionsExpectingValue -Value $normalizedOption -CaseSensitive)) {
         return $true
     }
 
@@ -726,8 +718,8 @@ function Get-NpmPackageJsonData {
         return $null
     }
 
-    $cacheEntry = if ($script:NpmCompletionCache.PackageJsonByPath.ContainsKey($Path)) {
-        $script:NpmCompletionCache.PackageJsonByPath[$Path]
+    $cacheEntry = if ((Get-NpmCompletionCache).PackageJsonByPath.ContainsKey($Path)) {
+        (Get-NpmCompletionCache).PackageJsonByPath[$Path]
     } else {
         $null
     }
@@ -743,7 +735,7 @@ function Get-NpmPackageJsonData {
         $data = $null
     }
 
-    $script:NpmCompletionCache.PackageJsonByPath[$Path] = @{
+    (Get-NpmCompletionCache).PackageJsonByPath[$Path] = @{
         LastWriteTimeUtc = $item.LastWriteTimeUtc
         Data             = $data
     }
@@ -779,17 +771,17 @@ function Get-NpmWorkspaceNames {
     $projectRoot = Split-Path -Path $packageJsonPath -Parent
     $cacheKey = $projectRoot.ToLowerInvariant()
 
-    if ($script:NpmCompletionCache.WorkspaceNamesByRoot.ContainsKey($cacheKey)) {
-        $cacheEntry = $script:NpmCompletionCache.WorkspaceNamesByRoot[$cacheKey]
+    if ((Get-NpmCompletionCache).WorkspaceNamesByRoot.ContainsKey($cacheKey)) {
+        $cacheEntry = (Get-NpmCompletionCache).WorkspaceNamesByRoot[$cacheKey]
         $cacheAge = (Get-Date) - $cacheEntry.UpdatedAt
-        if ($cacheAge.TotalSeconds -lt $script:NpmCompletionCache.WorkspaceCacheTtlSeconds) {
+        if ($cacheAge.TotalSeconds -lt (Get-NpmCompletionCache).WorkspaceCacheTtlSeconds) {
             return $cacheEntry.Values
         }
     }
 
     $packageData = Get-NpmPackageJsonData -Path $packageJsonPath
     if ($null -eq $packageData -or -not $packageData.ContainsKey('workspaces')) {
-        $script:NpmCompletionCache.WorkspaceNamesByRoot[$cacheKey] = @{
+        (Get-NpmCompletionCache).WorkspaceNamesByRoot[$cacheKey] = @{
             UpdatedAt = Get-Date
             Values    = @()
         }
@@ -845,7 +837,7 @@ function Get-NpmWorkspaceNames {
     }
 
     $values = @($names | Sort-Object -Unique)
-    $script:NpmCompletionCache.WorkspaceNamesByRoot[$cacheKey] = @{
+    (Get-NpmCompletionCache).WorkspaceNamesByRoot[$cacheKey] = @{
         UpdatedAt = Get-Date
         Values    = $values
     }
@@ -946,10 +938,10 @@ function Get-NpmInstalledPackageNames {
     }
 
     $cacheKey = $nodeModulesPath.ToLowerInvariant()
-    if ($script:NpmCompletionCache.NodeModulesByRoot.ContainsKey($cacheKey)) {
-        $cacheEntry = $script:NpmCompletionCache.NodeModulesByRoot[$cacheKey]
+    if ((Get-NpmCompletionCache).NodeModulesByRoot.ContainsKey($cacheKey)) {
+        $cacheEntry = (Get-NpmCompletionCache).NodeModulesByRoot[$cacheKey]
         $cacheAge = (Get-Date) - $cacheEntry.UpdatedAt
-        if ($cacheAge.TotalSeconds -lt $script:NpmCompletionCache.NodeModulesCacheTtlSeconds) {
+        if ($cacheAge.TotalSeconds -lt (Get-NpmCompletionCache).NodeModulesCacheTtlSeconds) {
             return $cacheEntry.Values
         }
     }
@@ -971,7 +963,7 @@ function Get-NpmInstalledPackageNames {
     }
 
     $values = @($names | Sort-Object -Unique)
-    $script:NpmCompletionCache.NodeModulesByRoot[$cacheKey] = @{
+    (Get-NpmCompletionCache).NodeModulesByRoot[$cacheKey] = @{
         UpdatedAt = Get-Date
         Values    = $values
     }
@@ -980,15 +972,15 @@ function Get-NpmInstalledPackageNames {
 }
 
 function Update-NpmConfigKeys {
-    $cacheAge = (Get-Date) - $script:NpmCompletionCache.ConfigKeysLoadedAt
-    if ($script:NpmCompletionCache.ConfigKeysLoaded -and $cacheAge.TotalSeconds -lt $script:NpmCompletionCache.ConfigKeyCacheTtlSeconds) {
+    $cacheAge = (Get-Date) - (Get-NpmCompletionCache).ConfigKeysLoadedAt
+    if ((Get-NpmCompletionCache).ConfigKeysLoaded -and $cacheAge.TotalSeconds -lt (Get-NpmCompletionCache).ConfigKeyCacheTtlSeconds) {
         return
     }
 
     if ([string]::IsNullOrWhiteSpace((Get-NpmExecutablePath))) {
-        $script:NpmCompletionCache.ConfigKeys = @()
-        $script:NpmCompletionCache.ConfigKeysLoaded = $true
-        $script:NpmCompletionCache.ConfigKeysLoadedAt = Get-Date
+        (Get-NpmCompletionCache).ConfigKeys = @()
+        (Get-NpmCompletionCache).ConfigKeysLoaded = $true
+        (Get-NpmCompletionCache).ConfigKeysLoadedAt = Get-Date
         return
     }
 
@@ -1000,14 +992,14 @@ function Update-NpmConfigKeys {
         }
     }
 
-    $script:NpmCompletionCache.ConfigKeys = @($keys | Sort-Object -Unique)
-    $script:NpmCompletionCache.ConfigKeysLoaded = $true
-    $script:NpmCompletionCache.ConfigKeysLoadedAt = Get-Date
+    (Get-NpmCompletionCache).ConfigKeys = @($keys | Sort-Object -Unique)
+    (Get-NpmCompletionCache).ConfigKeysLoaded = $true
+    (Get-NpmCompletionCache).ConfigKeysLoadedAt = Get-Date
 }
 
 function Get-NpmConfigKeys {
     Update-NpmConfigKeys
-    $script:NpmCompletionCache.ConfigKeys
+    (Get-NpmCompletionCache).ConfigKeys
 }
 
 function Get-NpmCommandState {
@@ -1105,8 +1097,8 @@ function Get-NpmValueSuggestionsForOption {
             }
         }
 
-        if ($script:NpmCompletionCache.StaticOptionValues.ContainsKey($lookupKey)) {
-            foreach ($value in @($script:NpmCompletionCache.StaticOptionValues[$lookupKey])) {
+        if ((Get-NpmCompletionCache).StaticOptionValues.ContainsKey($lookupKey)) {
+            foreach ($value in @((Get-NpmCompletionCache).StaticOptionValues[$lookupKey])) {
                 $item = New-NpmSuggestionItem -CompletionText $value -ToolTip ('{0} value' -f $normalizedOption)
                 if ($item) {
                     [void]$items.Add($item)
@@ -1153,8 +1145,8 @@ function Get-NpmPositionalSuggestions {
     $positionIndex = $Positionals.Count
 
     $staticPositionalKey = '{0}|{1}' -f $pathKey, $positionIndex
-    if ($script:NpmCompletionCache.StaticPositionalValues.ContainsKey($staticPositionalKey)) {
-        foreach ($value in @($script:NpmCompletionCache.StaticPositionalValues[$staticPositionalKey])) {
+    if ((Get-NpmCompletionCache).StaticPositionalValues.ContainsKey($staticPositionalKey)) {
+        foreach ($value in @((Get-NpmCompletionCache).StaticPositionalValues[$staticPositionalKey])) {
             $item = New-NpmSuggestionItem -CompletionText $value -ToolTip ('npm {0} value' -f $pathKey)
             if ($item) {
                 [void]$items.Add($item)
@@ -1281,7 +1273,7 @@ function ConvertTo-NpmCompletionResults {
     @($results.ToArray())
 }
 
-$NpmNativeCompleter = {
+function Complete-NpmNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $elements = @(
@@ -1383,5 +1375,7 @@ $NpmNativeCompleter = {
     ConvertTo-NpmCompletionResults -Items $suggestions -Prefix $currentToken
 }
 
-Register-ArgumentCompleter -Native -CommandName (Get-NpmCommandPathTargets) -ScriptBlock $NpmNativeCompleter
-Register-ArgumentCompleter -CommandName @('npm', 'npm.ps1') -ScriptBlock $NpmNativeCompleter
+Register-ArgumentCompleter -Native -CommandName @('npm', 'npm.ps1', 'npm.cmd', 'npm.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-NpmNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}

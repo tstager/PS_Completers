@@ -154,20 +154,25 @@ function Complete-PsFile {
 
 function Ensure-PsFileCommandAlias {
     $existingAlias = Get-Alias -Name psfile -ErrorAction SilentlyContinue
-    if ($existingAlias) { return }
+    if ($existingAlias) {
+        return
+    }
 
     $exeCommand = Get-Command -Name psfile.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) { return }
+    if (-not $exeCommand) {
+        return
+    }
 
     $bareCommand = Get-Command -Name psfile -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') { return }
+    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
+        return
+    }
 
     Set-Alias -Name psfile -Value psfile.exe -Option AllScope -Scope Global
 }
 
-Ensure-PsFileCommandAlias
-
 Register-ArgumentCompleter -Native -CommandName @('psfile', 'psfile.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
+    Ensure-PsFileCommandAlias
     Complete-PsFile -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

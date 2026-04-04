@@ -13,345 +13,338 @@
 
 Set-StrictMode -Version Latest
 
-#region -- Idempotent registration guard -------------------------------------------------------
-
-if (-not (Get-Variable -Name QwenCompleterRegistered -Scope Script -ErrorAction SilentlyContinue)) {
-    $script:QwenCompleterRegistered = $false
-}
-if ($script:QwenCompleterRegistered) { return }
-
-#endregion
-
-#region -- Static completion data (script-scoped) -----------------------------------------------
-
-# Top-level subcommands.
-$script:QwenTopCommands = @('mcp', 'extensions', 'auth', 'hooks', 'hook', 'channel')
-
-# Level-2 subcommands per top-level command.
-$script:QwenSubSubcommands = @{
-    mcp        = @('add', 'remove', 'list', 'reconnect')
-    extensions = @('install', 'uninstall', 'list', 'update', 'disable', 'enable', 'link', 'new', 'settings')
-    auth       = @('qwen-oauth', 'coding-plan', 'status')
-    channel    = @('start', 'stop', 'status', 'pairing', 'configure-weixin')
-    hooks      = @()
-    hook       = @()
-}
-
-# Level-3 subcommands: "cmd.subcmd" -> @(subsubcmds).
-# Covers: extensions settings set|list  and  channel pairing list|approve.
-$script:QwenL3Subcommands = @{
-    'extensions.settings' = @('set', 'list')
-    'channel.pairing'     = @('list', 'approve')
-}
-
-# ---- Flag categories -----------------------------------------------------------------------
-
-# Global enum flags with fixed choice sets.
-$script:QwenEnumFlags = @{
-    '--telemetry-target'        = @('local', 'gcp')
-    '--telemetry-otlp-protocol' = @('grpc', 'http')
-    '--approval-mode'           = @('plan', 'default', 'auto-edit', 'yolo')
-    '--channel'                 = @('VSCode', 'ACP', 'SDK', 'CI')
-    '--input-format'            = @('text', 'stream-json')
-    '--output-format'           = @('text', 'json', 'stream-json')
-    '--auth-type'               = @('openai', 'anthropic', 'qwen-oauth', 'gemini', 'vertex-ai')
-    '--web-search-default'      = @('dashscope', 'tavily', 'google')   # [string], NOT a switch
-}
-
-# Boolean / switch flags (accept no value).
-$script:QwenBoolFlags = @(
-    '--telemetry'
-    '--telemetry-log-prompts'
-    '--debug'
-    '--chat-recording'
-    '--sandbox'
-    '--yolo'
-    '--acp'
-    '--experimental-lsp'
-    '--openai-logging'
-    '--screen-reader'
-    '--include-partial-messages'
-    '--checkpointing'
-    '--list-extensions'
-    '--continue'
-    '--help'
-    '--version'
-)
-
-# Free-form string flags (single value, no fixed choices).
-$script:QwenStringFlags = @(
-    '--telemetry-otlp-endpoint'
-    '--proxy'
-    '--model'
-    '--prompt'
-    '--prompt-interactive'
-    '--system-prompt'
-    '--append-system-prompt'
-    '--sandbox-image'
-    '--openai-api-key'
-    '--openai-base-url'
-    '--tavily-api-key'
-    '--google-api-key'
-    '--google-search-engine-id'
-    '--resume'
-    '--session-id'
-)
-
-# Numeric flags.
-$script:QwenNumberFlags = @(
-    '--max-session-turns'
-)
-
-# Array / multi-value flags.
-$script:QwenArrayFlags = @(
-    '--allowed-mcp-server-names'
-    '--allowed-tools'
-    '--extensions'
-    '--include-directories'
-    '--add-dir'          # alias for --include-directories (help: --include-directories, --add-dir)
-    '--core-tools'
-    '--exclude-tools'
-)
-
-# Flags that produce file-path completion.
-$script:QwenPathFlags = @(
-    '--telemetry-outfile'
-)
-
-# Flags that produce directory-path completion.
-$script:QwenDirFlags = @(
-    '--openai-logging-dir'
-    '--include-directories'
-    '--add-dir'
-)
-
-# ---- Context tables ------------------------------------------------------------------------
-
-# L2 context-specific flags (beyond the global set): "cmd.subcmd" -> @(flags).
-$script:QwenContextFlags = @{
-    'mcp.add'            = @('--scope', '--transport', '--env', '--header',
-                              '--timeout', '--trust', '--description',
-                              '--include-tools', '--exclude-tools')
-    'mcp.reconnect'      = @('--all')
-    'extensions.install' = @('--ref', '--auto-update', '--pre-release',
-                              '--registry', '--consent')
-    'extensions.update'  = @('--all')
-    'extensions.disable' = @('--scope')
-    'extensions.enable'  = @('--scope')
-    'auth.coding-plan'   = @('--region', '--key')
-}
-
-# Context-specific boolean flags (take no value when used in a subcommand).
-# These are checked to avoid incorrectly treating them as value-taking flags.
-$script:QwenContextBoolFlagSet = [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::Ordinal
-)
-@('--trust', '--all', '--auto-update', '--pre-release', '--consent') |
-    ForEach-Object { $null = $script:QwenContextBoolFlagSet.Add($_) }
-
-# Context-specific enum values: "cmd.subcmd.--flag" or "cmd.subcmd.subsub.--flag" -> @(choices).
-$script:QwenContextEnumFlags = @{
-    'mcp.add.--scope'                  = @('user', 'project')
-    'mcp.add.--transport'              = @('stdio', 'sse', 'http')
-    'extensions.settings.set.--scope'  = @('user', 'workspace')
-}
-
-# L3 context-specific flags: "cmd.subcmd.subsubcmd" -> @(flags).
-$script:QwenL3ContextFlags = @{
-    'extensions.settings.set' = @('--scope')
-}
-
-# Subcommand paths (L2) whose first positional argument accepts path completion.
-$script:QwenPathPositionalL2 = [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::Ordinal
-)
-@('extensions.link', 'extensions.new', 'extensions.install') |
-    ForEach-Object { $null = $script:QwenPathPositionalL2.Add($_) }
-
-# Positional enum values for specific subcommand paths.
-$script:QwenPositionalEnums = @{
-    'channel.configure-weixin' = @('clear')
-}
-
-# Placeholder values for positional slots that are free-form and should not
-# fall back to noisy filesystem completion.
-$script:QwenPositionalPlaceholders = @{
-    'mcp.add'                  = @('<name>', '<commandOrUrl>', '<arg>')
-    'mcp.remove'               = @('<name>')
-    'mcp.reconnect'            = @('<server-name>')
-    'extensions.install'       = @('<source>')
-    'extensions.uninstall'     = @('<name>')
-    'extensions.update'        = @('<name>')
-    'extensions.disable'       = @('<name>')
-    'extensions.enable'        = @('<name>')
-    'extensions.new'           = @('<path>', '<template>')
-    'extensions.settings.set'  = @('<name>', '<setting>')
-    'extensions.settings.list' = @('<name>')
-    'channel.start'            = @('<name>')
-    'channel.pairing.list'     = @('<name>')
-    'channel.pairing.approve'  = @('<name>', '<code>')
-}
-
-# ---- Short alias maps -----------------------------------------------------------------------
-
-$script:QwenShortAliases = @{
-    '-d' = '--debug'
-    '-m' = '--model'
-    '-p' = '--prompt'
-    '-i' = '--prompt-interactive'
-    '-s' = '--sandbox'
-    '-y' = '--yolo'
-    '-e' = '--extensions'
-    '-l' = '--list-extensions'
-    '-o' = '--output-format'
-    '-c' = '--continue'
-    '-r' = '--resume'
-    '-v' = '--version'
-    '-h' = '--help'
-}
-
-$script:QwenContextShortAliases = @{
-    'mcp.add'          = @{
-        '-s' = '--scope'
-        '-t' = '--transport'
-        '-e' = '--env'
-        '-H' = '--header'
+function Initialize-QwenCompleterData {
+    if (Get-Variable -Name QwenTopCommands -Scope Script -ErrorAction SilentlyContinue) {
+        return
     }
-    'mcp.reconnect'    = @{
-        '-a' = '--all'
+
+    # Top-level subcommands.
+    $script:QwenTopCommands = @('mcp', 'extensions', 'auth', 'hooks', 'hook', 'channel')
+
+    # Level-2 subcommands per top-level command.
+    $script:QwenSubSubcommands = @{
+        mcp        = @('add', 'remove', 'list', 'reconnect')
+        extensions = @('install', 'uninstall', 'list', 'update', 'disable', 'enable', 'link', 'new', 'settings')
+        auth       = @('qwen-oauth', 'coding-plan', 'status')
+        channel    = @('start', 'stop', 'status', 'pairing', 'configure-weixin')
+        hooks      = @()
+        hook       = @()
     }
-    'auth.coding-plan' = @{
-        '-r' = '--region'
-        '-k' = '--key'
+
+    # Level-3 subcommands: "cmd.subcmd" -> @(subsubcmds).
+    # Covers: extensions settings set|list  and  channel pairing list|approve.
+    $script:QwenL3Subcommands = @{
+        'extensions.settings' = @('set', 'list')
+        'channel.pairing'     = @('list', 'approve')
+    }
+
+    # ---- Flag categories -----------------------------------------------------------------------
+
+    # Global enum flags with fixed choice sets.
+    $script:QwenEnumFlags = @{
+        '--telemetry-target'        = @('local', 'gcp')
+        '--telemetry-otlp-protocol' = @('grpc', 'http')
+        '--approval-mode'           = @('plan', 'default', 'auto-edit', 'yolo')
+        '--channel'                 = @('VSCode', 'ACP', 'SDK', 'CI')
+        '--input-format'            = @('text', 'stream-json')
+        '--output-format'           = @('text', 'json', 'stream-json')
+        '--auth-type'               = @('openai', 'anthropic', 'qwen-oauth', 'gemini', 'vertex-ai')
+        '--web-search-default'      = @('dashscope', 'tavily', 'google')   # [string], NOT a switch
+    }
+
+    # Boolean / switch flags (accept no value).
+    $script:QwenBoolFlags = @(
+        '--telemetry'
+        '--telemetry-log-prompts'
+        '--debug'
+        '--chat-recording'
+        '--sandbox'
+        '--yolo'
+        '--acp'
+        '--experimental-lsp'
+        '--openai-logging'
+        '--screen-reader'
+        '--include-partial-messages'
+        '--checkpointing'
+        '--list-extensions'
+        '--continue'
+        '--help'
+        '--version'
+    )
+
+    # Free-form string flags (single value, no fixed choices).
+    $script:QwenStringFlags = @(
+        '--telemetry-otlp-endpoint'
+        '--proxy'
+        '--model'
+        '--prompt'
+        '--prompt-interactive'
+        '--system-prompt'
+        '--append-system-prompt'
+        '--sandbox-image'
+        '--openai-api-key'
+        '--openai-base-url'
+        '--tavily-api-key'
+        '--google-api-key'
+        '--google-search-engine-id'
+        '--resume'
+        '--session-id'
+    )
+
+    # Numeric flags.
+    $script:QwenNumberFlags = @(
+        '--max-session-turns'
+    )
+
+    # Array / multi-value flags.
+    $script:QwenArrayFlags = @(
+        '--allowed-mcp-server-names'
+        '--allowed-tools'
+        '--extensions'
+        '--include-directories'
+        '--add-dir'          # alias for --include-directories (help: --include-directories, --add-dir)
+        '--core-tools'
+        '--exclude-tools'
+    )
+
+    # Flags that produce file-path completion.
+    $script:QwenPathFlags = @(
+        '--telemetry-outfile'
+    )
+
+    # Flags that produce directory-path completion.
+    $script:QwenDirFlags = @(
+        '--openai-logging-dir'
+        '--include-directories'
+        '--add-dir'
+    )
+
+    # ---- Context tables ------------------------------------------------------------------------
+
+    # L2 context-specific flags (beyond the global set): "cmd.subcmd" -> @(flags).
+    $script:QwenContextFlags = @{
+        'mcp.add'            = @('--scope', '--transport', '--env', '--header',
+                                  '--timeout', '--trust', '--description',
+                                  '--include-tools', '--exclude-tools')
+        'mcp.reconnect'      = @('--all')
+        'extensions.install' = @('--ref', '--auto-update', '--pre-release',
+                                  '--registry', '--consent')
+        'extensions.update'  = @('--all')
+        'extensions.disable' = @('--scope')
+        'extensions.enable'  = @('--scope')
+        'auth.coding-plan'   = @('--region', '--key')
+    }
+
+    # Context-specific boolean flags (take no value when used in a subcommand).
+    # These are checked to avoid incorrectly treating them as value-taking flags.
+    $script:QwenContextBoolFlagSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    @('--trust', '--all', '--auto-update', '--pre-release', '--consent') |
+        ForEach-Object { $null = $script:QwenContextBoolFlagSet.Add($_) }
+
+    # Context-specific enum values: "cmd.subcmd.--flag" or "cmd.subcmd.subsub.--flag" -> @(choices).
+    $script:QwenContextEnumFlags = @{
+        'mcp.add.--scope'                  = @('user', 'project')
+        'mcp.add.--transport'              = @('stdio', 'sse', 'http')
+        'extensions.settings.set.--scope'  = @('user', 'workspace')
+    }
+
+    # L3 context-specific flags: "cmd.subcmd.subsubcmd" -> @(flags).
+    $script:QwenL3ContextFlags = @{
+        'extensions.settings.set' = @('--scope')
+    }
+
+    # Subcommand paths (L2) whose first positional argument accepts path completion.
+    $script:QwenPathPositionalL2 = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    @('extensions.link', 'extensions.new', 'extensions.install') |
+        ForEach-Object { $null = $script:QwenPathPositionalL2.Add($_) }
+
+    # Positional enum values for specific subcommand paths.
+    $script:QwenPositionalEnums = @{
+        'channel.configure-weixin' = @('clear')
+    }
+
+    # Placeholder values for positional slots that are free-form and should not
+    # fall back to noisy filesystem completion.
+    $script:QwenPositionalPlaceholders = @{
+        'mcp.add'                  = @('<name>', '<commandOrUrl>', '<arg>')
+        'mcp.remove'               = @('<name>')
+        'mcp.reconnect'            = @('<server-name>')
+        'extensions.install'       = @('<source>')
+        'extensions.uninstall'     = @('<name>')
+        'extensions.update'        = @('<name>')
+        'extensions.disable'       = @('<name>')
+        'extensions.enable'        = @('<name>')
+        'extensions.new'           = @('<path>', '<template>')
+        'extensions.settings.set'  = @('<name>', '<setting>')
+        'extensions.settings.list' = @('<name>')
+        'channel.start'            = @('<name>')
+        'channel.pairing.list'     = @('<name>')
+        'channel.pairing.approve'  = @('<name>', '<code>')
+    }
+
+    # ---- Short alias maps -----------------------------------------------------------------------
+
+    $script:QwenShortAliases = @{
+        '-d' = '--debug'
+        '-m' = '--model'
+        '-p' = '--prompt'
+        '-i' = '--prompt-interactive'
+        '-s' = '--sandbox'
+        '-y' = '--yolo'
+        '-e' = '--extensions'
+        '-l' = '--list-extensions'
+        '-o' = '--output-format'
+        '-c' = '--continue'
+        '-r' = '--resume'
+        '-v' = '--version'
+        '-h' = '--help'
+    }
+
+    $script:QwenContextShortAliases = @{
+        'mcp.add'          = @{
+            '-s' = '--scope'
+            '-t' = '--transport'
+            '-e' = '--env'
+            '-H' = '--header'
+        }
+        'mcp.reconnect'    = @{
+            '-a' = '--all'
+        }
+        'auth.coding-plan' = @{
+            '-r' = '--region'
+            '-k' = '--key'
+        }
+    }
+
+    # Reverse map (long -> short) built once at load time.
+    $script:QwenAliasReverse = @{}
+    $script:QwenShortAliases.GetEnumerator() |
+        ForEach-Object { $script:QwenAliasReverse[$_.Value] = $_.Key }
+
+    $script:QwenContextAliasReverse = @{}
+    foreach ($entry in $script:QwenContextShortAliases.GetEnumerator()) {
+        $reverse = @{}
+        foreach ($alias in $entry.Value.GetEnumerator()) {
+            $reverse[$alias.Value] = $alias.Key
+        }
+        $script:QwenContextAliasReverse[$entry.Key] = $reverse
+    }
+
+    # ---- Descriptions --------------------------------------------------------------------------
+
+    $script:QwenCmdDesc = @{
+        mcp        = 'Manage MCP servers'
+        extensions = 'Manage extensions'
+        auth       = 'Configure authentication (Qwen-OAuth or Alibaba Cloud Coding Plan)'
+        hooks      = 'Manage hooks (use /hooks in interactive mode)'
+        hook       = 'Alias for hooks'
+        channel    = 'Manage messaging channels (Telegram, Discord, etc.)'
+    }
+
+    $script:QwenSubcmdDesc = @{
+        'mcp.add'                        = 'Add an MCP server'
+        'mcp.remove'                     = 'Remove an MCP server'
+        'mcp.list'                       = 'List configured MCP servers'
+        'mcp.reconnect'                  = 'Reconnect MCP server(s)'
+        'extensions.install'             = 'Install an extension (URL, local path, or npm package)'
+        'extensions.uninstall'           = 'Uninstall an extension'
+        'extensions.list'                = 'List installed extensions'
+        'extensions.update'              = 'Update extensions'
+        'extensions.disable'             = 'Disable an extension'
+        'extensions.enable'              = 'Enable an extension'
+        'extensions.link'                = 'Link a local development extension (live)'
+        'extensions.new'                 = 'Scaffold a new extension from boilerplate'
+        'extensions.settings'            = 'Manage extension settings'
+        'auth.qwen-oauth'                = 'Authenticate via Qwen OAuth'
+        'auth.coding-plan'               = 'Authenticate via Alibaba Cloud Coding Plan'
+        'auth.status'                    = 'Show current authentication status'
+        'channel.start'                  = 'Start channels (all or named)'
+        'channel.stop'                   = 'Stop the channel service'
+        'channel.status'                 = 'Show channel service status'
+        'channel.pairing'                = 'Manage DM pairing requests'
+        'channel.configure-weixin'       = 'Configure WeChat channel (login or "clear")'
+        'extensions.settings.set'        = 'Set a specific extension setting'
+        'extensions.settings.list'       = 'List all settings for an extension'
+        'channel.pairing.list'           = 'List pending pairing requests for a channel'
+        'channel.pairing.approve'        = 'Approve a pending pairing request'
+    }
+
+    $script:QwenFlagDesc = @{
+        # Global flags
+        '--telemetry'                = '[boolean] Enable telemetry (deprecated: use settings.json)'
+        '--telemetry-target'         = '[string]  Telemetry target: local|gcp (deprecated)'
+        '--telemetry-otlp-endpoint'  = '[string]  OTLP collector endpoint URL (deprecated)'
+        '--telemetry-otlp-protocol'  = '[string]  OTLP protocol: grpc|http (deprecated)'
+        '--telemetry-log-prompts'    = '[boolean] Log prompts for telemetry (deprecated)'
+        '--telemetry-outfile'        = '[path]    Write telemetry to file (deprecated)'
+        '--debug'                    = '[boolean] Run in debug mode'
+        '--proxy'                    = '[string]  HTTP proxy URL (deprecated)'
+        '--chat-recording'           = '[boolean] Enable chat recording to disk'
+        '--model'                    = '[string]  Model to use'
+        '--prompt'                   = '[string]  Prompt text (deprecated; use positional)'
+        '--prompt-interactive'       = '[string]  Prompt and continue in interactive mode'
+        '--system-prompt'            = '[string]  Override session system prompt'
+        '--append-system-prompt'     = '[string]  Append to session system prompt'
+        '--sandbox'                  = '[boolean] Enable sandbox mode'
+        '--sandbox-image'            = '[string]  Sandbox container image URI (deprecated)'
+        '--yolo'                     = '[boolean] Auto-accept all actions (YOLO mode)'
+        '--approval-mode'            = '[string]  Tool approval mode: plan|default|auto-edit|yolo'
+        '--checkpointing'            = '[boolean] Enable file-edit checkpointing (deprecated)'
+        '--acp'                      = '[boolean] Start in ACP mode'
+        '--experimental-lsp'         = '[boolean] Enable experimental LSP support'
+        '--channel'                  = '[string]  Channel identifier: VSCode|ACP|SDK|CI'
+        '--allowed-mcp-server-names' = '[array]   Allowed MCP server names'
+        '--allowed-tools'            = '[array]   Tools to allow (bypass confirmation)'
+        '--extensions'               = '[array]   Extensions to use (-e)'
+        '--list-extensions'          = '[boolean] List available extensions and exit'
+        '--include-directories'      = '[array]   Additional workspace directories (--add-dir)'
+        '--add-dir'                  = '[array]   Additional workspace directories (--include-directories)'
+        '--openai-logging'           = '[boolean] Enable OpenAI API call logging'
+        '--openai-logging-dir'       = '[path]    Directory for OpenAI API logs'
+        '--openai-api-key'           = '[string]  OpenAI API key'
+        '--openai-base-url'          = '[string]  OpenAI base URL override'
+        '--tavily-api-key'           = '[string]  Tavily web-search API key'
+        '--google-api-key'           = '[string]  Google Custom Search API key'
+        '--google-search-engine-id'  = '[string]  Google Custom Search Engine ID'
+        '--web-search-default'       = '[string]  Default web search provider: dashscope|tavily|google'
+        '--screen-reader'            = '[boolean] Enable screen reader accessibility mode'
+        '--input-format'             = '[string]  Input format: text|stream-json'
+        '--output-format'            = '[string]  Output format: text|json|stream-json'
+        '--include-partial-messages' = '[boolean] Include partial assistant messages (stream-json)'
+        '--continue'                 = '[boolean] Resume the most recent session'
+        '--resume'                   = '[string]  Resume a specific session by ID'
+        '--session-id'               = '[string]  Specify session ID for this run'
+        '--max-session-turns'        = '[number]  Maximum session turns'
+        '--core-tools'               = '[array]   Core tool paths'
+        '--exclude-tools'            = '[array]   Tools to exclude'
+        '--auth-type'                = '[string]  Authentication type'
+        '--help'                     = '[boolean] Show help'
+        '--version'                  = '[boolean] Show version'
+        # Context-specific flags (mcp add / mcp reconnect)
+        '--scope'                    = '[string]  Configuration scope'
+        '--transport'                = '[string]  MCP transport: stdio|sse|http'
+        '--env'                      = '[array]   Environment variable: KEY=value'
+        '--header'                   = '[array]   HTTP header: "Name: value"'
+        '--timeout'                  = '[number]  Connection timeout in milliseconds'
+        '--trust'                    = '[boolean] Trust server (bypass all tool confirmations)'
+        '--description'              = '[string]  Server description'
+        '--include-tools'            = '[array]   Tools to include (comma-separated)'
+        '--all'                      = '[boolean] Apply to all'
+        # Context-specific flags (extensions)
+        '--ref'                      = '[string]  Git ref to install from'
+        '--auto-update'              = '[boolean] Enable auto-update for this extension'
+        '--pre-release'              = '[boolean] Include pre-release versions'
+        '--registry'                 = '[string]  Custom npm registry URL'
+        '--consent'                  = '[boolean] Acknowledge risks and skip confirmation'
+        # Context-specific flags (auth coding-plan)
+        '--region'                   = '[string]  Region for Coding Plan (china/global)'
+        '--key'                      = '[string]  API key for Coding Plan'
     }
 }
-
-# Reverse map (long -> short) built once at load time.
-$script:QwenAliasReverse = @{}
-$script:QwenShortAliases.GetEnumerator() |
-    ForEach-Object { $script:QwenAliasReverse[$_.Value] = $_.Key }
-
-$script:QwenContextAliasReverse = @{}
-foreach ($entry in $script:QwenContextShortAliases.GetEnumerator()) {
-    $reverse = @{}
-    foreach ($alias in $entry.Value.GetEnumerator()) {
-        $reverse[$alias.Value] = $alias.Key
-    }
-    $script:QwenContextAliasReverse[$entry.Key] = $reverse
-}
-
-# ---- Descriptions --------------------------------------------------------------------------
-
-$script:QwenCmdDesc = @{
-    mcp        = 'Manage MCP servers'
-    extensions = 'Manage extensions'
-    auth       = 'Configure authentication (Qwen-OAuth or Alibaba Cloud Coding Plan)'
-    hooks      = 'Manage hooks (use /hooks in interactive mode)'
-    hook       = 'Alias for hooks'
-    channel    = 'Manage messaging channels (Telegram, Discord, etc.)'
-}
-
-$script:QwenSubcmdDesc = @{
-    'mcp.add'                        = 'Add an MCP server'
-    'mcp.remove'                     = 'Remove an MCP server'
-    'mcp.list'                       = 'List configured MCP servers'
-    'mcp.reconnect'                  = 'Reconnect MCP server(s)'
-    'extensions.install'             = 'Install an extension (URL, local path, or npm package)'
-    'extensions.uninstall'           = 'Uninstall an extension'
-    'extensions.list'                = 'List installed extensions'
-    'extensions.update'              = 'Update extensions'
-    'extensions.disable'             = 'Disable an extension'
-    'extensions.enable'              = 'Enable an extension'
-    'extensions.link'                = 'Link a local development extension (live)'
-    'extensions.new'                 = 'Scaffold a new extension from boilerplate'
-    'extensions.settings'            = 'Manage extension settings'
-    'auth.qwen-oauth'                = 'Authenticate via Qwen OAuth'
-    'auth.coding-plan'               = 'Authenticate via Alibaba Cloud Coding Plan'
-    'auth.status'                    = 'Show current authentication status'
-    'channel.start'                  = 'Start channels (all or named)'
-    'channel.stop'                   = 'Stop the channel service'
-    'channel.status'                 = 'Show channel service status'
-    'channel.pairing'                = 'Manage DM pairing requests'
-    'channel.configure-weixin'       = 'Configure WeChat channel (login or "clear")'
-    'extensions.settings.set'        = 'Set a specific extension setting'
-    'extensions.settings.list'       = 'List all settings for an extension'
-    'channel.pairing.list'           = 'List pending pairing requests for a channel'
-    'channel.pairing.approve'        = 'Approve a pending pairing request'
-}
-
-$script:QwenFlagDesc = @{
-    # Global flags
-    '--telemetry'                = '[boolean] Enable telemetry (deprecated: use settings.json)'
-    '--telemetry-target'         = '[string]  Telemetry target: local|gcp (deprecated)'
-    '--telemetry-otlp-endpoint'  = '[string]  OTLP collector endpoint URL (deprecated)'
-    '--telemetry-otlp-protocol'  = '[string]  OTLP protocol: grpc|http (deprecated)'
-    '--telemetry-log-prompts'    = '[boolean] Log prompts for telemetry (deprecated)'
-    '--telemetry-outfile'        = '[path]    Write telemetry to file (deprecated)'
-    '--debug'                    = '[boolean] Run in debug mode'
-    '--proxy'                    = '[string]  HTTP proxy URL (deprecated)'
-    '--chat-recording'           = '[boolean] Enable chat recording to disk'
-    '--model'                    = '[string]  Model to use'
-    '--prompt'                   = '[string]  Prompt text (deprecated; use positional)'
-    '--prompt-interactive'       = '[string]  Prompt and continue in interactive mode'
-    '--system-prompt'            = '[string]  Override session system prompt'
-    '--append-system-prompt'     = '[string]  Append to session system prompt'
-    '--sandbox'                  = '[boolean] Enable sandbox mode'
-    '--sandbox-image'            = '[string]  Sandbox container image URI (deprecated)'
-    '--yolo'                     = '[boolean] Auto-accept all actions (YOLO mode)'
-    '--approval-mode'            = '[string]  Tool approval mode: plan|default|auto-edit|yolo'
-    '--checkpointing'            = '[boolean] Enable file-edit checkpointing (deprecated)'
-    '--acp'                      = '[boolean] Start in ACP mode'
-    '--experimental-lsp'         = '[boolean] Enable experimental LSP support'
-    '--channel'                  = '[string]  Channel identifier: VSCode|ACP|SDK|CI'
-    '--allowed-mcp-server-names' = '[array]   Allowed MCP server names'
-    '--allowed-tools'            = '[array]   Tools to allow (bypass confirmation)'
-    '--extensions'               = '[array]   Extensions to use (-e)'
-    '--list-extensions'          = '[boolean] List available extensions and exit'
-    '--include-directories'      = '[array]   Additional workspace directories (--add-dir)'
-    '--add-dir'                  = '[array]   Additional workspace directories (--include-directories)'
-    '--openai-logging'           = '[boolean] Enable OpenAI API call logging'
-    '--openai-logging-dir'       = '[path]    Directory for OpenAI API logs'
-    '--openai-api-key'           = '[string]  OpenAI API key'
-    '--openai-base-url'          = '[string]  OpenAI base URL override'
-    '--tavily-api-key'           = '[string]  Tavily web-search API key'
-    '--google-api-key'           = '[string]  Google Custom Search API key'
-    '--google-search-engine-id'  = '[string]  Google Custom Search Engine ID'
-    '--web-search-default'       = '[string]  Default web search provider: dashscope|tavily|google'
-    '--screen-reader'            = '[boolean] Enable screen reader accessibility mode'
-    '--input-format'             = '[string]  Input format: text|stream-json'
-    '--output-format'            = '[string]  Output format: text|json|stream-json'
-    '--include-partial-messages' = '[boolean] Include partial assistant messages (stream-json)'
-    '--continue'                 = '[boolean] Resume the most recent session'
-    '--resume'                   = '[string]  Resume a specific session by ID'
-    '--session-id'               = '[string]  Specify session ID for this run'
-    '--max-session-turns'        = '[number]  Maximum session turns'
-    '--core-tools'               = '[array]   Core tool paths'
-    '--exclude-tools'            = '[array]   Tools to exclude'
-    '--auth-type'                = '[string]  Authentication type'
-    '--help'                     = '[boolean] Show help'
-    '--version'                  = '[boolean] Show version'
-    # Context-specific flags (mcp add / mcp reconnect)
-    '--scope'                    = '[string]  Configuration scope'
-    '--transport'                = '[string]  MCP transport: stdio|sse|http'
-    '--env'                      = '[array]   Environment variable: KEY=value'
-    '--header'                   = '[array]   HTTP header: "Name: value"'
-    '--timeout'                  = '[number]  Connection timeout in milliseconds'
-    '--trust'                    = '[boolean] Trust server (bypass all tool confirmations)'
-    '--description'              = '[string]  Server description'
-    '--include-tools'            = '[array]   Tools to include (comma-separated)'
-    '--all'                      = '[boolean] Apply to all'
-    # Context-specific flags (extensions)
-    '--ref'                      = '[string]  Git ref to install from'
-    '--auto-update'              = '[boolean] Enable auto-update for this extension'
-    '--pre-release'              = '[boolean] Include pre-release versions'
-    '--registry'                 = '[string]  Custom npm registry URL'
-    '--consent'                  = '[boolean] Acknowledge risks and skip confirmation'
-    # Context-specific flags (auth coding-plan)
-    '--region'                   = '[string]  Region for Coding Plan (china/global)'
-    '--key'                      = '[string]  API key for Coding Plan'
-}
-
-#endregion
 
 #region -- Helpers ------------------------------------------------------------------------------
 
@@ -549,7 +542,7 @@ function Write-QwenLongFlagResults {
 
 #region -- Completer scriptblock ----------------------------------------------------------------
 
-$script:QwenCompleter = {
+function Complete-QwenNative {
     param(
         $CommandName,
         $ParameterName,
@@ -557,6 +550,8 @@ $script:QwenCompleter = {
         $CommandAst,
         $FakeBoundParameter
     )
+
+    Initialize-QwenCompleterData
 
     # -------------------------------------------------------------------------
     # Detect the native ReadLine calling convention vs TabExpansion2.
@@ -925,18 +920,19 @@ $script:QwenCompleter = {
 
 #region -- Registration -------------------------------------------------------------------------
 
-# Register for all three forms qwen may be invoked as:
-#   qwen      - bare name (resolves to qwen.ps1 in npm bin path)
-#   qwen.cmd  - npm shim for Windows CMD / older PowerShell paths
-#   qwen.ps1  - explicit PowerShell script form
-try {
-    foreach ($cmdName in @('qwen', 'qwen.cmd', 'qwen.ps1')) {
-        Register-ArgumentCompleter -CommandName $cmdName -Native -ScriptBlock $script:QwenCompleter
+if (-not ((Get-Variable -Name QwenCompleterRegistered -Scope Script -ErrorAction SilentlyContinue) -and $script:QwenCompleterRegistered)) {
+    try {
+        Register-ArgumentCompleter -CommandName @('qwen', 'qwen.cmd', 'qwen.ps1') -Native -ScriptBlock {
+            param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
+            Complete-QwenNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
+        }
+
+        $script:QwenCompleterRegistered = $true
     }
-    $script:QwenCompleterRegistered = $true
-} catch {
-    $script:QwenCompleterRegistered = $false
-    throw
+    catch {
+        $script:QwenCompleterRegistered = $false
+        throw
+    }
 }
 
 #endregion

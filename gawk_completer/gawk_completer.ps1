@@ -1083,10 +1083,8 @@ function Complete-GawkNative {
     @(Get-GawkPositionalCompletions -State $state -CurrentWord $currentWord)
 }
 
-foreach ($commandName in @('gawk', 'gawk.exe', 'awk', 'awk.exe')) {
-    Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
+Register-ArgumentCompleter -Native -CommandName @('gawk', 'gawk.exe', 'awk', 'awk.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
 
-        Complete-GawkNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
-    }
+    Complete-GawkNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

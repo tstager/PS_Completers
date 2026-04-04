@@ -211,19 +211,6 @@ function Get-PsExecExecutableCompletions {
     @($unique)
 }
 
-function Ensure-PsExecCommandAlias {
-    $existingAlias = Get-Alias -Name psexec -ErrorAction SilentlyContinue
-    if ($existingAlias) { return }
-
-    $exeCommand = Get-Command -Name psexec.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) { return }
-
-    $bareCommand = Get-Command -Name psexec -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') { return }
-
-    Set-Alias -Name psexec -Value psexec.exe -Option AllScope -Scope Global
-}
-
 function Complete-PsExec {
     param(
         [string]$WordToComplete,
@@ -375,9 +362,27 @@ function Complete-PsExec {
     @($results.ToArray())
 }
 
-Ensure-PsExecCommandAlias
+function Ensure-PsExecCommandAlias {
+    $existingAlias = Get-Alias -Name psexec -ErrorAction SilentlyContinue
+    if ($existingAlias) {
+        return
+    }
+
+    $exeCommand = Get-Command -Name psexec.exe -ErrorAction SilentlyContinue
+    if (-not $exeCommand) {
+        return
+    }
+
+    $bareCommand = Get-Command -Name psexec -ErrorAction SilentlyContinue
+    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
+        return
+    }
+
+    Set-Alias -Name psexec -Value psexec.exe -Option AllScope -Scope Global
+}
 
 Register-ArgumentCompleter -Native -CommandName @('psexec', 'psexec.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
+    Ensure-PsExecCommandAlias
     Complete-PsExec -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

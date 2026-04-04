@@ -1,6 +1,6 @@
   # oh-my-posh argument completer
-    $OhMyPoshCompleter = {
-        param($wordToComplete, $commandAst, $cursorPosition)
+function Complete-OhMyPosh {
+    param($wordToComplete, $commandAst, $cursorPosition)
     
         $tokens = $commandAst.ToString().Split(' ')
         $subcommand = $tokens | Select-Object -Skip 1 | Select-Object -First 1
@@ -82,4 +82,7 @@
         }
     }
 
-    Register-ArgumentCompleter -CommandName oh-my-posh.exe, oh-my-posh -ScriptBlock $OhMyPoshCompleter
+Register-ArgumentCompleter -Native -CommandName @('oh-my-posh.exe', 'oh-my-posh') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-OhMyPosh -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}

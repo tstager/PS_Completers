@@ -334,20 +334,25 @@ function Complete-PsLogList {
 
 function Ensure-PsLogListCommandAlias {
     $existingAlias = Get-Alias -Name psloglist -ErrorAction SilentlyContinue
-    if ($existingAlias) { return }
+    if ($existingAlias) {
+        return
+    }
 
     $exeCommand = Get-Command -Name psloglist.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) { return }
+    if (-not $exeCommand) {
+        return
+    }
 
     $bareCommand = Get-Command -Name psloglist -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') { return }
+    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
+        return
+    }
 
     Set-Alias -Name psloglist -Value psloglist.exe -Option AllScope -Scope Global
 }
 
-Ensure-PsLogListCommandAlias
-
 Register-ArgumentCompleter -Native -CommandName @('psloglist', 'psloglist.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
+    Ensure-PsLogListCommandAlias
     Complete-PsLogList -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

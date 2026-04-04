@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version Latest
 
-$WtCompleter = {
+function Complete-WtNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue) -and
@@ -276,4 +276,7 @@ $WtCompleter = {
     }
 }
 
-Register-ArgumentCompleter -Native -CommandName wt, wt.exe -ScriptBlock $WtCompleter
+Register-ArgumentCompleter -Native -CommandName @('wt', 'wt.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-WtNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
