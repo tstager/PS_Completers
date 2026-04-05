@@ -15,7 +15,21 @@ $null = $tokens = $errors = $null
 '
 ```
 
-## 2. Verify switch surface
+## 2. Verify `CompleterActions` import compatibility
+
+```powershell
+pwsh -NoProfile -Command '
+Import-Module "<path-to-CompleterActions.psd1>" -Force
+$file = Resolve-Path ".\<name>_completer\<name>_completer.ps1"
+$imported = @(Import-CompleterScript -LiteralPath $file)
+"IMPORTED=$($imported.Count)"
+$imported | Select-Object CommandName, ParameterName, CompleterType
+'
+```
+
+Expect the script to import without AST-shape errors. For native completers, the imported definitions should usually cover both bare and `.exe` names when the script registers both.
+
+## 3. Verify switch surface
 
 ```powershell
 pwsh -NoProfile -Command '
@@ -29,7 +43,7 @@ $s = "<command> -"
 
 Expect switches to appear as `ParameterName`.
 
-## 3. Verify representative value slots
+## 4. Verify representative value slots
 
 Test at least one value-bearing switch and one operand slot:
 
@@ -48,7 +62,7 @@ foreach ($s in @(
 '
 ```
 
-## 4. Verify path, provider, or @file handling
+## 5. Verify path, provider, or @file handling
 
 If the completer supports paths, registry paths, or `@file` syntax, test those explicitly:
 
@@ -69,7 +83,7 @@ foreach ($s in @(
 '
 ```
 
-## 5. Validate both command names when relevant
+## 6. Validate both command names when relevant
 
 If the tool resolves through Windows app execution aliases or has both bare and `.exe` usage, test both registrations:
 
@@ -89,7 +103,7 @@ foreach ($s in @(
 '
 ```
 
-## 6. Watch for common regressions
+## 7. Watch for common regressions
 
 - switch emitted as `ParameterValue` instead of `ParameterName`
 - root switch suggestions mixed into active path completion
@@ -97,8 +111,11 @@ foreach ($s in @(
 - literal `/` or other partial tokens leaking into slash-style command results
 - direct helper invocation working while registered `TabExpansion2` behavior does not
 - fallback filesystem completion appearing in slots that should be placeholders
+- top-level assignment, loop, helper call, or `try` block making `Import-CompleterScript` reject the file
+- top-level alias bootstrap or cache initialization making the script runtime-correct but importer-incompatible
+- dynamic `-CommandName` / `-ParameterName` metadata instead of literal strings or literal `@(...)`
 
-## 7. Validate the integration surface
+## 8. Validate the integration surface
 
 When the task includes repository integration:
 

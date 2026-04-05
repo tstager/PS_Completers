@@ -97,6 +97,30 @@ This is especially useful for native commands with free-form value positions.
 - Cache local discovery with short-lived or lazy initialization if it is moderately expensive.
 - Do not recompute heavy discovery on every keystroke.
 
+### Keep the top level `Import-CompleterScript`-safe
+
+Every future completer in this repo should be written so `CompleterActions` can import it without redesign work later.
+
+- Keep script scope limited to:
+  - `Set-StrictMode`
+  - function definitions
+  - importer-safe `if` guards when they only support declarations or literal registration paths
+  - literal `Register-ArgumentCompleter` calls
+- Do **not** put these at top level:
+  - assignments
+  - `foreach` / other loops
+  - `try` / `catch`
+  - helper invocation for registration, alias bootstrap, or cache initialization
+  - `Invoke-Expression`
+  - external command calls
+- Use literal `-CommandName` / `-ParameterName` values only:
+  - a single literal string, or
+  - a literal `@('name', 'name.exe')` array when multiple registrations are required
+- Prefer one literal `Register-ArgumentCompleter -CommandName @(...)` call over top-level registration loops or wrapper registration functions.
+- Move cache initialization, alias bootstrap, generated completion loading, and other setup into lazy, idempotent helper paths that run from the registered scriptblock or completion function.
+- If bare-name alias help is required, bootstrap it lazily during completion, not at import time.
+- If a completer depends on tool-generated PowerShell completion, fetch and cache that generated behavior lazily inside helper functions, not through top-level script execution.
+
 ## Runtime edge cases learned from this repo
 
 Apply these checks proactively:
@@ -127,13 +151,14 @@ Apply these checks proactively:
 1. Inspect the target command locally with `Get-Command` and help output.
 2. If local help is incomplete or graphical, use authoritative vendor or product docs.
 3. Choose static, help-driven, or tool-backed completion based on the real command surface.
-4. Create:
+4. Design the script so its top-level shape stays `Import-CompleterScript`-compatible from the start.
+5. Create:
    - `<name>_completer\<name>_completer.ps1`
    - `<name>_completer\<name>_completer.md`
-5. Implement the completer with repository-consistent helper naming and caching style.
-6. Update the alphabetical row in `README.md`.
-7. Validate in clean `pwsh -NoProfile` sessions with `TabExpansion2`.
-8. If runtime behavior differs from direct helper invocation, fix the registered/runtime path.
+6. Implement the completer with repository-consistent helper naming and caching style.
+7. Update the alphabetical row in `README.md`.
+8. Validate importer compatibility and clean `pwsh -NoProfile` runtime behavior with `TabExpansion2`.
+9. If runtime behavior differs from direct helper invocation, fix the registered/runtime path.
 
 ## Validation requirements
 
@@ -141,6 +166,7 @@ Use the checklist in [validation-checklist.md](./validation-checklist.md).
 
 Minimum validation for a new completer:
 
+- import the script with `CompleterActions` `Import-CompleterScript` and confirm the expected definition count
 - parse the script with PowerShell's parser
 - dot-source the script in a clean session
 - confirm representative `TabExpansion2` results
@@ -181,6 +207,8 @@ When using this skill:
 
 - explain which completer style you chose and why
 - mention any special runtime quirks discovered
+- call out how the script satisfies the `Import-CompleterScript` top-level-shape rules
 - validate with clean-session `pwsh -NoProfile` commands
 - call out whether registration needed both bare and `.exe` names
 - mention any deliberately placeholder-only or non-enumerating slots
+- confirm the completer remained importable through `CompleterActions`
