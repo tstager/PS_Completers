@@ -1,6 +1,7 @@
 # codex completer
 
 ## What it completes / overview
+
 `codex_completer.ps1` is a tool-backed wrapper around the local `codex` CLI's
 own PowerShell completion generator.
 
@@ -10,6 +11,7 @@ self-registration into an invokable script block, and caches that script block
 for later completion requests.
 
 ## Registration and command names
+
 The repository script registers a native completer for:
 
 ```powershell
@@ -17,6 +19,7 @@ The repository script registers a native completer for:
 ```
 
 That broader registration is intentional on Windows:
+
 - `codex` is the normal command users type
 - `codex.cmd` is the preferred native launcher path for generating completions
 - `codex.ps1` can also be resolved by `Get-Command` in PowerShell sessions
@@ -26,7 +29,9 @@ wrapper removes that registration line and invokes the generated script block
 directly for all three command names.
 
 ## How completion works
+
 Execution flow:
+
 1. `Set-StrictMode -Version Latest` is enabled.
 2. On first completion request, the script resolves a launcher path, preferring
    `codex.cmd`, then `codex`, then `codex.ps1`.
@@ -39,6 +44,7 @@ Execution flow:
 6. Later completions reuse the cached invoker without re-running `codex`.
 
 ## Runtime quirks
+
 - On this machine, both `codex.cmd` and `codex.ps1` emit a PATH update warning
   on stderr before printing the completion script. The wrapper suppresses stderr
   so only the generated PowerShell source is cached.
@@ -51,6 +57,7 @@ Execution flow:
   completion request occurs.
 
 ## Usage / loading example
+
 ```powershell
 . "$PSScriptRoot\codex_completer.ps1"
 
@@ -61,6 +68,7 @@ Execution flow:
 ```
 
 ## Limitations / notes
+
 - If `codex` is not installed or `codex completion powershell` fails, the
   wrapper returns no completions.
 - The wrapper depends on the current generated script shape continuing to expose
