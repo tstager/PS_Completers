@@ -2,7 +2,7 @@
 
 ## What it completes / overview
 
-`where_completer.ps1` registers a native PowerShell completer for `where.exe`.
+`where_completer.ps1` registers a native PowerShell completer for `where.exe`, and also registers the bare command name `where`.
 
 The script is intentionally small and focused:
 
@@ -14,15 +14,16 @@ The script is intentionally small and focused:
 
 The script registers a native completer for:
 
+- `where`
 - `where.exe`
 
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName where.exe -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('where.exe', 'where') -ScriptBlock { ... }
 ```
 
-The script does not separately register `where`.
+In a default PowerShell session, the built-in read-only alias `where` still resolves to `Where-Object`, so that alias keeps its normal shell semantics and completion behavior. The native `where` registration only becomes relevant in sessions where the alias has been intentionally removed or overridden and `where` resolves to the native executable.
 
 ## How completion works
 
@@ -132,5 +133,5 @@ where.exe /R "C:\Program Files\"<TAB>
 - The script only completes switches and the `/R` path argument.
 - It does not attempt to complete filename patterns or other non-switch arguments to `where.exe`.
 - Only `/R` is treated as a value-taking option in the current implementation.
-- The completer is registered for `where.exe`, not for the unqualified `where` command name.
+- In default PowerShell, bare `where` still resolves to the `Where-Object` alias rather than the native executable.
 

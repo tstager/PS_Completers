@@ -207,8 +207,10 @@ function Complete-Where {
     return @()
 }
 
-# Register the completer
-Register-ArgumentCompleter -Native -CommandName where.exe -ScriptBlock {
+# Register the completer for both where.exe and bare where.
+# The built-in read-only alias named "where" still resolves to Where-Object,
+# so the native completer only engages for bare where when that alias is absent.
+Register-ArgumentCompleter -Native -CommandName @('where.exe', 'where') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     Complete-Where -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }

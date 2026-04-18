@@ -174,7 +174,10 @@ $null = $tokens = $errors = $null
 
 ```powershell
 pwsh -NoProfile -Command '
-Import-Module "C:\Users\Trent\OneDrive\Documents\My Scripts\Code\PowerShell\Modules\CompleterActions\CompleterActions.psd1" -Force
+$modulePath = Get-ChildItem "..\Modules\CompleterActions\*\CompleterActions.psd1" |
+    Sort-Object { [version] $_.Directory.Name } -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+Import-Module $modulePath -Force
 $file = Resolve-Path ".\findstr_completer\findstr_completer.ps1"
 $imported = @(Import-CompleterScript -LiteralPath $file)
 "IMPORTED=$($imported.Count)"
