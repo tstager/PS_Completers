@@ -121,11 +121,51 @@ function Get-PiCompletionCache {
             New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
         )
 
+        $globalOptions = @(
+            New-PiOptionSpec -Tokens @('--provider') -Description 'Provider name.' -ValueKind 'Provider'
+            New-PiOptionSpec -Tokens @('--model') -Description 'Model pattern or ID.' -ValueKind 'ModelPattern'
+            New-PiOptionSpec -Tokens @('--api-key') -Description 'API key override.' -ValueKind 'ApiKey'
+            New-PiOptionSpec -Tokens @('--system-prompt') -Description 'Replace the default system prompt.' -ValueKind 'SystemPrompt'
+            New-PiOptionSpec -Tokens @('--append-system-prompt') -Description 'Append text or file contents to the system prompt.' -ValueKind 'TextOrFile'
+            New-PiOptionSpec -Tokens @('--mode') -Description 'Output mode.' -ValueKind 'Mode'
+            New-PiOptionSpec -Tokens @('--print', '-p') -Description 'Run in non-interactive mode and exit.'
+            New-PiOptionSpec -Tokens @('--continue', '-c') -Description 'Continue the previous session.'
+            New-PiOptionSpec -Tokens @('--resume', '-r') -Description 'Select a session to resume.'
+            New-PiOptionSpec -Tokens @('--session') -Description 'Use a specific session file.' -ValueKind 'SessionPathOrId'
+            New-PiOptionSpec -Tokens @('--fork') -Description 'Fork a session file or partial UUID into a new session.' -ValueKind 'SessionPathOrId'
+            New-PiOptionSpec -Tokens @('--session-dir') -Description 'Directory for session storage and lookup.' -ValueKind 'DirectoryPath'
+            New-PiOptionSpec -Tokens @('--no-session') -Description 'Do not save the session.'
+            New-PiOptionSpec -Tokens @('--models') -Description 'Comma-separated model patterns for Ctrl+P cycling.' -ValueKind 'ModelPatternList'
+            New-PiOptionSpec -Tokens @('--no-tools', '-nt') -Description 'Disable all built-in and extension tools.'
+            New-PiOptionSpec -Tokens @('--no-builtin-tools', '-nbt') -Description 'Disable built-in tools but keep extension/custom tools enabled.'
+            New-PiOptionSpec -Tokens @('--tools', '-t') -Description 'Comma-separated list of tool names to enable.' -ValueKind 'ToolList'
+            New-PiOptionSpec -Tokens @('--thinking') -Description 'Set the thinking level.' -ValueKind 'Thinking'
+            New-PiOptionSpec -Tokens @('--extension', '-e') -Description 'Load an extension file or directory.' -ValueKind 'ExtensionPath'
+            New-PiOptionSpec -Tokens @('--no-extensions', '-ne') -Description 'Disable extension discovery.'
+            New-PiOptionSpec -Tokens @('--skill') -Description 'Load a skill file or directory.' -ValueKind 'SkillPath'
+            New-PiOptionSpec -Tokens @('--no-skills', '-ns') -Description 'Disable skill discovery and loading.'
+            New-PiOptionSpec -Tokens @('--prompt-template') -Description 'Load a prompt template file or directory.' -ValueKind 'PromptTemplatePath'
+            New-PiOptionSpec -Tokens @('--no-prompt-templates', '-np') -Description 'Disable prompt template discovery and loading.'
+            New-PiOptionSpec -Tokens @('--theme') -Description 'Load a theme file or directory.' -ValueKind 'ThemePath'
+            New-PiOptionSpec -Tokens @('--no-themes') -Description 'Disable theme discovery and loading.'
+            New-PiOptionSpec -Tokens @('--no-context-files', '-nc') -Description 'Disable AGENTS.md and CLAUDE.md discovery and loading.'
+            New-PiOptionSpec -Tokens @('--export') -Description 'Export a session to HTML.' -ValueKind 'ExportInputPath'
+            New-PiOptionSpec -Tokens @('--list-models') -Description 'List available models, optionally filtered by search text.' -ValueKind 'ModelSearch' -OptionalValue
+            New-PiOptionSpec -Tokens @('--verbose') -Description 'Force verbose startup.'
+            New-PiOptionSpec -Tokens @('--offline') -Description 'Disable startup network operations.'
+            New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show help.'
+            New-PiOptionSpec -Tokens @('--version', '-v') -Description 'Show version.'
+        )
+
         $commandSpecs = @(
             New-PiCommandSpec -Name 'install' -Description 'Install extension source and add to settings.' -Positionals @('PackageSource') -Options $installLikeOptions
             New-PiCommandSpec -Name 'remove' -Description 'Remove extension source from settings.' -Positionals @('InstalledPackageSource') -Options $installLikeOptions
             New-PiCommandSpec -Name 'uninstall' -Description 'Alias for remove.' -Positionals @('InstalledPackageSource') -Options $installLikeOptions
-            New-PiCommandSpec -Name 'update' -Description 'Update installed extensions.' -Positionals @('InstalledPackageSource') -Options @(
+            New-PiCommandSpec -Name 'update' -Description 'Update pi and installed extensions.' -Positionals @('UpdateTarget') -Options @(
+                New-PiOptionSpec -Tokens @('--self') -Description 'Update pi only.'
+                New-PiOptionSpec -Tokens @('--extensions') -Description 'Update installed extensions only.'
+                New-PiOptionSpec -Tokens @('--extension') -Description 'Update one installed extension only.' -ValueKind 'InstalledPackageSource'
+                New-PiOptionSpec -Tokens @('--force') -Description 'Reinstall pi even if already current.'
                 New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
             )
             New-PiCommandSpec -Name 'list' -Description 'List installed extensions from settings.' -Positionals @() -Options @(
@@ -141,42 +181,18 @@ function Get-PiCompletionCache {
             $commandLookup[$commandSpec.Name] = $commandSpec
         }
 
+        $staticCommandLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($commandSpec in $commandSpecs) {
+            $staticCommandLookup[$commandSpec.Name] = $commandSpec
+        }
+
         $script:PiCompletionCache = @{
             RootCommands = $commandSpecs
             CommandLookup = $commandLookup
-            GlobalOptions = @(
-                New-PiOptionSpec -Tokens @('--provider') -Description 'Provider name.' -ValueKind 'Provider'
-                New-PiOptionSpec -Tokens @('--model') -Description 'Model pattern or ID.' -ValueKind 'ModelPattern'
-                New-PiOptionSpec -Tokens @('--api-key') -Description 'API key override.' -ValueKind 'ApiKey'
-                New-PiOptionSpec -Tokens @('--system-prompt') -Description 'Replace the default system prompt.' -ValueKind 'SystemPrompt'
-                New-PiOptionSpec -Tokens @('--append-system-prompt') -Description 'Append text or file contents to the system prompt.' -ValueKind 'TextOrFile'
-                New-PiOptionSpec -Tokens @('--mode') -Description 'Output mode.' -ValueKind 'Mode'
-                New-PiOptionSpec -Tokens @('--print', '-p') -Description 'Run in non-interactive mode and exit.'
-                New-PiOptionSpec -Tokens @('--continue', '-c') -Description 'Continue the previous session.'
-                New-PiOptionSpec -Tokens @('--resume', '-r') -Description 'Select a session to resume.'
-                New-PiOptionSpec -Tokens @('--session') -Description 'Use a specific session file.' -ValueKind 'SessionPathOrId'
-                New-PiOptionSpec -Tokens @('--fork') -Description 'Fork a session file or partial UUID into a new session.' -ValueKind 'SessionPathOrId'
-                New-PiOptionSpec -Tokens @('--session-dir') -Description 'Directory for session storage and lookup.' -ValueKind 'DirectoryPath'
-                New-PiOptionSpec -Tokens @('--no-session') -Description 'Do not save the session.'
-                New-PiOptionSpec -Tokens @('--models') -Description 'Comma-separated model patterns for Ctrl+P cycling.' -ValueKind 'ModelPatternList'
-                New-PiOptionSpec -Tokens @('--no-tools') -Description 'Disable all built-in tools.'
-                New-PiOptionSpec -Tokens @('--tools') -Description 'Comma-separated list of built-in tools to enable.' -ValueKind 'ToolList'
-                New-PiOptionSpec -Tokens @('--thinking') -Description 'Set the thinking level.' -ValueKind 'Thinking'
-                New-PiOptionSpec -Tokens @('--extension', '-e') -Description 'Load an extension file or directory.' -ValueKind 'ExtensionPath'
-                New-PiOptionSpec -Tokens @('--no-extensions', '-ne') -Description 'Disable extension discovery.'
-                New-PiOptionSpec -Tokens @('--skill') -Description 'Load a skill file or directory.' -ValueKind 'SkillPath'
-                New-PiOptionSpec -Tokens @('--no-skills', '-ns') -Description 'Disable skill discovery and loading.'
-                New-PiOptionSpec -Tokens @('--prompt-template') -Description 'Load a prompt template file or directory.' -ValueKind 'PromptTemplatePath'
-                New-PiOptionSpec -Tokens @('--no-prompt-templates', '-np') -Description 'Disable prompt template discovery and loading.'
-                New-PiOptionSpec -Tokens @('--theme') -Description 'Load a theme file or directory.' -ValueKind 'ThemePath'
-                New-PiOptionSpec -Tokens @('--no-themes') -Description 'Disable theme discovery and loading.'
-                New-PiOptionSpec -Tokens @('--export') -Description 'Export a session to HTML.' -ValueKind 'ExportInputPath'
-                New-PiOptionSpec -Tokens @('--list-models') -Description 'List available models, optionally filtered by search text.' -ValueKind 'ModelSearch' -OptionalValue
-                New-PiOptionSpec -Tokens @('--verbose') -Description 'Force verbose startup.'
-                New-PiOptionSpec -Tokens @('--offline') -Description 'Disable startup network operations.'
-                New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show help.'
-                New-PiOptionSpec -Tokens @('--version', '-v') -Description 'Show version.'
-            )
+            GlobalOptions = $globalOptions
+            StaticRootCommands = $commandSpecs
+            StaticCommandLookup = $staticCommandLookup
+            StaticGlobalOptions = $globalOptions
             BuiltInProviders = @(
                 'anthropic',
                 'openai',
@@ -209,6 +225,19 @@ function Get-PiCompletionCache {
             CustomModelDataTtlSeconds = 120
             CustomProviderNames = @()
             CustomModelCandidates = @()
+            RootHelpLoadedAt = [datetime]::MinValue
+            RootHelpTtlSeconds = 60
+            CommandHelpLoadedAt = @{
+                install   = [datetime]::MinValue
+                remove    = [datetime]::MinValue
+                uninstall = [datetime]::MinValue
+                update    = [datetime]::MinValue
+                list      = [datetime]::MinValue
+            }
+            CommandHelpTtlSeconds = 60
+            InstalledPackageSourcesLoadedAt = [datetime]::MinValue
+            InstalledPackageSourcesTtlSeconds = 60
+            InstalledPackageSources = @()
             SessionFilesLoadedAt = [datetime]::MinValue
             SessionFilesTtlSeconds = 60
             SessionFiles = @()
@@ -251,6 +280,20 @@ function Resolve-PiExecutablePath {
     $cache.ExecutablePath
 }
 
+function ConvertTo-PiCommandLineArgument {
+    param([string]$Argument)
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+
+    if ($Argument -notmatch '[\s"&]') {
+        return $Argument
+    }
+
+    '"' + ($Argument -replace '"', '\"') + '"'
+}
+
 function Invoke-PiCapture {
     param([string[]]$Arguments)
 
@@ -260,10 +303,587 @@ function Invoke-PiCapture {
     }
 
     try {
-        @(& $executablePath @Arguments 2>$null)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+        $startInfo.Environment['PI_OFFLINE'] = '1'
+        $startInfo.Environment['FORCE_COLOR'] = '0'
+        $startInfo.Environment['NO_COLOR'] = '1'
+
+        if ($executablePath.EndsWith('.ps1', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $startInfo.FileName = (Get-Command -Name pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+            if ([string]::IsNullOrWhiteSpace($startInfo.FileName)) {
+                return @()
+            }
+
+            [void]$startInfo.ArgumentList.Add('-NoProfile')
+            [void]$startInfo.ArgumentList.Add('-File')
+            [void]$startInfo.ArgumentList.Add($executablePath)
+            foreach ($argument in @($Arguments)) {
+                [void]$startInfo.ArgumentList.Add($argument)
+            }
+        } elseif ($executablePath.EndsWith('.cmd', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $startInfo.FileName = $env:ComSpec
+            if ([string]::IsNullOrWhiteSpace($startInfo.FileName)) {
+                return @()
+            }
+
+            $cmdArguments = @(
+                ConvertTo-PiCommandLineArgument -Argument $executablePath
+            ) + @(
+                foreach ($argument in @($Arguments)) {
+                    ConvertTo-PiCommandLineArgument -Argument $argument
+                }
+            )
+
+            [void]$startInfo.ArgumentList.Add('/d')
+            [void]$startInfo.ArgumentList.Add('/c')
+            [void]$startInfo.ArgumentList.Add(($cmdArguments -join ' '))
+        } else {
+            $startInfo.FileName = $executablePath
+            foreach ($argument in @($Arguments)) {
+                [void]$startInfo.ArgumentList.Add($argument)
+            }
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $null = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        if ([string]::IsNullOrWhiteSpace($standardOutput)) {
+            return @()
+        }
+
+        @($standardOutput -split "`r?`n")
     } catch {
         @()
     }
+}
+
+function ConvertTo-PiPlainText {
+    param([string[]]$InputLines)
+
+    $text = [string]::Join("`n", @(
+            foreach ($line in @($InputLines)) {
+                if ($null -eq $line) {
+                    continue
+                }
+
+                $line.ToString()
+            }
+        ))
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return ''
+    }
+
+    $text = [regex]::Replace($text, '\x1b\[[0-9;?]*[ -/]*[@-~]', '')
+    $text = $text -replace "`a", ''
+    $text = $text -replace "`r`n?", "`n"
+
+    foreach ($heading in @(
+            'Usage:',
+            'Commands:',
+            'Options:',
+            'Extension CLI Flags:',
+            'Short forms:',
+            'Examples:',
+            'Environment Variables:',
+            'Built-in Tool Names:'
+        )) {
+        $text = $text -replace "(?<!`n)$([regex]::Escape($heading))", "`n$heading"
+    }
+
+    $text.Trim("`r", "`n")
+}
+
+function Get-PiHelpSectionText {
+    param(
+        [string]$Text,
+        [string]$Heading,
+        [string[]]$NextHeadings
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ''
+    }
+
+    $escapedHeading = [regex]::Escape($Heading)
+    $escapedNextHeadings = @(
+        foreach ($nextHeading in @($NextHeadings)) {
+            if ([string]::IsNullOrWhiteSpace($nextHeading)) {
+                continue
+            }
+
+            [regex]::Escape($nextHeading)
+        }
+    )
+
+    $terminatorPattern = if ($escapedNextHeadings.Count -gt 0) {
+        "(?=`n(?:$($escapedNextHeadings -join '|'))|\z)"
+    } else {
+        '\z'
+    }
+
+    $match = [regex]::Match($Text, "(?ms)`n?$escapedHeading[ \t]*`n?(?<body>.*?)$terminatorPattern")
+    if (-not $match.Success) {
+        return ''
+    }
+
+    $match.Groups['body'].Value.Trim("`r", "`n")
+}
+
+function Remove-PiJsonComments {
+    param([string]$Content)
+
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        return $Content
+    }
+
+    $builder = [System.Text.StringBuilder]::new($Content.Length)
+    $inString = $false
+    $escaped = $false
+    $inLineComment = $false
+    $inBlockComment = $false
+
+    for ($index = 0; $index -lt $Content.Length; $index++) {
+        $character = $Content[$index]
+        $nextCharacter = if (($index + 1) -lt $Content.Length) { $Content[$index + 1] } else { [char]0 }
+
+        if ($inLineComment) {
+            if ($character -eq "`r" -or $character -eq "`n") {
+                $inLineComment = $false
+                [void]$builder.Append($character)
+            }
+
+            continue
+        }
+
+        if ($inBlockComment) {
+            if ($character -eq '*' -and $nextCharacter -eq '/') {
+                $inBlockComment = $false
+                $index++
+                continue
+            }
+
+            if ($character -eq "`r" -or $character -eq "`n") {
+                [void]$builder.Append($character)
+            }
+
+            continue
+        }
+
+        if ($inString) {
+            [void]$builder.Append($character)
+
+            if ($escaped) {
+                $escaped = $false
+                continue
+            }
+
+            if ($character -eq '\') {
+                $escaped = $true
+                continue
+            }
+
+            if ($character -eq '"') {
+                $inString = $false
+            }
+
+            continue
+        }
+
+        if ($character -eq '"') {
+            $inString = $true
+            [void]$builder.Append($character)
+            continue
+        }
+
+        if ($character -eq '/' -and $nextCharacter -eq '/') {
+            $inLineComment = $true
+            $index++
+            continue
+        }
+
+        if ($character -eq '/' -and $nextCharacter -eq '*') {
+            $inBlockComment = $true
+            $index++
+            continue
+        }
+
+        [void]$builder.Append($character)
+    }
+
+    $builder.ToString()
+}
+
+function ConvertFrom-PiJsonConfig {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    if ([System.IO.Path]::GetExtension($Path).Equals('.jsonc', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $documentOptions = [System.Text.Json.JsonDocumentOptions]::new()
+        $documentOptions.CommentHandling = [System.Text.Json.JsonCommentHandling]::Skip
+        $documentOptions.AllowTrailingCommas = $true
+        $document = [System.Text.Json.JsonDocument]::Parse($Content, $documentOptions)
+
+        try {
+            return ($document.RootElement.GetRawText() | ConvertFrom-Json -ErrorAction Stop)
+        } finally {
+            $document.Dispose()
+        }
+    }
+
+    $Content | ConvertFrom-Json -ErrorAction Stop
+}
+
+function Get-PiValueKindForOption {
+    param(
+        [string[]]$Tokens,
+        [string]$Placeholder,
+        [string]$Description,
+        [string]$CommandName
+    )
+
+    $primaryToken = $Tokens | Where-Object { $_ -like '--*' } | Select-Object -First 1
+    if (-not $primaryToken) {
+        $primaryToken = $Tokens | Select-Object -First 1
+    }
+
+    switch ($primaryToken) {
+        '--provider' { return 'Provider' }
+        '--model' { return 'ModelPattern' }
+        '--api-key' { return 'ApiKey' }
+        '--system-prompt' { return 'SystemPrompt' }
+        '--append-system-prompt' { return 'TextOrFile' }
+        '--mode' { return 'Mode' }
+        '--session' { return 'SessionPathOrId' }
+        '--fork' { return 'SessionPathOrId' }
+        '--session-dir' { return 'DirectoryPath' }
+        '--models' { return 'ModelPatternList' }
+        '--tools' { return 'ToolList' }
+        '--thinking' { return 'Thinking' }
+        '--extension' {
+            if ($CommandName -eq 'update') {
+                return 'InstalledPackageSource'
+            }
+
+            return 'ExtensionPath'
+        }
+        '--skill' { return 'SkillPath' }
+        '--prompt-template' { return 'PromptTemplatePath' }
+        '--theme' { return 'ThemePath' }
+        '--export' { return 'ExportInputPath' }
+        '--list-models' { return 'ModelSearch' }
+        '--mcp-config' { return 'FilePath' }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Placeholder)) {
+        $placeholderText = $Placeholder.Trim('<>[]')
+        if ($placeholderText -match 'dir') {
+            return 'DirectoryPath'
+        }
+
+        if ($placeholderText -match 'path|file|config') {
+            return 'FilePath'
+        }
+    }
+
+    if ($Description -match '\b(path|file|config)\b') {
+        return 'FilePath'
+    }
+
+    $null
+}
+
+function ConvertFrom-PiHelpOptionSection {
+    param(
+        [string]$SectionText,
+        [string]$CommandName
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($line in @($SectionText -split "`n")) {
+        if ($line -notmatch '^\s{2,}(?<spec>--[A-Za-z0-9][A-Za-z0-9-]*(?:,\s*-[A-Za-z0-9]+)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?|-[A-Za-z0-9]+(?:,\s*--[A-Za-z0-9][A-Za-z0-9-]*)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?)\s{2,}(?<description>.+)$') {
+            continue
+        }
+
+        $specText = $Matches.spec.Trim()
+        $description = $Matches.description.Trim()
+        $optionalValue = $false
+        $placeholder = $null
+
+        if ($specText -match '\s+(?<placeholder><[^>]+>|\[[^\]]+\])$') {
+            $placeholder = $Matches.placeholder
+            $optionalValue = $placeholder.StartsWith('[')
+            $specText = $specText.Substring(0, $specText.Length - $placeholder.Length).TrimEnd()
+        }
+
+        $tokens = @(
+            foreach ($token in @($specText -split '\s*,\s*')) {
+                if ([string]::IsNullOrWhiteSpace($token)) {
+                    continue
+                }
+
+                $token.Trim()
+            }
+        )
+
+        if ($tokens.Count -eq 0) {
+            continue
+        }
+
+        $valueKind = Get-PiValueKindForOption -Tokens $tokens -Placeholder $placeholder -Description $description -CommandName $CommandName
+        foreach ($item in @(New-PiOptionSpec -Tokens $tokens -Description $description -ValueKind $valueKind -OptionalValue:$optionalValue)) {
+            [void]$results.Add($item)
+        }
+    }
+
+    @($results.ToArray())
+}
+
+function Merge-PiOptionSpecs {
+    param(
+        [object[]]$BaseOptions,
+        [object[]]$OverrideOptions
+    )
+
+    $lookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $order = New-Object System.Collections.Generic.List[string]
+
+    foreach ($option in @($BaseOptions + $OverrideOptions)) {
+        if ($null -eq $option -or [string]::IsNullOrWhiteSpace($option.Token)) {
+            continue
+        }
+
+        if (-not $lookup.ContainsKey($option.Token)) {
+            [void]$order.Add($option.Token)
+        }
+
+        $lookup[$option.Token] = $option
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($token in @($order)) {
+        [void]$results.Add($lookup[$token])
+    }
+
+    @($results.ToArray())
+}
+
+function Set-PiCommandSpec {
+    param([object]$CommandSpec)
+
+    if ($null -eq $CommandSpec -or [string]::IsNullOrWhiteSpace($CommandSpec.Name)) {
+        return
+    }
+
+    $cache = Get-PiCompletionCache
+    $cache.CommandLookup[$CommandSpec.Name] = $CommandSpec
+
+    $updatedCommands = New-Object System.Collections.Generic.List[object]
+    $replaced = $false
+    foreach ($existingCommand in @($cache.RootCommands)) {
+        if ($existingCommand.Name.Equals($CommandSpec.Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [void]$updatedCommands.Add($CommandSpec)
+            $replaced = $true
+        } else {
+            [void]$updatedCommands.Add($existingCommand)
+        }
+    }
+
+    if (-not $replaced) {
+        [void]$updatedCommands.Add($CommandSpec)
+    }
+
+    $cache.RootCommands = @($updatedCommands.ToArray())
+}
+
+function Update-PiRootHelpData {
+    $cache = Get-PiCompletionCache
+    if (Test-PiCacheFresh -LoadedAt $cache.RootHelpLoadedAt -TtlSeconds $cache.RootHelpTtlSeconds) {
+        return
+    }
+
+    $cache.RootHelpLoadedAt = Get-Date
+
+    $text = ConvertTo-PiPlainText -InputLines (Invoke-PiCapture -Arguments @('--help'))
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return
+    }
+
+    $commandSpecs = @($cache.StaticRootCommands)
+    $commandLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($commandSpec in @($commandSpecs)) {
+        $commandLookup[$commandSpec.Name] = $commandSpec
+    }
+
+    $commandsSection = Get-PiHelpSectionText -Text $text -Heading 'Commands:' -NextHeadings @('Options:')
+    foreach ($line in @($commandsSection -split "`n")) {
+        if ($line -notmatch '^\s*pi\s+(?<name>[A-Za-z0-9-]+)(?:\s+(?<usage>.*?))?\s{2,}(?<description>.+)$') {
+            continue
+        }
+
+        $commandName = $Matches.name
+        $description = $Matches.description.Trim()
+        $existingCommand = if ($commandLookup.ContainsKey($commandName)) { $commandLookup[$commandName] } else { $null }
+        if ($existingCommand) {
+            $commandLookup[$commandName] = New-PiCommandSpec -Name $existingCommand.Name -Description $description -Positionals $existingCommand.Positionals -Options $existingCommand.Options
+        }
+    }
+
+    $globalOptions = Merge-PiOptionSpecs `
+        -BaseOptions $cache.StaticGlobalOptions `
+        -OverrideOptions (ConvertFrom-PiHelpOptionSection -SectionText (Get-PiHelpSectionText -Text $text -Heading 'Options:' -NextHeadings @('Extension CLI Flags:', 'Examples:', 'Environment Variables:', 'Built-in Tool Names:')) -CommandName '')
+
+    $globalOptions = Merge-PiOptionSpecs `
+        -BaseOptions $globalOptions `
+        -OverrideOptions (ConvertFrom-PiHelpOptionSection -SectionText (Get-PiHelpSectionText -Text $text -Heading 'Extension CLI Flags:' -NextHeadings @('Examples:', 'Environment Variables:', 'Built-in Tool Names:')) -CommandName '')
+
+    $builtInTools = New-Object System.Collections.Generic.List[string]
+    $builtInToolSection = Get-PiHelpSectionText -Text $text -Heading 'Built-in Tool Names:' -NextHeadings @()
+    foreach ($line in @($builtInToolSection -split "`n")) {
+        if ($line -match '^\s*(?<tool>[A-Za-z0-9-]+)\s+-') {
+            [void]$builtInTools.Add($Matches.tool)
+        }
+    }
+
+    $cache.CommandLookup = $commandLookup
+    $cache.RootCommands = @($commandLookup.Values | Sort-Object {
+            $index = [array]::IndexOf(@($cache.StaticRootCommands.Name), $_.Name)
+            if ($index -lt 0) { [int]::MaxValue } else { $index }
+        })
+    $cache.GlobalOptions = $globalOptions
+    if ($builtInTools.Count -gt 0) {
+        $cache.BuiltInTools = Get-PiUniqueStrings -Items @($builtInTools.ToArray())
+    }
+}
+
+function Update-PiCommandHelpData {
+    param([string]$CommandName)
+
+    if ([string]::IsNullOrWhiteSpace($CommandName) -or $CommandName -eq 'config') {
+        return
+    }
+
+    $cache = Get-PiCompletionCache
+    if (-not $cache.CommandHelpLoadedAt.ContainsKey($CommandName)) {
+        return
+    }
+
+    if (Test-PiCacheFresh -LoadedAt $cache.CommandHelpLoadedAt[$CommandName] -TtlSeconds $cache.CommandHelpTtlSeconds) {
+        return
+    }
+
+    $cache.CommandHelpLoadedAt[$CommandName] = Get-Date
+
+    $text = ConvertTo-PiPlainText -InputLines (Invoke-PiCapture -Arguments @($CommandName, '--help'))
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return
+    }
+
+    $baseCommandSpec = if ($cache.CommandLookup.ContainsKey($CommandName)) {
+        $cache.CommandLookup[$CommandName]
+    } elseif ($cache.StaticCommandLookup.ContainsKey($CommandName)) {
+        $cache.StaticCommandLookup[$CommandName]
+    } else {
+        $null
+    }
+
+    if (-not $baseCommandSpec) {
+        return
+    }
+
+    $description = $baseCommandSpec.Description
+    $lines = @($text -split "`n")
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].Trim() -ne 'Usage:') {
+            continue
+        }
+
+        $usageLineSeen = $false
+        for ($bodyIndex = $index + 1; $bodyIndex -lt $lines.Count; $bodyIndex++) {
+            $bodyLine = $lines[$bodyIndex].Trim()
+            if ([string]::IsNullOrWhiteSpace($bodyLine)) {
+                continue
+            }
+
+            if ($bodyLine -like 'Options:*' -or $bodyLine -like 'Short forms:*' -or $bodyLine -like 'Examples:*') {
+                break
+            }
+
+            if (-not $usageLineSeen) {
+                $usageLineSeen = $true
+                continue
+            }
+
+            $description = $bodyLine
+            break
+        }
+
+        break
+    }
+
+    $positionals = switch ($CommandName) {
+        'install' { @('PackageSource') }
+        'remove' { @('InstalledPackageSource') }
+        'uninstall' { @('InstalledPackageSource') }
+        'update' { @('UpdateTarget') }
+        default { @() }
+    }
+
+    $optionSection = Get-PiHelpSectionText -Text $text -Heading 'Options:' -NextHeadings @('Short forms:', 'Examples:')
+    $options = Merge-PiOptionSpecs -BaseOptions $baseCommandSpec.Options -OverrideOptions (ConvertFrom-PiHelpOptionSection -SectionText $optionSection -CommandName $CommandName)
+
+    Set-PiCommandSpec -CommandSpec (New-PiCommandSpec -Name $CommandName -Description $description -Positionals $positionals -Options $options)
+}
+
+function Get-PiRootCommands {
+    Update-PiRootHelpData
+    (Get-PiCompletionCache).RootCommands
+}
+
+function Get-PiGlobalOptions {
+    Update-PiRootHelpData
+    (Get-PiCompletionCache).GlobalOptions
+}
+
+function Get-PiInstalledPackageSources {
+    $cache = Get-PiCompletionCache
+    if (Test-PiCacheFresh -LoadedAt $cache.InstalledPackageSourcesLoadedAt -TtlSeconds $cache.InstalledPackageSourcesTtlSeconds) {
+        return $cache.InstalledPackageSources
+    }
+
+    $sources = New-Object System.Collections.Generic.List[string]
+    $text = ConvertTo-PiPlainText -InputLines (Invoke-PiCapture -Arguments @('list'))
+    foreach ($line in @($text -split "`n")) {
+        if ($line -notmatch '^\s{2}(?!\s)(?<source>.+)$') {
+            continue
+        }
+
+        $source = $Matches.source.Trim()
+        if ([string]::IsNullOrWhiteSpace($source) -or
+            $source -like 'User packages:' -or
+            $source -like 'Project packages:' -or
+            $source -like 'No packages installed.*' -or
+            $source -match '^[A-Za-z]:[\\/]' -or
+            $source -like ':*') {
+            continue
+        }
+
+        [void]$sources.Add($source)
+    }
+
+    $cache.InstalledPackageSources = Get-PiUniqueStrings -Items @($sources.ToArray())
+    $cache.InstalledPackageSourcesLoadedAt = Get-Date
+    $cache.InstalledPackageSources
 }
 
 function Get-PiTokenText {
@@ -318,6 +938,8 @@ function Get-PiCommandSpec {
         return $null
     }
 
+    Update-PiRootHelpData
+    Update-PiCommandHelpData -CommandName $CommandName
     $cache = Get-PiCompletionCache
     if ($cache.CommandLookup.ContainsKey($CommandName)) {
         return $cache.CommandLookup[$CommandName]
@@ -401,6 +1023,7 @@ function Get-PiModelsJsonPaths {
     $homePath = [Environment]::GetFolderPath('UserProfile')
     if (-not [string]::IsNullOrWhiteSpace($homePath)) {
         [void]$paths.Add((Join-Path $homePath '.pi\agent\models.json'))
+        [void]$paths.Add((Join-Path $homePath '.pi\agent\models.jsonc'))
     }
 
     [void]$paths.Add((Join-Path (Get-Location) '.pi\models.json'))
@@ -425,7 +1048,7 @@ function Update-PiCustomModelData {
 
         try {
             $content = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
-            $config = $content | ConvertFrom-Json -ErrorAction Stop
+            $config = ConvertFrom-PiJsonConfig -Path $path -Content $content
         } catch {
             continue
         }
@@ -818,6 +1441,17 @@ function Get-PiValueCompletions {
                 & $addResult '..\' 'Directory path'
             }
         }
+        'FilePath' {
+            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                [void]$results.Add($item)
+            }
+
+            if ([string]::IsNullOrEmpty($WordToComplete)) {
+                & $addResult '.\' 'File path'
+                & $addResult '..\' 'File path'
+                & $addResult '<path>' 'File path'
+            }
+        }
         'ExtensionPath' {
             foreach ($item in @(Get-PiResourcePathCompletions -Kind 'extension' -WordToComplete $WordToComplete)) {
                 [void]$results.Add($item)
@@ -854,7 +1488,7 @@ function Get-PiValueCompletions {
                 [void]$results.Add($item)
             }
 
-            if ([string]::IsNullOrEmpty($WordToComplete)) {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or 'output.html' -like "$WordToComplete*") {
                 & $addResult 'output.html' 'Output HTML file'
             }
         }
@@ -890,6 +1524,10 @@ function Get-PiValueCompletions {
                 & $addResult $source 'Package source'
             }
 
+            foreach ($source in @(Get-PiInstalledPackageSources)) {
+                & $addResult $source 'Installed package source'
+            }
+
             if (Test-PiPathLike -Value $WordToComplete) {
                 foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
                     [void]$results.Add($item)
@@ -897,6 +1535,27 @@ function Get-PiValueCompletions {
             }
 
             & $addResult '<source>' 'Installed package source'
+        }
+        'UpdateTarget' {
+            foreach ($target in @('self', 'pi')) {
+                & $addResult $target 'Update target'
+            }
+
+            foreach ($source in @(Get-PiInstalledPackageSources)) {
+                & $addResult $source 'Installed package source'
+            }
+
+            foreach ($source in @('npm:', 'git:', 'https://', 'ssh://git@github.com/', '.\', '..\')) {
+                & $addResult $source 'Package source'
+            }
+
+            if (Test-PiPathLike -Value $WordToComplete) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                    [void]$results.Add($item)
+                }
+            }
+
+            & $addResult '<source>' 'Installed package source or self target'
         }
         'MessageFile' {
             foreach ($item in @(Get-PiAtFileCompletions -WordToComplete $WordToComplete)) {
@@ -950,6 +1609,7 @@ function Complete-Pi {
 
     $null = $CursorPosition
     $cache = Get-PiCompletionCache
+    $globalOptions = @(Get-PiGlobalOptions)
     $tokens = @(Get-PiProcessedTokens -CommandAst $CommandAst -WordToComplete $WordToComplete)
     $commandSpec = $null
     $positionalsConsumed = 0
@@ -957,6 +1617,7 @@ function Complete-Pi {
     $rootMessageMode = $false
     $exportInputConsumed = $false
     $exportOutputConsumed = $false
+    $selectedUpdateTarget = $false
 
     foreach ($token in @($tokens)) {
         if ($expectingValue) {
@@ -975,6 +1636,10 @@ function Complete-Pi {
                     $exportInputConsumed = $true
                 }
 
+                if ($commandSpec -and $commandSpec.Name -eq 'update' -and $expectingValue.Token -eq '--extension') {
+                    $selectedUpdateTarget = $true
+                }
+
                 $expectingValue = $null
                 continue
             }
@@ -988,10 +1653,18 @@ function Complete-Pi {
 
         if (-not $commandSpec) {
             if ($token.StartsWith('-')) {
-                $globalOption = Find-PiOptionSpec -Token $token -Options $cache.GlobalOptions
+                $globalOption = Find-PiOptionSpec -Token $token -Options $globalOptions
                 if ($globalOption) {
-                    if (-not $token.Contains('=') -and $globalOption.ValueKind) {
-                        $expectingValue = $globalOption
+                    if ($globalOption.ValueKind) {
+                        if ($token.Contains('=')) {
+                            $equalsIndex = $token.IndexOf('=')
+                            $inlineValue = $token.Substring($equalsIndex + 1)
+                            if (-not [string]::IsNullOrWhiteSpace($inlineValue) -and $globalOption.ValueKind -eq 'ExportInputPath') {
+                                $exportInputConsumed = $true
+                            }
+                        } else {
+                            $expectingValue = $globalOption
+                        }
                     }
 
                     continue
@@ -1021,8 +1694,24 @@ function Complete-Pi {
         if ($token.StartsWith('-')) {
             $commandOption = Find-PiOptionSpec -Token $token -Options $commandSpec.Options
             if ($commandOption) {
-                if (-not $token.Contains('=') -and $commandOption.ValueKind) {
-                    $expectingValue = $commandOption
+                if ($commandSpec.Name -eq 'update' -and $commandOption.Token -in @('--self', '--extensions')) {
+                    $selectedUpdateTarget = $true
+                }
+
+                if ($commandOption.ValueKind) {
+                    if ($token.Contains('=')) {
+                        $equalsIndex = $token.IndexOf('=')
+                        $inlineValue = $token.Substring($equalsIndex + 1)
+                        if ($commandSpec.Name -eq 'update' -and
+                            $commandOption.Token -eq '--extension' -and
+                            -not [string]::IsNullOrWhiteSpace($inlineValue)) {
+                            $selectedUpdateTarget = $true
+                        }
+                    } else {
+                        $expectingValue = $commandOption
+                    }
+                } elseif ($commandSpec.Name -eq 'update' -and $commandOption.Token -eq '--extension') {
+                    $selectedUpdateTarget = $true
                 }
 
                 continue
@@ -1032,6 +1721,9 @@ function Complete-Pi {
         }
 
         $positionalsConsumed++
+        if ($commandSpec.Name -eq 'update') {
+            $selectedUpdateTarget = $true
+        }
     }
 
     if ($expectingValue -and $expectingValue.OptionalValue) {
@@ -1041,14 +1733,16 @@ function Complete-Pi {
     }
 
     if ([string]::IsNullOrEmpty($WordToComplete) -and $tokens.Count -gt 0 -and $tokens[-1].Contains('=')) {
-        $options = if ($commandSpec) { $commandSpec.Options } else { $cache.GlobalOptions }
+        $options = if ($commandSpec) { $commandSpec.Options } else { $globalOptions }
         $inlineEmptyOption = Find-PiOptionSpec -Token $tokens[-1] -Options $options
         if ($inlineEmptyOption -and $inlineEmptyOption.ValueKind) {
             $equalsIndex = $tokens[-1].IndexOf('=')
             $flagPart = $tokens[-1].Substring(0, $equalsIndex)
             $valuePrefix = $tokens[-1].Substring($equalsIndex + 1)
-            Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart="
-            return
+            if ([string]::IsNullOrEmpty($valuePrefix)) {
+                Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart="
+                return
+            }
         }
     }
 
@@ -1056,7 +1750,7 @@ function Complete-Pi {
         $equalsIndex = $WordToComplete.IndexOf('=')
         $flagPart = $WordToComplete.Substring(0, $equalsIndex)
         $valuePrefix = $WordToComplete.Substring($equalsIndex + 1)
-        $options = if ($commandSpec) { $commandSpec.Options } else { $cache.GlobalOptions }
+        $options = if ($commandSpec) { $commandSpec.Options } else { $globalOptions }
         $inlineOption = Find-PiOptionSpec -Token $flagPart -Options $options
         if ($inlineOption -and $inlineOption.ValueKind) {
             Get-PiValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart="
@@ -1073,7 +1767,7 @@ function Complete-Pi {
         if ($commandSpec) {
             Get-PiOptionCompletions -Options $commandSpec.Options -WordToComplete $WordToComplete
         } elseif (-not $rootMessageMode) {
-            Get-PiOptionCompletions -Options $cache.GlobalOptions -WordToComplete $WordToComplete
+            Get-PiOptionCompletions -Options $globalOptions -WordToComplete $WordToComplete
         }
         return
     }
@@ -1103,7 +1797,7 @@ function Complete-Pi {
 
         $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
 
-        foreach ($command in @($cache.RootCommands)) {
+        foreach ($command in @(Get-PiRootCommands)) {
             if ($command.Name -like "$WordToComplete*") {
                 [void]$results.Add(
                     (New-PiCompletionResult -CompletionText $command.Name -ToolTip $command.Description)
@@ -1112,7 +1806,7 @@ function Complete-Pi {
         }
 
         if ([string]::IsNullOrEmpty($WordToComplete)) {
-            foreach ($option in @(Get-PiOptionCompletions -Options $cache.GlobalOptions -WordToComplete '')) {
+            foreach ($option in @(Get-PiOptionCompletions -Options $globalOptions -WordToComplete '')) {
                 [void]$results.Add($option)
             }
 
@@ -1128,7 +1822,9 @@ function Complete-Pi {
         return
     }
 
-    $valueKind = if ($positionalsConsumed -lt $commandSpec.Positionals.Count) {
+    $valueKind = if ($commandSpec.Name -eq 'update' -and $selectedUpdateTarget -and $positionalsConsumed -eq 0) {
+        $null
+    } elseif ($positionalsConsumed -lt $commandSpec.Positionals.Count) {
         $commandSpec.Positionals[$positionalsConsumed]
     } else {
         $null
