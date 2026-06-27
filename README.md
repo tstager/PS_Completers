@@ -1,6 +1,6 @@
 # PowerShell Completers
 
-This repository contains standalone PowerShell argument completer scripts for native tools. Each `*_completer` folder contains a self-contained `*_completer.ps1` script that can be dot-sourced into a PowerShell session or profile, plus a companion `*_completer.md` document describing coverage and implementation details. These scripts can be imported with the CompleterActions module. 
+This repository contains standalone PowerShell argument completer scripts for native tools. Each `*_completer` folder contains a self-contained `*_completer.ps1` script that can be dot-sourced into a PowerShell session or profile, plus a companion `*_completer.md` document describing coverage and implementation details. These scripts can be imported with the CompleterActions module.
 
 ## Quick start
 
