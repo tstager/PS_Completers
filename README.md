@@ -2,6 +2,8 @@
 
 This repository contains standalone PowerShell argument completer scripts for native tools. Each `*_completer` folder contains a self-contained `*_completer.ps1` script that can be dot-sourced into a PowerShell session or profile, plus a companion `*_completer.md` document describing coverage and implementation details. These scripts can be imported with the CompleterActions module.
 
+Recent additions include standalone completers for the coreutils tools `comm`, `cut`, `date`, `df`, `env`, `head`, `join`, `ln`, `mktemp`, `readlink`, `realpath`, `seq`, `sha256sum`, `shred`, `split`, `stat`, `tail`, `touch`, `tr`, and `uniq`.
+
 ## Quick start
 
 From the repository root, dot-source one or more completer scripts into the current session:
