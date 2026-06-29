@@ -4,9 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-TouchCompletionOptions {
-    @(
-    '-a', '-t', '-d', '--date', '-f', '-m', '-c', '--no-create', '-h', '--no-dereference', '-r', '--reference', '--time', '-V', '--version', '--help'
-    )
+    $cache = Get-Variable -Name 'TouchCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-a', '-t', '-d', '--date', '-f', '-m', '-c', '--no-create', '-h', '--no-dereference', '-r', '--reference', '--time', '-V', '--version', '--help')
+    $commandCandidates = @('touch.exe', 'touch')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'TouchCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'TouchCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'TouchCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'TouchCompletionOptions' -Scope Script).Value
 }
 
 

@@ -4,9 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-PrCompletionOptions {
-    @(
-        '-a', '--across', '-c', '--show-control-chars', '-d', '--double-space', '-e', '--expand-tabs', '-f', '--form-feed', '-h', '--header', '-i', '--indent', '-l', '--length', '-m', '--merge', '-n', '--number-lines', '-o', '--output-tabs', '-r', '--no-file-warnings', '-s', '--separator', '-t', '--omit-header', '-T', '--omit-pagination', '-v', '--show-all', '-w', '--width', '-F', '--page-range', '--help', '--version'
-    )
+    $cache = Get-Variable -Name 'PrCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-a', '--across', '-c', '--show-control-chars', '-d', '--double-space', '-e', '--expand-tabs', '-f', '--form-feed', '-h', '--header', '-i', '--indent', '-l', '--length', '-m', '--merge', '-n', '--number-lines', '-o', '--output-tabs', '-r', '--no-file-warnings', '-s', '--separator', '-t', '--omit-header', '-T', '--omit-pagination', '-v', '--show-all', '-w', '--width', '-F', '--page-range', '--help', '--version')
+    $commandCandidates = @('pr.exe', 'pr')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'PrCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'PrCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'PrCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'PrCompletionOptions' -Scope Script).Value
 }
 
 function New-PrCompletionResult {

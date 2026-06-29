@@ -4,9 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-VdirCompletionOptions {
-    @(
-        '-a', '--all', '-A', '--almost-all', '--author', '-b', '--escape', '-B', '--ignore-backups', '-c', '-C', '--color', '-d', '--directory', '-f', '-F', '--classify', '--file-type', '--format', '-g', '-G', '-h', '--human-readable', '-i', '--inode', '-l', '-m', '-n', '-N', '--literal', '-o', '-p', '-q', '--hide-control-chars', '-Q', '--quote-name', '-r', '--reverse', '-R', '--recursive', '-s', '--size', '-S', '--sort=size', '-t', '--sort=time', '-u', '--sort=access', '-U', '--sort=none', '-X', '--sort=extension', '-1', '--format=single-column', '--help', '--version'
-    )
+    $cache = Get-Variable -Name 'VdirCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-a', '--all', '-A', '--almost-all', '--author', '-b', '--escape', '-B', '--ignore-backups', '-c', '-C', '--color', '-d', '--directory', '-f', '-F', '--classify', '--file-type', '--format', '-g', '-G', '-h', '--human-readable', '-i', '--inode', '-l', '-m', '-n', '-N', '--literal', '-o', '-p', '-q', '--hide-control-chars', '-Q', '--quote-name', '-r', '--reverse', '-R', '--recursive', '-s', '--size', '-S', '--sort=size', '-t', '--sort=time', '-u', '--sort=access', '-U', '--sort=none', '-X', '--sort=extension', '-1', '--format=single-column', '--help', '--version')
+    $commandCandidates = @('vdir.exe', 'vdir')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'VdirCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'VdirCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'VdirCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'VdirCompletionOptions' -Scope Script).Value
 }
 
 function New-VdirCompletionResult {

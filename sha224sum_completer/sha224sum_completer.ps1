@@ -4,27 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-Sha224sumCompletionOptions {
-    @(
-    '-b',
-    '--binary',
-    '-c',
-    '--check',
-    '-w',
-    '--warn',
-    '--status',
-    '--quiet',
-    '--strict',
-    '--ignore-missing',
-    '--tag',
-    '-t',
-    '--text',
-    '-z',
-    '--zero',
-    '-h',
-    '--help',
-    '-V',
-    '--version'
-    )
+    $cache = Get-Variable -Name 'Sha224sumCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-b', '--binary', '-c', '--check', '-w', '--warn', '--status', '--quiet', '--strict', '--ignore-missing', '--tag', '-t', '--text', '-z', '--zero', '-h', '--help', '-V', '--version')
+    $commandCandidates = @('sha224sum.exe', 'sha224sum')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'Sha224sumCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'Sha224sumCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'Sha224sumCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'Sha224sumCompletionOptions' -Scope Script).Value
 }
 
 function New-Sha224sumCompletionResult {

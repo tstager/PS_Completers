@@ -4,7 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-NlCompletionOptions {
-    @('-b', '--body-numbering', '-d', '--section-delimiter', '-f', '--footer-numbering', '-h', '--header-numbering', '-i', '--line-increment', '-l', '--join-blank-lines', '-n', '--number-format', '-p', '--no-renumber', '-s', '--number-separator', '-v', '--starting-line-number', '-w', '--number-width', '--help', '--version')
+    $cache = Get-Variable -Name 'NlCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-b', '--body-numbering', '-d', '--section-delimiter', '-f', '--footer-numbering', '-h', '--header-numbering', '-i', '--line-increment', '-l', '--join-blank-lines', '-n', '--number-format', '-p', '--no-renumber', '-s', '--number-separator', '-v', '--starting-line-number', '-w', '--number-width', '--help', '--version')
+    $commandCandidates = @('nl.exe', 'nl')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'NlCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'NlCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'NlCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'NlCompletionOptions' -Scope Script).Value
 }
 
 function New-NlCompletionResult {

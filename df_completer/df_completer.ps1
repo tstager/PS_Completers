@@ -4,9 +4,52 @@
 Set-StrictMode -Version 2.0
 
 function Get-DfCompletionOptions {
-    @(
-    '-a', '--all', '-B', '--block-size', '--total', '-h', '--human-readable', '-H', '--si', '-i', '--inodes', '-k', '-l', '--local', '--no-sync', '--output', '-P', '--portability', '--sync', '-t', '--type', '-T', '--print-type', '-w', '-x', '--exclude-type', '-V', '--version', '--help'
-    )
+    $cache = Get-Variable -Name 'DfCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $fallbackOptions = @('-a', '--all', '-B', '--block-size', '--total', '-h', '--human-readable', '-H', '--si', '-i', '--inodes', '-k', '-l', '--local', '--no-sync', '--output', '-P', '--portability', '--sync', '-t', '--type', '-T', '--print-type', '-w', '-x', '--exclude-type', '-V', '--version', '--help')
+    $commandCandidates = @('df.exe', 'df')
+    foreach ($candidate in $commandCandidates) {
+        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+
+        try {
+            $helpOutput = & $command.Source --help 2>&1 | Out-String
+        } catch {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+            continue
+        }
+
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+                $rawOption = $match.Groups[1].Value
+                $normalized = $rawOption.Trim()
+                if ($normalized.StartsWith('--')) {
+                    $normalized = $normalized -replace '\[.*$', ''
+                    $normalized = $normalized -replace '=.*$', ''
+                }
+                if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
+                    [void]$options.Add($normalized)
+                }
+            }
+        }
+
+        if ($options.Count -gt 0) {
+            Set-Variable -Name 'DfCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            return (Get-Variable -Name 'DfCompletionOptions' -Scope Script).Value
+        }
+    }
+
+    Set-Variable -Name 'DfCompletionOptions' -Value $fallbackOptions -Scope Script
+    return (Get-Variable -Name 'DfCompletionOptions' -Scope Script).Value
 }
 
 
