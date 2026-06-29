@@ -1,0 +1,93 @@
+# false tab completion for PowerShell
+# Static option completion for false.exe and false.
+
+Set-StrictMode -Version 2.0
+
+function Get-FalseCompletionOptions {
+    @('--help', '--version')
+}
+
+function New-FalseCompletionResult {
+    param(
+        [string]$CompletionText,
+        [string]$ResultType,
+        [string]$ToolTip,
+        [string]$ListItemText
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ListItemText)) {
+        $ListItemText = $CompletionText
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ToolTip)) {
+        $ToolTip = $CompletionText
+    }
+
+    [System.Management.Automation.CompletionResult]::new(
+        $CompletionText,
+        $ListItemText,
+        $ResultType,
+        $ToolTip
+    )
+}
+
+function Get-FalseCurrentToken {
+    param(
+        [string]$Line,
+        [int]$CursorPosition,
+        [string]$Fallback
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $Fallback
+    }
+
+    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
+    $prefix = $Line.Substring(0, $safeCursor)
+    if ($prefix -match '\s$') {
+        return ''
+    }
+
+    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    if ($parts.Count -gt 0) {
+        return $parts[-1]
+    }
+
+    $Fallback
+}
+
+function Complete-False {
+    param(
+        [string]$wordToComplete,
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [int]$cursorPosition
+    )
+
+    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
+        ''
+    } else {
+        Get-FalseCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+    }
+
+    if ([string]::IsNullOrEmpty($currentWord)) {
+        return @()
+    }
+
+    if ($currentWord.StartsWith('-')) {
+        return @(
+            foreach ($option in Get-FalseCompletionOptions) {
+                if ($option.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    New-FalseCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for false.'
+                }
+            }
+        )
+    }
+
+    @()
+}
+
+Register-ArgumentCompleter -Native -CommandName 'false', 'false.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-False -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
