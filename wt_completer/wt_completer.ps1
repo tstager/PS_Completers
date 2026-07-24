@@ -185,7 +185,7 @@ function Complete-WtNative {
         @($argumentTokens)
     }
     elseif ($argumentTokens.Count -gt 0) {
-        @($argumentTokens[0..($argumentTokens.Count - 2)])
+        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
     }
     else {
         @()
