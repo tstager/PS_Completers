@@ -517,7 +517,7 @@ function Complete-Grok {
     return (ConvertTo-GrokArray -Value $results)
 }
 
-Register-ArgumentCompleter -Native -CommandName 'grok', 'grok.exe' -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName @('grok', 'grok.exe', 'agent') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     Complete-Grok -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
