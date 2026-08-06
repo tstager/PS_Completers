@@ -106,7 +106,6 @@ function ConvertFrom-GrokHelp {
 
         if ($inCommands) {
             if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                $inCommands = $false
                 continue
             }
 
@@ -122,7 +121,6 @@ function ConvertFrom-GrokHelp {
 
         if ($inArguments) {
             if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                $inArguments = $false
                 continue
             }
 
@@ -156,12 +154,31 @@ function ConvertFrom-GrokHelp {
 
         if ($inOptions) {
             if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                $inOptions = $false
                 continue
             }
 
-            $optionNames = @([regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))') |
-                ForEach-Object { $_.Value.Trim() })
+            $optionNames = New-Object System.Collections.Generic.List[string]
+            $parseLine = $trimmed
+            while ($parseLine -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)(?<rest>.*)$') {
+                [void]$optionNames.Add($matches.option)
+                $parseLine = $matches.rest
+
+                if ($parseLine -match '^\s*$') {
+                    break
+                }
+
+                if ($parseLine -match '^\s*,\s*') {
+                    $parseLine = $parseLine -replace '^\s*,\s*', ''
+                    continue
+                }
+
+                if ($parseLine -match '^\s+') {
+                    $parseLine = $parseLine.TrimStart()
+                    continue
+                }
+
+                break
+            }
 
             if ($optionNames.Count -eq 0) {
                 continue
