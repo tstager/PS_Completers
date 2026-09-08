@@ -7,15 +7,15 @@ if (-not (Get-Variable -Name SDeleteCompletionCatalog -Scope Script -ErrorAction
     $script:SDeleteCompletionCatalog = @{
         PassHints = @('1', '3', '7', '10')
         Switches  = @(
-            [pscustomobject]@{ Token = '-c'; Description = 'Clean free space.'; TakesValue = $false; Modes = @('free', 'root') }
-            [pscustomobject]@{ Token = '-f'; Description = 'Force bare-letter arguments to be treated as file or directory paths.'; TakesValue = $false; Modes = @('delete', 'root') }
-            [pscustomobject]@{ Token = '-p'; Description = 'Specifies number of overwrite passes.'; TakesValue = $true; ValueKind = 'Passes'; Modes = @('delete', 'free', 'root') }
-            [pscustomobject]@{ Token = '-q'; Description = 'Quiet mode.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
-            [pscustomobject]@{ Token = '-r'; Description = 'Remove the read-only attribute.'; TakesValue = $false; Modes = @('delete', 'root') }
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false; Modes = @('delete', 'root') }
-            [pscustomobject]@{ Token = '-z'; Description = 'Zero free space.'; TakesValue = $false; Modes = @('free', 'root') }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show SDelete help.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
+            @{ Token = '-c'; Description = 'Clean free space.'; TakesValue = $false; Modes = @('free', 'root') }
+            @{ Token = '-f'; Description = 'Force bare-letter arguments to be treated as file or directory paths.'; TakesValue = $false; Modes = @('delete', 'root') }
+            @{ Token = '-p'; Description = 'Specifies number of overwrite passes.'; TakesValue = $true; ValueKind = 'Passes'; Modes = @('delete', 'free', 'root') }
+            @{ Token = '-q'; Description = 'Quiet mode.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
+            @{ Token = '-r'; Description = 'Remove the read-only attribute.'; TakesValue = $false; Modes = @('delete', 'root') }
+            @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false; Modes = @('delete', 'root') }
+            @{ Token = '-z'; Description = 'Zero free space.'; TakesValue = $false; Modes = @('free', 'root') }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
+            @{ Token = '/?'; Description = 'Show SDelete help.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
         )
     }
 }

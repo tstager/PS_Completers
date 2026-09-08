@@ -6,7 +6,7 @@
     --flag=value inline syntax.  Dot-source this file from your $PROFILE to
     enable completion for both invocation forms.
 
-    Safe to source multiple times (idempotent registration via script-scoped guard).
+    Safe to source multiple times (re-registration simply replaces the completer).
 .EXAMPLE
     . "$PSScriptRoot\claude_completer.ps1"
 #>
@@ -1114,19 +1114,9 @@ function Complete-ClaudeNative {
 
 #region -- Registration -------------------------------------------------------------------------
 
-if (-not ((Get-Variable -Name ClaudeCompleterRegistered -Scope Script -ErrorAction SilentlyContinue) -and $script:ClaudeCompleterRegistered)) {
-    try {
-        Register-ArgumentCompleter -CommandName @('claude', 'claude.exe') -Native -ScriptBlock {
-            param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
-            Complete-ClaudeNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
-        }
-
-        $script:ClaudeCompleterRegistered = $true
-    }
-    catch {
-        $script:ClaudeCompleterRegistered = $false
-        throw
-    }
+Register-ArgumentCompleter -CommandName @('claude', 'claude.exe') -Native -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
+    Complete-ClaudeNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
 }
 
 #endregion

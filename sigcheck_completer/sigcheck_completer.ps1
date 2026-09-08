@@ -6,40 +6,40 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name SigcheckCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
     $script:SigcheckCompletionCatalog = @{
         Switches = @(
-            [pscustomobject]@{ Token = '-a'; Description = 'Show extended version information.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-accepteula'; Description = 'Silently accept the Sigcheck EULA.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-c'; Description = 'CSV output with comma delimiter.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-ct'; Description = 'CSV output with tab delimiter.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-d'; Description = 'Dump contents of a catalog file.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-e'; Description = 'Scan executable images only.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-f'; Description = 'Look for signatures in the specified catalog file.'; TakesValue = $true; ValueKind = 'CatalogFile' }
-            [pscustomobject]@{ Token = '-h'; Description = 'Show file hashes.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-i'; Description = 'Show catalog name and signing chain.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-l'; Description = 'Traverse symbolic links and junctions.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-m'; Description = 'Dump manifest.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-n'; Description = 'Only show file version number.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-o'; Description = 'Query VirusTotal using a previously captured CSV file.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-p'; Description = 'Verify signatures against the specified policy GUID or policy file.'; TakesValue = $true; ValueKind = 'Policy' }
-            [pscustomobject]@{ Token = '-r'; Description = 'Disable certificate revocation checking.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-t'; Description = 'Dump machine certificate stores.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-tu'; Description = 'Dump user certificate stores.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-tv'; Description = 'Dump machine certificate stores and validate against Microsoft roots.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-tuv'; Description = 'Dump user certificate stores and validate against Microsoft roots.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-u'; Description = 'Show unsigned or suspicious files.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-v'; Description = 'Query VirusTotal by file hash.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-vr'; Description = 'Query VirusTotal and open reports for positives.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-vs'; Description = 'Query VirusTotal and submit unknown files.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-vrs'; Description = 'Query VirusTotal, submit unknown files, and open positive reports.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-vt'; Description = 'Accept VirusTotal terms non-interactively.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-w'; Description = 'Write output to the specified file.'; TakesValue = $true; ValueKind = 'OutputFile' }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-?'; Description = 'Show Sigcheck help.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show Sigcheck help.'; TakesValue = $false }
+            @{ Token = '-a'; Description = 'Show extended version information.'; TakesValue = $false }
+            @{ Token = '-accepteula'; Description = 'Silently accept the Sigcheck EULA.'; TakesValue = $false }
+            @{ Token = '-c'; Description = 'CSV output with comma delimiter.'; TakesValue = $false }
+            @{ Token = '-ct'; Description = 'CSV output with tab delimiter.'; TakesValue = $false }
+            @{ Token = '-d'; Description = 'Dump contents of a catalog file.'; TakesValue = $false }
+            @{ Token = '-e'; Description = 'Scan executable images only.'; TakesValue = $false }
+            @{ Token = '-f'; Description = 'Look for signatures in the specified catalog file.'; TakesValue = $true; ValueKind = 'CatalogFile' }
+            @{ Token = '-h'; Description = 'Show file hashes.'; TakesValue = $false }
+            @{ Token = '-i'; Description = 'Show catalog name and signing chain.'; TakesValue = $false }
+            @{ Token = '-l'; Description = 'Traverse symbolic links and junctions.'; TakesValue = $false }
+            @{ Token = '-m'; Description = 'Dump manifest.'; TakesValue = $false }
+            @{ Token = '-n'; Description = 'Only show file version number.'; TakesValue = $false }
+            @{ Token = '-o'; Description = 'Query VirusTotal using a previously captured CSV file.'; TakesValue = $false }
+            @{ Token = '-p'; Description = 'Verify signatures against the specified policy GUID or policy file.'; TakesValue = $true; ValueKind = 'Policy' }
+            @{ Token = '-r'; Description = 'Disable certificate revocation checking.'; TakesValue = $false }
+            @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
+            @{ Token = '-t'; Description = 'Dump machine certificate stores.'; TakesValue = $false }
+            @{ Token = '-tu'; Description = 'Dump user certificate stores.'; TakesValue = $false }
+            @{ Token = '-tv'; Description = 'Dump machine certificate stores and validate against Microsoft roots.'; TakesValue = $false }
+            @{ Token = '-tuv'; Description = 'Dump user certificate stores and validate against Microsoft roots.'; TakesValue = $false }
+            @{ Token = '-u'; Description = 'Show unsigned or suspicious files.'; TakesValue = $false }
+            @{ Token = '-v'; Description = 'Query VirusTotal by file hash.'; TakesValue = $false }
+            @{ Token = '-vr'; Description = 'Query VirusTotal and open reports for positives.'; TakesValue = $false }
+            @{ Token = '-vs'; Description = 'Query VirusTotal and submit unknown files.'; TakesValue = $false }
+            @{ Token = '-vrs'; Description = 'Query VirusTotal, submit unknown files, and open positive reports.'; TakesValue = $false }
+            @{ Token = '-vt'; Description = 'Accept VirusTotal terms non-interactively.'; TakesValue = $false }
+            @{ Token = '-w'; Description = 'Write output to the specified file.'; TakesValue = $true; ValueKind = 'OutputFile' }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
+            @{ Token = '-?'; Description = 'Show Sigcheck help.'; TakesValue = $false }
+            @{ Token = '/?'; Description = 'Show Sigcheck help.'; TakesValue = $false }
         )
         MachineStoreNames   = @()
         UserStoreNames      = @()
-        StoreNamesUpdated   = [datetime]::MinValue
+        StoreNamesUpdated   = $null
         StoreNamesTtl       = 60
     }
 }
@@ -255,9 +255,10 @@ function Get-SigcheckPathCompletions {
 }
 
 function Update-SigcheckStoreNames {
-    $age = (Get-Date) - $script:SigcheckCompletionCatalog.StoreNamesUpdated
-    if (($script:SigcheckCompletionCatalog.MachineStoreNames.Count -gt 0 -or $script:SigcheckCompletionCatalog.UserStoreNames.Count -gt 0) -and
-        $age.TotalSeconds -lt $script:SigcheckCompletionCatalog.StoreNamesTtl) {
+    $lastUpdated = $script:SigcheckCompletionCatalog.StoreNamesUpdated
+    if ($null -ne $lastUpdated -and
+        ($script:SigcheckCompletionCatalog.MachineStoreNames.Count -gt 0 -or $script:SigcheckCompletionCatalog.UserStoreNames.Count -gt 0) -and
+        ((Get-Date) - $lastUpdated).TotalSeconds -lt $script:SigcheckCompletionCatalog.StoreNamesTtl) {
         return
     }
 

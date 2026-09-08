@@ -158,8 +158,8 @@ the same scriptblock so completion works regardless of how the command is typed.
 
 - **Self-contained** single `.ps1` file; no external dependencies.
 - **`Set-StrictMode -Version Latest`** throughout.
-- **Idempotent** via a `$script:ClaudeCompleterRegistered` guard; safe to
-  dot-source multiple times.
+- **Safe to dot-source multiple times**; the script-scope
+  `Register-ArgumentCompleter` call simply replaces any previous registration.
 - **Static data** for all flags and subcommands (no runtime help parsing and no
   invocation of `claude` at completion time).  This avoids latency on every
   keystroke and is side-effect free.

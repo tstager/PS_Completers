@@ -6,43 +6,43 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name AccessChkCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
     $script:AccessChkCompletionCatalog = @{
         Switches            = @(
-            [pscustomobject]@{ Token = '-a'; Description = 'Treat the name as a Windows account right.' }
-            [pscustomobject]@{ Token = '-c'; Description = 'Treat the name as a Windows service.' }
-            [pscustomobject]@{ Token = '-d'; Description = 'Only process directories or top-level keys.' }
-            [pscustomobject]@{ Token = '-e'; Description = 'Only show explicitly set integrity levels.' }
-            [pscustomobject]@{ Token = '-f'; Description = 'After -p, show full token details; otherwise filter by comma-separated accounts.' }
-            [pscustomobject]@{ Token = '-h'; Description = 'Treat the name as a file or printer share.' }
-            [pscustomobject]@{ Token = '-i'; Description = 'Ignore inherited ACE-only objects when showing full descriptors.' }
-            [pscustomobject]@{ Token = '-k'; Description = 'Treat the name as a registry key.' }
-            [pscustomobject]@{ Token = '-l'; Description = 'Show the full security descriptor.' }
-            [pscustomobject]@{ Token = '-L'; Description = 'Show the full security descriptor in SDDL format.' }
-            [pscustomobject]@{ Token = '-m'; Description = 'Treat the name as an event log.' }
-            [pscustomobject]@{ Token = '-n'; Description = 'Show only objects that have no access.' }
-            [pscustomobject]@{ Token = '-o'; Description = 'Treat the name as an Object Manager namespace object.' }
-            [pscustomobject]@{ Token = '-p'; Description = 'Treat the name as a process name or PID.' }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner.' }
-            [pscustomobject]@{ Token = '-r'; Description = 'Show only objects that have read access.' }
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse.' }
-            [pscustomobject]@{ Token = '-t'; Description = 'After -o, filter by object type; after -p, show threads.' }
-            [pscustomobject]@{ Token = '-u'; Description = 'Suppress errors.' }
-            [pscustomobject]@{ Token = '-v'; Description = 'Verbose output.' }
-            [pscustomobject]@{ Token = '-w'; Description = 'Show only objects that have write access.' }
-            [pscustomobject]@{ Token = '-?'; Description = 'Show AccessChk help.' }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show AccessChk help.' }
+            @{ Token = '-a'; Description = 'Treat the name as a Windows account right.' }
+            @{ Token = '-c'; Description = 'Treat the name as a Windows service.' }
+            @{ Token = '-d'; Description = 'Only process directories or top-level keys.' }
+            @{ Token = '-e'; Description = 'Only show explicitly set integrity levels.' }
+            @{ Token = '-f'; Description = 'After -p, show full token details; otherwise filter by comma-separated accounts.' }
+            @{ Token = '-h'; Description = 'Treat the name as a file or printer share.' }
+            @{ Token = '-i'; Description = 'Ignore inherited ACE-only objects when showing full descriptors.' }
+            @{ Token = '-k'; Description = 'Treat the name as a registry key.' }
+            @{ Token = '-l'; Description = 'Show the full security descriptor.' }
+            @{ Token = '-L'; Description = 'Show the full security descriptor in SDDL format.' }
+            @{ Token = '-m'; Description = 'Treat the name as an event log.' }
+            @{ Token = '-n'; Description = 'Show only objects that have no access.' }
+            @{ Token = '-o'; Description = 'Treat the name as an Object Manager namespace object.' }
+            @{ Token = '-p'; Description = 'Treat the name as a process name or PID.' }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner.' }
+            @{ Token = '-r'; Description = 'Show only objects that have read access.' }
+            @{ Token = '-s'; Description = 'Recurse.' }
+            @{ Token = '-t'; Description = 'After -o, filter by object type; after -p, show threads.' }
+            @{ Token = '-u'; Description = 'Suppress errors.' }
+            @{ Token = '-v'; Description = 'Verbose output.' }
+            @{ Token = '-w'; Description = 'Show only objects that have write access.' }
+            @{ Token = '-?'; Description = 'Show AccessChk help.' }
+            @{ Token = '/?'; Description = 'Show AccessChk help.' }
         )
         ModeTokens          = @('-a', '-c', '-h', '-k', '-m', '-o', '-p')
         ProcessCache        = @()
-        ProcessCacheUpdated = [datetime]::MinValue
+        ProcessCacheUpdated = $null
         ProcessCacheTtl     = 5
         ServiceCache        = @()
-        ServiceCacheUpdated = [datetime]::MinValue
+        ServiceCacheUpdated = $null
         ServiceCacheTtl     = 30
         RegistryRoots       = @(
-            [pscustomobject]@{ Token = 'HKLM\'; ProviderPath = 'Registry::HKEY_LOCAL_MACHINE'; Description = 'HKEY_LOCAL_MACHINE' }
-            [pscustomobject]@{ Token = 'HKCU\'; ProviderPath = 'Registry::HKEY_CURRENT_USER'; Description = 'HKEY_CURRENT_USER' }
-            [pscustomobject]@{ Token = 'HKCR\'; ProviderPath = 'Registry::HKEY_CLASSES_ROOT'; Description = 'HKEY_CLASSES_ROOT' }
-            [pscustomobject]@{ Token = 'HKU\'; ProviderPath = 'Registry::HKEY_USERS'; Description = 'HKEY_USERS' }
-            [pscustomobject]@{ Token = 'HKCC\'; ProviderPath = 'Registry::HKEY_CURRENT_CONFIG'; Description = 'HKEY_CURRENT_CONFIG' }
+            @{ Token = 'HKLM\'; ProviderPath = 'Registry::HKEY_LOCAL_MACHINE'; Description = 'HKEY_LOCAL_MACHINE' }
+            @{ Token = 'HKCU\'; ProviderPath = 'Registry::HKEY_CURRENT_USER'; Description = 'HKEY_CURRENT_USER' }
+            @{ Token = 'HKCR\'; ProviderPath = 'Registry::HKEY_CLASSES_ROOT'; Description = 'HKEY_CLASSES_ROOT' }
+            @{ Token = 'HKU\'; ProviderPath = 'Registry::HKEY_USERS'; Description = 'HKEY_USERS' }
+            @{ Token = 'HKCC\'; ProviderPath = 'Registry::HKEY_CURRENT_CONFIG'; Description = 'HKEY_CURRENT_CONFIG' }
         )
         EventLogNames       = @('Application', 'System', 'Security', 'Setup', 'ForwardedEvents', '*')
         ShareNames          = @('*', 'ADMIN$', 'C$', 'IPC$', '<share>')
@@ -305,8 +305,8 @@ function Get-AccessChkPathCompletions {
 }
 
 function Update-AccessChkProcessCache {
-    $age = (Get-Date) - $script:AccessChkCompletionCatalog.ProcessCacheUpdated
-    if ($script:AccessChkCompletionCatalog.ProcessCache.Count -gt 0 -and $age.TotalSeconds -lt $script:AccessChkCompletionCatalog.ProcessCacheTtl) {
+    $lastUpdated = $script:AccessChkCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated -and $script:AccessChkCompletionCatalog.ProcessCache.Count -gt 0 -and ((Get-Date) - $lastUpdated).TotalSeconds -lt $script:AccessChkCompletionCatalog.ProcessCacheTtl) {
         return
     }
 
@@ -327,8 +327,8 @@ function Update-AccessChkProcessCache {
 }
 
 function Update-AccessChkServiceCache {
-    $age = (Get-Date) - $script:AccessChkCompletionCatalog.ServiceCacheUpdated
-    if ($script:AccessChkCompletionCatalog.ServiceCache.Count -gt 0 -and $age.TotalSeconds -lt $script:AccessChkCompletionCatalog.ServiceCacheTtl) {
+    $lastUpdated = $script:AccessChkCompletionCatalog.ServiceCacheUpdated
+    if ($null -ne $lastUpdated -and $script:AccessChkCompletionCatalog.ServiceCache.Count -gt 0 -and ((Get-Date) - $lastUpdated).TotalSeconds -lt $script:AccessChkCompletionCatalog.ServiceCacheTtl) {
         return
     }
 

@@ -3,46 +3,48 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PsLogListCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
-    $script:PsLogListCompletionCatalog = @{
-        Switches = @(
-            [pscustomobject]@{ Token = '-u'; Description = 'Optional user name for remote login.'; TakesValue = $true; ValueKind = 'User' }
-            [pscustomobject]@{ Token = '-p'; Description = 'Optional password for remote login.'; TakesValue = $true; ValueKind = 'Password' }
-            [pscustomobject]@{ Token = '-a'; Description = 'Dump records timestamped after the specified date.'; TakesValue = $true; ValueKind = 'Date' }
-            [pscustomobject]@{ Token = '-b'; Description = 'Dump records timestamped before the specified date.'; TakesValue = $true; ValueKind = 'Date' }
-            [pscustomobject]@{ Token = '-c'; Description = 'Clear event log after displaying it.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-d'; Description = 'Display only records from the previous n days.'; TakesValue = $true; ValueKind = 'Number' }
-            [pscustomobject]@{ Token = '-e'; Description = 'Exclude the specified event IDs.'; TakesValue = $true; ValueKind = 'Ids' }
-            [pscustomobject]@{ Token = '-f'; Description = 'Filter event types by starting letter.'; TakesValue = $true; ValueKind = 'Filter' }
-            [pscustomobject]@{ Token = '-g'; Description = 'Export an event log as an evt file.'; TakesValue = $true; ValueKind = 'ExportPath' }
-            [pscustomobject]@{ Token = '-h'; Description = 'Display only records from the previous n hours.'; TakesValue = $true; ValueKind = 'Number' }
-            [pscustomobject]@{ Token = '-i'; Description = 'Show only the specified event IDs.'; TakesValue = $true; ValueKind = 'Ids' }
-            [pscustomobject]@{ Token = '-l'; Description = 'Dump the contents of the specified saved event log file.'; TakesValue = $true; ValueKind = 'SavedLogPath' }
-            [pscustomobject]@{ Token = '-m'; Description = 'Display only records from the previous n minutes.'; TakesValue = $true; ValueKind = 'Number' }
-            [pscustomobject]@{ Token = '-n'; Description = 'Display only the n most recent records.'; TakesValue = $true; ValueKind = 'Number' }
-            [pscustomobject]@{ Token = '-o'; Description = 'Show only records from the specified event sources.'; TakesValue = $true; ValueKind = 'Sources' }
-            [pscustomobject]@{ Token = '-q'; Description = 'Omit records from the specified event sources.'; TakesValue = $true; ValueKind = 'Sources' }
-            [pscustomobject]@{ Token = '-r'; Description = 'Dump from least recent to most recent.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-s'; Description = 'List records on one line each with delimited fields.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-t'; Description = 'Delimiter used with -s. Use "\t" for tab.'; TakesValue = $true; ValueKind = 'Delimiter' }
-            [pscustomobject]@{ Token = '-w'; Description = 'Wait for new events and dump them as they are generated (local only).'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-x'; Description = 'Dump extended data.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-z'; Description = 'List event logs registered on the specified system.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-?'; Description = 'Display PsLogList help.'; TakesValue = $false; Terminal = $true }
-            [pscustomobject]@{ Token = '/?'; Description = 'Display PsLogList help.'; TakesValue = $false; Terminal = $true }
-        )
-        NumberHints    = @('1', '5', '10', '30', '60', '100')
-        DateHints      = @('<mm/dd/yy>', '01/01/24', '12/31/24')
-        FilterHints    = @('e', 'w', 'we', 'i', 's', 'se')
-        DelimiterHints = @(',', ';', '|', ':', '\t')
-        EventIdHints   = @('1000', '4624', '4625', '6005', '6006', '<event-id>')
-        StaticLogHints = @('System', 'Application', 'Security')
-        DynamicCache   = @{
-            LastUpdated = [datetime]::MinValue
-            TtlSeconds  = 120
-            LogNames    = @()
-            Sources     = @()
+function Initialize-PsLogListCompletionCatalog {
+    if (-not (Get-Variable -Name PsLogListCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+        $script:PsLogListCompletionCatalog = @{
+            Switches = @(
+                [pscustomobject]@{ Token = '-u'; Description = 'Optional user name for remote login.'; TakesValue = $true; ValueKind = 'User' }
+                [pscustomobject]@{ Token = '-p'; Description = 'Optional password for remote login.'; TakesValue = $true; ValueKind = 'Password' }
+                [pscustomobject]@{ Token = '-a'; Description = 'Dump records timestamped after the specified date.'; TakesValue = $true; ValueKind = 'Date' }
+                [pscustomobject]@{ Token = '-b'; Description = 'Dump records timestamped before the specified date.'; TakesValue = $true; ValueKind = 'Date' }
+                [pscustomobject]@{ Token = '-c'; Description = 'Clear event log after displaying it.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-d'; Description = 'Display only records from the previous n days.'; TakesValue = $true; ValueKind = 'Number' }
+                [pscustomobject]@{ Token = '-e'; Description = 'Exclude the specified event IDs.'; TakesValue = $true; ValueKind = 'Ids' }
+                [pscustomobject]@{ Token = '-f'; Description = 'Filter event types by starting letter.'; TakesValue = $true; ValueKind = 'Filter' }
+                [pscustomobject]@{ Token = '-g'; Description = 'Export an event log as an evt file.'; TakesValue = $true; ValueKind = 'ExportPath' }
+                [pscustomobject]@{ Token = '-h'; Description = 'Display only records from the previous n hours.'; TakesValue = $true; ValueKind = 'Number' }
+                [pscustomobject]@{ Token = '-i'; Description = 'Show only the specified event IDs.'; TakesValue = $true; ValueKind = 'Ids' }
+                [pscustomobject]@{ Token = '-l'; Description = 'Dump the contents of the specified saved event log file.'; TakesValue = $true; ValueKind = 'SavedLogPath' }
+                [pscustomobject]@{ Token = '-m'; Description = 'Display only records from the previous n minutes.'; TakesValue = $true; ValueKind = 'Number' }
+                [pscustomobject]@{ Token = '-n'; Description = 'Display only the n most recent records.'; TakesValue = $true; ValueKind = 'Number' }
+                [pscustomobject]@{ Token = '-o'; Description = 'Show only records from the specified event sources.'; TakesValue = $true; ValueKind = 'Sources' }
+                [pscustomobject]@{ Token = '-q'; Description = 'Omit records from the specified event sources.'; TakesValue = $true; ValueKind = 'Sources' }
+                [pscustomobject]@{ Token = '-r'; Description = 'Dump from least recent to most recent.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-s'; Description = 'List records on one line each with delimited fields.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-t'; Description = 'Delimiter used with -s. Use "\t" for tab.'; TakesValue = $true; ValueKind = 'Delimiter' }
+                [pscustomobject]@{ Token = '-w'; Description = 'Wait for new events and dump them as they are generated (local only).'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-x'; Description = 'Dump extended data.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-z'; Description = 'List event logs registered on the specified system.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false }
+                [pscustomobject]@{ Token = '-?'; Description = 'Display PsLogList help.'; TakesValue = $false; Terminal = $true }
+                [pscustomobject]@{ Token = '/?'; Description = 'Display PsLogList help.'; TakesValue = $false; Terminal = $true }
+            )
+            NumberHints    = @('1', '5', '10', '30', '60', '100')
+            DateHints      = @('<mm/dd/yy>', '01/01/24', '12/31/24')
+            FilterHints    = @('e', 'w', 'we', 'i', 's', 'se')
+            DelimiterHints = @(',', ';', '|', ':', '\t')
+            EventIdHints   = @('1000', '4624', '4625', '6005', '6006', '<event-id>')
+            StaticLogHints = @('System', 'Application', 'Security')
+            DynamicCache   = @{
+                LastUpdated = [datetime]::MinValue
+                TtlSeconds  = 120
+                LogNames    = @()
+                Sources     = @()
+            }
         }
     }
 }
@@ -219,6 +221,8 @@ function Complete-PsLogList {
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
+
+    Initialize-PsLogListCompletionCatalog
 
     $state = Get-PsLogListArgumentState -CommandAst $CommandAst -WordToComplete $WordToComplete -CursorPosition $CursorPosition
     $currentWord = $state.CurrentWord

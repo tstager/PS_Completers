@@ -3,7 +3,11 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name AutorunscCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+function Initialize-AutorunscCompletionCatalog {
+    if (Get-Variable -Name AutorunscCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+        return
+    }
+
     $script:AutorunscCompletionCatalog = @{
         Switches = @(
             [pscustomobject]@{ Token = '-a'; Description = 'Autostart entry selection filter.'; TakesValue = $true; ValueKind = 'Selection' }
@@ -362,6 +366,8 @@ function Complete-Autorunsc {
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
+
+    Initialize-AutorunscCompletionCatalog
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
     if ($cursorPosition -gt $line.Length) {

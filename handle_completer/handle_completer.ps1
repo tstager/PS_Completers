@@ -11,7 +11,7 @@ if (-not (Get-Variable -Name HandleCompletionCatalog -Scope Script -ErrorAction 
         SearchPlaceholder       = '<name-fragment>'
         HandleValuePlaceholder  = '<hex-handle>'
         ProcessEntries          = @()
-        ProcessCacheUpdated     = [datetime]::MinValue
+        ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
     }
 }
@@ -192,9 +192,11 @@ function Initialize-HandleCompletionCatalog {
 }
 
 function Update-HandleProcessCache {
-    $cacheAge = (Get-Date) - $script:HandleCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:HandleCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    if ($null -ne $script:HandleCompletionCatalog.ProcessCacheUpdated) {
+        $cacheAge = (Get-Date) - $script:HandleCompletionCatalog.ProcessCacheUpdated
+        if ($cacheAge.TotalSeconds -lt $script:HandleCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

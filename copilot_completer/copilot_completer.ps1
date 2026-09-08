@@ -22,11 +22,11 @@ if (-not (Get-Variable -Name CopilotCompletionCache -Scope Script -ErrorAction S
         ExecutablePath             = $null
         ExecutablePathProbed       = $false
         Models                     = @()
-        ModelsLoadedAt             = [datetime]::MinValue
+        ModelsLoadedAt             = $null
         Marketplaces               = @()
-        MarketplacesLoadedAt       = [datetime]::MinValue
+        MarketplacesLoadedAt       = $null
         InstalledPlugins           = @()
-        InstalledPluginsLoadedAt   = [datetime]::MinValue
+        InstalledPluginsLoadedAt   = $null
         ModelCacheTtlSeconds       = 300
         RuntimeCacheTtlSeconds     = 60
         HelpTopics                 = @('commands', 'config', 'environment', 'logging', 'permissions', 'providers')
@@ -163,11 +163,11 @@ function Invoke-CopilotCapture {
 
 function Test-CopilotCacheFresh {
     param(
-        [datetime]$LoadedAt,
+        [nullable[datetime]]$LoadedAt,
         [int]$TtlSeconds
     )
 
-    if ($LoadedAt -eq [datetime]::MinValue) {
+    if ($null -eq $LoadedAt) {
         return $false
     }
 

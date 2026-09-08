@@ -145,8 +145,8 @@ they would otherwise conflict with global aliases:
 
 - **Self-contained** single `.ps1` file; no external dependencies.
 - **`Set-StrictMode -Version Latest`** throughout.
-- **Idempotent** via a `$script:QwenCompleterRegistered` guard; safe to
-  dot-source multiple times.
+- **Idempotent**: re-registration replaces the same completer, so the script is
+  safe to dot-source multiple times.
 - **Static data** for all flags and subcommands (no runtime help parsing).
   This avoids latency on every keystroke and is resilient to broken help
   commands (`extensions new`, `hooks`).

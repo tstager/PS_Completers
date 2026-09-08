@@ -60,7 +60,7 @@ if (-not (Get-Variable -Name ProcDumpCompletionCatalog -Scope Script -ErrorActio
             '/?'         = 'Display ProcDump help.'
         }
         ProcessEntries         = @()
-        ProcessCacheUpdated    = [datetime]::MinValue
+        ProcessCacheUpdated    = $null
         ProcessCacheTtlSeconds = 2
     }
 }
@@ -128,9 +128,12 @@ function Remove-ProcDumpOuterQuotes {
 }
 
 function Update-ProcDumpProcessCache {
-    $cacheAge = (Get-Date) - $script:ProcDumpCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:ProcDumpCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:ProcDumpCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:ProcDumpCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

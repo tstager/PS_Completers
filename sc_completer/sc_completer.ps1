@@ -52,7 +52,7 @@ if (-not (Get-Variable -Name ScCompletionCatalog -Scope Script -ErrorAction Sile
 
 if (-not (Get-Variable -Name ScServiceCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:ScServiceCache = @{
-        LastUpdated  = [datetime]::MinValue
+        LastUpdated  = $null
         TtlSeconds   = 30
         ServiceNames = @()
         DisplayNames = @()
@@ -296,9 +296,11 @@ function Initialize-ScCompletionCatalog {
 }
 
 function Update-ScServiceCache {
-    $age = (Get-Date) - $script:ScServiceCache.LastUpdated
-    if ($script:ScServiceCache.ServiceNames.Count -gt 0 -and $age.TotalSeconds -lt $script:ScServiceCache.TtlSeconds) {
-        return
+    if ($script:ScServiceCache.ServiceNames.Count -gt 0 -and $null -ne $script:ScServiceCache.LastUpdated) {
+        $age = (Get-Date) - $script:ScServiceCache.LastUpdated
+        if ($age.TotalSeconds -lt $script:ScServiceCache.TtlSeconds) {
+            return
+        }
     }
 
     try {

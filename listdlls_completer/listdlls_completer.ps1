@@ -9,7 +9,7 @@ if (-not (Get-Variable -Name ListdllsCompletionCatalog -Scope Script -ErrorActio
         SwitchOrder             = @('-r', '-v', '-u', '-d', '-?', '/?', '--help')
         SwitchInfo              = @{}
         ProcessEntries          = @()
-        ProcessCacheUpdated     = [datetime]::MinValue
+        ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
         DllPlaceholder          = '<dll-name>'
     }
@@ -179,9 +179,12 @@ function Initialize-ListdllsCompletionCatalog {
 }
 
 function Update-ListdllsProcessCache {
-    $cacheAge = (Get-Date) - $script:ListdllsCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:ListdllsCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:ListdllsCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:ListdllsCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

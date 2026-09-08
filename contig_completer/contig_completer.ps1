@@ -11,15 +11,15 @@ if (-not (Get-Variable -Name ContigCompletionCatalog -Scope Script -ErrorAction 
         )
         LengthHints   = @('65536', '1048576', '10485760', '1073741824')
         RootSwitches  = @(
-            [pscustomobject]@{ Token = '-a'; Description = 'Analyze fragmentation for an existing file.'; Modes = @('existing') }
-            [pscustomobject]@{ Token = '-f'; Description = 'Analyze free-space fragmentation on a drive.'; Modes = @('root', 'existing') }
-            [pscustomobject]@{ Token = '-l'; Description = 'Set valid data length for quick file creation (with -n).' ; Modes = @('new') }
-            [pscustomobject]@{ Token = '-n'; Description = 'Create a new file.'; Modes = @('root', 'existing') }
-            [pscustomobject]@{ Token = '-q'; Description = 'Quiet mode.'; Modes = @('existing') }
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse subdirectories.'; Modes = @('existing') }
-            [pscustomobject]@{ Token = '-v'; Description = 'Verbose output.'; Modes = @('existing', 'new', 'free') }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; Modes = @('existing', 'new', 'free', 'root') }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show Contig help.'; Modes = @('existing', 'new', 'free', 'root') }
+            @{ Token = '-a'; Description = 'Analyze fragmentation for an existing file.'; Modes = @('existing') }
+            @{ Token = '-f'; Description = 'Analyze free-space fragmentation on a drive.'; Modes = @('root', 'existing') }
+            @{ Token = '-l'; Description = 'Set valid data length for quick file creation (with -n).' ; Modes = @('new') }
+            @{ Token = '-n'; Description = 'Create a new file.'; Modes = @('root', 'existing') }
+            @{ Token = '-q'; Description = 'Quiet mode.'; Modes = @('existing') }
+            @{ Token = '-s'; Description = 'Recurse subdirectories.'; Modes = @('existing') }
+            @{ Token = '-v'; Description = 'Verbose output.'; Modes = @('existing', 'new', 'free') }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; Modes = @('existing', 'new', 'free', 'root') }
+            @{ Token = '/?'; Description = 'Show Contig help.'; Modes = @('existing', 'new', 'free', 'root') }
         )
     }
 }

@@ -11,7 +11,7 @@ if (-not (Get-Variable -Name IpconfigCompletionCatalog -Scope Script -ErrorActio
         AdapterValueOptions   = @('/renew', '/release', '/renew6', '/release6', '/showclassid', '/setclassid', '/showclassid6', '/setclassid6')
         FreeFormClassIdOptions = @('/setclassid', '/setclassid6')
         AdapterCache          = @()
-        AdapterCacheUpdated   = [datetime]::MinValue
+        AdapterCacheUpdated   = $null
         AdapterCacheTtlSeconds = 30
     }
 }
@@ -189,7 +189,7 @@ function Initialize-IpconfigCompletionCatalog {
 
 function Get-IpconfigAdapterNames {
     $now = Get-Date
-    if ($script:IpconfigCompletionCatalog.AdapterCacheUpdated -gt [datetime]::MinValue -and
+    if ($null -ne $script:IpconfigCompletionCatalog.AdapterCacheUpdated -and
         $now -lt $script:IpconfigCompletionCatalog.AdapterCacheUpdated.AddSeconds($script:IpconfigCompletionCatalog.AdapterCacheTtlSeconds)) {
         return @($script:IpconfigCompletionCatalog.AdapterCache)
     }

@@ -6,16 +6,16 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name StringsCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
     $script:StringsCompletionCatalog = @{
         Switches = @(
-            [pscustomobject]@{ Token = '-a'; Description = 'Ascii-only search.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-b'; Description = 'Bytes of file to scan.'; TakesValue = $true; ValueKind = 'Bytes' }
-            [pscustomobject]@{ Token = '-f'; Description = 'File offset at which to start scanning.'; TakesValue = $true; ValueKind = 'Offset' }
-            [pscustomobject]@{ Token = '-n'; Description = 'Minimum string length.'; TakesValue = $true; ValueKind = 'Length' }
-            [pscustomobject]@{ Token = '-o'; Description = 'Print offset where the string was located.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-u'; Description = 'Unicode-only search.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '-?'; Description = 'Show Strings help.'; TakesValue = $false }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show Strings help.'; TakesValue = $false }
+            @{ Token = '-a'; Description = 'Ascii-only search.'; TakesValue = $false }
+            @{ Token = '-b'; Description = 'Bytes of file to scan.'; TakesValue = $true; ValueKind = 'Bytes' }
+            @{ Token = '-f'; Description = 'File offset at which to start scanning.'; TakesValue = $true; ValueKind = 'Offset' }
+            @{ Token = '-n'; Description = 'Minimum string length.'; TakesValue = $true; ValueKind = 'Length' }
+            @{ Token = '-o'; Description = 'Print offset where the string was located.'; TakesValue = $false }
+            @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
+            @{ Token = '-u'; Description = 'Unicode-only search.'; TakesValue = $false }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
+            @{ Token = '-?'; Description = 'Show Strings help.'; TakesValue = $false }
+            @{ Token = '/?'; Description = 'Show Strings help.'; TakesValue = $false }
         )
         ByteHints   = @('256', '512', '1024', '4096', '65536')
         OffsetHints = @('0', '512', '4096', '65536', '0x1000')

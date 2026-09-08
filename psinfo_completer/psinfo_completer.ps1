@@ -3,7 +3,9 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PsInfoCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+function Initialize-PsInfoCompletionCatalog {
+    if (Get-Variable -Name PsInfoCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) { return }
+
     $script:PsInfoCompletionCatalog = @{
         Switches = @(
             [pscustomobject]@{ Token = '-u'; Description = 'Optional user name for login to the remote computer.'; TakesValue = $true; ValueKind = 'User' }
@@ -126,6 +128,8 @@ function Complete-PsInfo {
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
+
+    Initialize-PsInfoCompletionCatalog
 
     $state = Get-PsInfoArgumentState -CommandAst $CommandAst -WordToComplete $WordToComplete -CursorPosition $CursorPosition
     $currentWord = $state.CurrentWord

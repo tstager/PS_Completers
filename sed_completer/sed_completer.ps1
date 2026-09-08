@@ -12,10 +12,10 @@ if (-not (Get-Variable -Name SedCompletionCatalog -Scope Script -ErrorAction Sil
         LocalesInitialized = $false
         LocaleEntries      = @()
         ScriptHints        = @(
-            [pscustomobject]@{ Text = 's///'; ToolTip = 'Substitute text' }
-            [pscustomobject]@{ Text = 'p'; ToolTip = 'Print the current pattern space' }
-            [pscustomobject]@{ Text = 'd'; ToolTip = 'Delete the current pattern space' }
-            [pscustomobject]@{ Text = 'q'; ToolTip = 'Quit sed' }
+            @{ Text = 's///'; ToolTip = 'Substitute text' }
+            @{ Text = 'p'; ToolTip = 'Print the current pattern space' }
+            @{ Text = 'd'; ToolTip = 'Delete the current pattern space' }
+            @{ Text = 'q'; ToolTip = 'Quit sed' }
         )
         LineLengthHints    = @('40', '70', '72', '80', '120')
         InPlaceSuffixHints = @('.bak', '.orig', '.old', '~')

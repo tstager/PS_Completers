@@ -33,10 +33,10 @@ if (-not (Get-Variable -Name RegDelNullCompletionCatalog -Scope Script -ErrorAct
             'HKCC' = 'Registry::HKEY_CURRENT_CONFIG'
         }
         Switches = @(
-            [pscustomobject]@{ Token = '-s'; Description = 'Recurse into subkeys.' }
-            [pscustomobject]@{ Token = '-y'; Description = 'Suppress confirmation before deleting null-embedded keys.' }
-            [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.' }
-            [pscustomobject]@{ Token = '/?'; Description = 'Show RegDelNull help.' }
+            @{ Token = '-s'; Description = 'Recurse into subkeys.' }
+            @{ Token = '-y'; Description = 'Suppress confirmation before deleting null-embedded keys.' }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.' }
+            @{ Token = '/?'; Description = 'Show RegDelNull help.' }
         )
     }
 }

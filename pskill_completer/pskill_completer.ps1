@@ -16,7 +16,7 @@ if (-not (Get-Variable -Name PsKillCompletionCatalog -Scope Script -ErrorAction 
             '--help'    = 'Display pskill help.'
         }
         ProcessEntries          = @()
-        ProcessCacheUpdated     = [datetime]::MinValue
+        ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
     }
 }
@@ -84,9 +84,12 @@ function Remove-PsKillOuterQuotes {
 }
 
 function Update-PsKillProcessCache {
-    $cacheAge = (Get-Date) - $script:PsKillCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:PsKillCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:PsKillCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:PsKillCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

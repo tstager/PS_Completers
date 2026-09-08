@@ -13,7 +13,7 @@ if (-not (Get-Variable -Name PslistCompletionCatalog -Scope Script -ErrorAction 
         SampleSecondsHints      = @('1', '2', '5', '10')
         RefreshSecondsHints     = @('1', '2', '5', '10')
         ProcessEntries          = @()
-        ProcessCacheUpdated     = [datetime]::MinValue
+        ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
     }
 }
@@ -380,9 +380,11 @@ function Get-PslistNumericValueCompletions {
 }
 
 function Update-PslistProcessCache {
-    $cacheAge = (Get-Date) - $script:PslistCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:PslistCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    if ($null -ne $script:PslistCompletionCatalog.ProcessCacheUpdated) {
+        $cacheAge = (Get-Date) - $script:PslistCompletionCatalog.ProcessCacheUpdated
+        if ($cacheAge.TotalSeconds -lt $script:PslistCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

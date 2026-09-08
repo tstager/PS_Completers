@@ -6,7 +6,7 @@
     --flag=value inline syntax.  Dot-source this file from your $PROFILE to
     enable completion for all three invocation forms.
 
-    Safe to source multiple times (idempotent registration via script-scoped guard).
+    Safe to source multiple times (re-registration simply replaces the completer).
 .EXAMPLE
     . "$PSScriptRoot\qwen_completer.ps1"
 #>
@@ -920,19 +920,9 @@ function Complete-QwenNative {
 
 #region -- Registration -------------------------------------------------------------------------
 
-if (-not ((Get-Variable -Name QwenCompleterRegistered -Scope Script -ErrorAction SilentlyContinue) -and $script:QwenCompleterRegistered)) {
-    try {
-        Register-ArgumentCompleter -CommandName @('qwen', 'qwen.cmd', 'qwen.ps1') -Native -ScriptBlock {
-            param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
-            Complete-QwenNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
-        }
-
-        $script:QwenCompleterRegistered = $true
-    }
-    catch {
-        $script:QwenCompleterRegistered = $false
-        throw
-    }
+Register-ArgumentCompleter -CommandName @('qwen', 'qwen.cmd', 'qwen.ps1') -Native -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
+    Complete-QwenNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
 }
 
 #endregion

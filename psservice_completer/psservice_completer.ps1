@@ -7,33 +7,33 @@ if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorActi
     $script:PsServiceCompletionCatalog = @{
         CommandName      = $null
         TopLevelCommands = @(
-            [pscustomobject]@{ Name = 'query'; Description = 'Queries the status of a service.' }
-            [pscustomobject]@{ Name = 'config'; Description = 'Queries the configuration.' }
-            [pscustomobject]@{ Name = 'setconfig'; Description = 'Sets the configuration.' }
-            [pscustomobject]@{ Name = 'start'; Description = 'Starts a service.' }
-            [pscustomobject]@{ Name = 'stop'; Description = 'Stops a service.' }
-            [pscustomobject]@{ Name = 'restart'; Description = 'Stops and then restarts a service.' }
-            [pscustomobject]@{ Name = 'pause'; Description = 'Pauses a service.' }
-            [pscustomobject]@{ Name = 'cont'; Description = 'Continues a paused service.' }
-            [pscustomobject]@{ Name = 'depend'; Description = 'Enumerates the services that depend on the specified service.' }
-            [pscustomobject]@{ Name = 'find'; Description = 'Searches for an instance of a service on the network.' }
-            [pscustomobject]@{ Name = 'security'; Description = 'Reports the security permissions assigned to a service.' }
+            @{ Name = 'query'; Description = 'Queries the status of a service.' }
+            @{ Name = 'config'; Description = 'Queries the configuration.' }
+            @{ Name = 'setconfig'; Description = 'Sets the configuration.' }
+            @{ Name = 'start'; Description = 'Starts a service.' }
+            @{ Name = 'stop'; Description = 'Stops a service.' }
+            @{ Name = 'restart'; Description = 'Stops and then restarts a service.' }
+            @{ Name = 'pause'; Description = 'Pauses a service.' }
+            @{ Name = 'cont'; Description = 'Continues a paused service.' }
+            @{ Name = 'depend'; Description = 'Enumerates the services that depend on the specified service.' }
+            @{ Name = 'find'; Description = 'Searches for an instance of a service on the network.' }
+            @{ Name = 'security'; Description = 'Reports the security permissions assigned to a service.' }
         )
         RootSwitches     = @(
-            [pscustomobject]@{ Name = '-?'; Description = 'Show help.' }
-            [pscustomobject]@{ Name = '/?'; Description = 'Show help.' }
-            [pscustomobject]@{ Name = '-nobanner'; Description = 'Suppress the startup banner and copyright message.' }
-            [pscustomobject]@{ Name = '-u'; Description = 'Username for the remote-auth preamble.' }
-            [pscustomobject]@{ Name = '-p'; Description = 'Password for the remote-auth preamble.' }
+            @{ Name = '-?'; Description = 'Show help.' }
+            @{ Name = '/?'; Description = 'Show help.' }
+            @{ Name = '-nobanner'; Description = 'Suppress the startup banner and copyright message.' }
+            @{ Name = '-u'; Description = 'Username for the remote-auth preamble.' }
+            @{ Name = '-p'; Description = 'Password for the remote-auth preamble.' }
         )
         CommandSwitches  = @(
-            [pscustomobject]@{ Name = '-?'; Description = 'Show help for the selected command.' }
-            [pscustomobject]@{ Name = '/?'; Description = 'Show help for the selected command.' }
+            @{ Name = '-?'; Description = 'Show help for the selected command.' }
+            @{ Name = '/?'; Description = 'Show help for the selected command.' }
         )
         QuerySwitches    = @(
-            [pscustomobject]@{ Name = '-g'; Description = 'Restrict query results to a load-order group.' }
-            [pscustomobject]@{ Name = '-t'; Description = 'Restrict query results by type.' }
-            [pscustomobject]@{ Name = '-s'; Description = 'Restrict query results by state.' }
+            @{ Name = '-g'; Description = 'Restrict query results to a load-order group.' }
+            @{ Name = '-t'; Description = 'Restrict query results by type.' }
+            @{ Name = '-s'; Description = 'Restrict query results by state.' }
         )
         QueryTypeValues  = @('driver', 'service', 'interactive', 'all')
         QueryStateValues = @('active', 'inactive', 'all')
@@ -43,7 +43,7 @@ if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorActi
 
 if (-not (Get-Variable -Name PsServiceServiceCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:PsServiceServiceCache = @{
-        LastUpdated  = [datetime]::MinValue
+        LastUpdated  = $null
         TtlSeconds   = 30
         ServiceNames = @()
         DisplayNames = @()
@@ -154,9 +154,12 @@ function Get-PsServiceUniqueCompletions {
 }
 
 function Update-PsServiceServiceCache {
-    $age = (Get-Date) - $script:PsServiceServiceCache.LastUpdated
-    if ($script:PsServiceServiceCache.ServiceNames.Count -gt 0 -and $age.TotalSeconds -lt $script:PsServiceServiceCache.TtlSeconds) {
-        return
+    $lastUpdated = $script:PsServiceServiceCache.LastUpdated
+    if ($null -ne $lastUpdated) {
+        $age = (Get-Date) - $lastUpdated
+        if ($script:PsServiceServiceCache.ServiceNames.Count -gt 0 -and $age.TotalSeconds -lt $script:PsServiceServiceCache.TtlSeconds) {
+            return
+        }
     }
 
     try {

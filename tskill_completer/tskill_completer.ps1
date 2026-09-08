@@ -8,10 +8,10 @@ if (-not (Get-Variable -Name TskillCompletionCatalog -Scope Script -ErrorAction 
     $script:TskillCompletionCatalog = @{
         SwitchTokens             = @('/SERVER:', '/ID:', '/A', '/V', '/?')
         ProcessEntries           = @()
-        ProcessCacheUpdated      = [datetime]::MinValue
+        ProcessCacheUpdated      = $null
         ProcessCacheTtlSeconds   = 2
         SessionIds               = @()
-        SessionCacheUpdated      = [datetime]::MinValue
+        SessionCacheUpdated      = $null
         SessionCacheTtlSeconds   = 20
     }
 }
@@ -77,9 +77,12 @@ function Get-TskillCurrentToken {
 }
 
 function Update-TskillProcessCache {
-    $cacheAge = (Get-Date) - $script:TskillCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TskillCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:TskillCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TskillCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -121,9 +124,12 @@ function Update-TskillProcessCache {
 }
 
 function Update-TskillSessionIdCache {
-    $cacheAge = (Get-Date) - $script:TskillCompletionCatalog.SessionCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TskillCompletionCatalog.SessionCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:TskillCompletionCatalog.SessionCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TskillCompletionCatalog.SessionCacheTtlSeconds) {
+            return
+        }
     }
 
     $lines = @()

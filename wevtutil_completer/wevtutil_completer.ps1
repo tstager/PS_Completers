@@ -12,9 +12,9 @@ if (-not (Get-Variable -Name WevtutilCompletionCatalog -Scope Script -ErrorActio
         ValueHintsByCommand        = @{}
         PathOptions                = @{}
         LogNamesCache              = @()
-        LogNamesCacheUpdated       = [datetime]::MinValue
+        LogNamesCacheUpdated       = $null
         PublisherNamesCache        = @()
-        PublisherNamesCacheUpdated = [datetime]::MinValue
+        PublisherNamesCacheUpdated = $null
     }
 }
 
@@ -521,9 +521,12 @@ function Get-WevtutilAllowedExtensionsForPositionalKind {
 }
 
 function Update-WevtutilLogNameCache {
-    $cacheAge = (Get-Date) - $script:WevtutilCompletionCatalog.LogNamesCacheUpdated
-    if ($cacheAge.TotalSeconds -lt 120 -and $script:WevtutilCompletionCatalog.LogNamesCache.Count -gt 0) {
-        return
+    $lastUpdated = $script:WevtutilCompletionCatalog.LogNamesCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt 120 -and $script:WevtutilCompletionCatalog.LogNamesCache.Count -gt 0) {
+            return
+        }
     }
 
     if (-not (Test-WevtutilCommandAvailable)) {
@@ -556,9 +559,12 @@ function Get-WevtutilLogNameCompletions {
 }
 
 function Update-WevtutilPublisherNameCache {
-    $cacheAge = (Get-Date) - $script:WevtutilCompletionCatalog.PublisherNamesCacheUpdated
-    if ($cacheAge.TotalSeconds -lt 120 -and $script:WevtutilCompletionCatalog.PublisherNamesCache.Count -gt 0) {
-        return
+    $lastUpdated = $script:WevtutilCompletionCatalog.PublisherNamesCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt 120 -and $script:WevtutilCompletionCatalog.PublisherNamesCache.Count -gt 0) {
+            return
+        }
     }
 
     if (-not (Test-WevtutilCommandAvailable)) {

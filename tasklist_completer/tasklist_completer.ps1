@@ -14,19 +14,19 @@ if (-not (Get-Variable -Name TasklistCompletionCatalog -Scope Script -ErrorActio
         FilterOperatorsByName  = @{}
         FilterValueHintsByName = @{}
         RuntimeSnapshot        = @()
-        RuntimeSnapshotUpdated = [datetime]::MinValue
+        RuntimeSnapshotUpdated = $null
         RuntimeSnapshotTtlSeconds = 15
         UserNames             = @()
-        UserNamesUpdated      = [datetime]::MinValue
+        UserNamesUpdated      = $null
         UserNamesTtlSeconds   = 30
         ServiceNames          = @()
-        ServiceNamesUpdated   = [datetime]::MinValue
+        ServiceNamesUpdated   = $null
         ServiceNamesTtlSeconds = 60
         WindowTitles          = @()
-        WindowTitlesUpdated   = [datetime]::MinValue
+        WindowTitlesUpdated   = $null
         WindowTitlesTtlSeconds = 10
         ModuleNames           = @()
-        ModuleNamesUpdated    = [datetime]::MinValue
+        ModuleNamesUpdated    = $null
         ModuleNamesTtlSeconds = 30
     }
 }
@@ -312,9 +312,12 @@ function Initialize-TasklistCompletionCatalog {
 }
 
 function Update-TasklistRuntimeSnapshotCache {
-    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.RuntimeSnapshotTtlSeconds) {
-        return
+    $lastUpdated = $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.RuntimeSnapshotTtlSeconds) {
+            return
+        }
     }
 
     $csvLines = @(& tasklist.exe '/FO' 'CSV' '/NH' 2>$null)
@@ -334,9 +337,12 @@ function Update-TasklistRuntimeSnapshotCache {
 }
 
 function Update-TasklistUserNameCache {
-    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.UserNamesUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.UserNamesTtlSeconds) {
-        return
+    $lastUpdated = $script:TasklistCompletionCatalog.UserNamesUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.UserNamesTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -360,9 +366,12 @@ function Update-TasklistUserNameCache {
 }
 
 function Update-TasklistServiceNameCache {
-    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.ServiceNamesUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ServiceNamesTtlSeconds) {
-        return
+    $lastUpdated = $script:TasklistCompletionCatalog.ServiceNamesUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ServiceNamesTtlSeconds) {
+            return
+        }
     }
 
     $serviceNames = @(
@@ -376,9 +385,12 @@ function Update-TasklistServiceNameCache {
 }
 
 function Update-TasklistWindowTitleCache {
-    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.WindowTitlesUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.WindowTitlesTtlSeconds) {
-        return
+    $lastUpdated = $script:TasklistCompletionCatalog.WindowTitlesUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.WindowTitlesTtlSeconds) {
+            return
+        }
     }
 
     $windowTitles = @(
@@ -393,9 +405,12 @@ function Update-TasklistWindowTitleCache {
 }
 
 function Update-TasklistModuleNameCache {
-    $cacheAge = (Get-Date) - $script:TasklistCompletionCatalog.ModuleNamesUpdated
-    if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ModuleNamesTtlSeconds) {
-        return
+    $lastUpdated = $script:TasklistCompletionCatalog.ModuleNamesUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TasklistCompletionCatalog.ModuleNamesTtlSeconds) {
+            return
+        }
     }
 
     $moduleNames = @(

@@ -10,7 +10,7 @@ if (-not (Get-Variable -Name SchtasksCompletionCatalog -Scope Script -ErrorActio
         OptionTokensByKey    = @{}
         ValueHintsByOption   = @{}
         TaskNameCache        = @()
-        TaskNameCacheUpdated = [datetime]::MinValue
+        TaskNameCacheUpdated = $null
     }
 }
 
@@ -197,9 +197,12 @@ function Get-SchtasksPathCompletions {
 }
 
 function Update-SchtasksTaskNameCache {
-    $cacheAge = (Get-Date) - $script:SchtasksCompletionCatalog.TaskNameCacheUpdated
-    if ($cacheAge.TotalSeconds -lt 60 -and $script:SchtasksCompletionCatalog.TaskNameCache.Count -gt 0) {
-        return
+    $lastUpdated = $script:SchtasksCompletionCatalog.TaskNameCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt 60 -and $script:SchtasksCompletionCatalog.TaskNameCache.Count -gt 0) {
+            return
+        }
     }
 
     $csvLines = @(& schtasks.exe /Query /FO CSV 2>$null)

@@ -16,7 +16,7 @@ if (-not (Get-Variable -Name PsSuspendCompletionCatalog -Scope Script -ErrorActi
             '--help'    = 'Display pssuspend help.'
         }
         ProcessEntries          = @()
-        ProcessCacheUpdated     = [datetime]::MinValue
+        ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
     }
 }
@@ -84,9 +84,12 @@ function Remove-PsSuspendOuterQuotes {
 }
 
 function Update-PsSuspendProcessCache {
-    $cacheAge = (Get-Date) - $script:PsSuspendCompletionCatalog.ProcessCacheUpdated
-    if ($cacheAge.TotalSeconds -lt $script:PsSuspendCompletionCatalog.ProcessCacheTtlSeconds) {
-        return
+    $lastUpdated = $script:PsSuspendCompletionCatalog.ProcessCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:PsSuspendCompletionCatalog.ProcessCacheTtlSeconds) {
+            return
+        }
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
