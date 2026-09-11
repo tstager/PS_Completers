@@ -1,0 +1,44 @@
+name: Conformance
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test-CompleterScript over every completer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Latest stable on purpose: a CompleterActions release that tightens the
+      # strict grammar should fail here, not in a profile.
+      - name: Install modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-PSResource -Name CompleterActions -Repository PSGallery -TrustRepository -Scope CurrentUser
+          Install-PSResource -Name Pester -Version '6.1.0' -Repository PSGallery -TrustRepository -Scope CurrentUser
+          Get-InstalledPSResource -Name CompleterActions, Pester | Format-Table Name, Version | Out-String | Write-Host
+
+      - name: Test
+        shell: pwsh
+        run: Invoke-Pester -Path ./tests -CI
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: testResults.xml
+          if-no-files-found: ignore

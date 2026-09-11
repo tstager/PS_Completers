@@ -1,5 +1,7 @@
 # PowerShell Completers
 
+[![Conformance](https://github.com/tstager/PS_Completers/actions/workflows/conformance.yml/badge.svg)](https://github.com/tstager/PS_Completers/actions/workflows/conformance.yml)
+
 This repository contains standalone PowerShell argument completer scripts for native tools. Each `*_completer` folder contains a self-contained `*_completer.ps1` script that can be dot-sourced into a PowerShell session or profile, plus a companion `*_completer.md` document describing coverage and implementation details. These scripts can be imported with the CompleterActions module.
 
 Recent additions include standalone completers for the coreutils tools `comm`, `cut`, `date`, `df`, `env`, `head`, `join`, `ln`, `mktemp`, `printf`, `ptx`, `readlink`, `realpath`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shred`, `shuf`, `split`, `stat`, `stdbuf`, `sum`, `tac`, `tail`, `test`, `touch`, `tr`, `truncate`, `tsort`, `tty`, `tskill`, `uniq`, `uname`, `unexpand`, `unlink`, `uptime`, `vdir`, and `yes`.
@@ -35,7 +37,8 @@ later and runs in its own profile-free process:
 pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
 ```
 
-Run it before committing a new or changed completer.
+Run it before committing a new or changed completer. The same test runs in
+GitHub Actions on every push and pull request.
 
 ## Repository layout
 
