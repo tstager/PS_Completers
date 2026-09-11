@@ -23,11 +23,26 @@ To make selected completers available in future sessions, dot-source them from y
 . 'C:\path\to\Completers\dotnet_completer\dotnet_completer.ps1'
 ```
 
+## Conformance test
+
+Every script must pass the CompleterActions strict import grammar so it can be
+imported and registered lazily without being executed. The Pester gate under
+`tests` runs `Test-CompleterScript` over all of them and reports each finding
+with its line, construct, and fix hint. It needs CompleterActions 1.4.0 or
+later and runs in its own profile-free process:
+
+```powershell
+pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
+```
+
+Run it before committing a new or changed completer.
+
 ## Repository layout
 
 - `*_completer\`: one folder per completer
 - `*_completer\*_completer.ps1`: standalone PowerShell argument completer script
 - `*_completer\*_completer.md`: companion repository doc for that completer
+- `tests\Completers.Tests.ps1`: Pester conformance gate over every completer script
 
 ## Completer index
 
