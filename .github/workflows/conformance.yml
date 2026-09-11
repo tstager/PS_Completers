@@ -21,13 +21,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Latest stable on purpose: a CompleterActions release that tightens the
-      # strict grammar should fail here, not in a profile.
+      # Latest including prereleases on purpose: this is the line the profile
+      # runs, and a CompleterActions release that tightens the strict grammar or
+      # the set schema should fail here, not in a profile.
       - name: Install modules
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Install-PSResource -Name CompleterActions -Repository PSGallery -TrustRepository -Scope CurrentUser
+          Install-PSResource -Name CompleterActions -Prerelease -Repository PSGallery -TrustRepository -Scope CurrentUser
           Install-PSResource -Name Pester -Version '6.1.0' -Repository PSGallery -TrustRepository -Scope CurrentUser
           Get-InstalledPSResource -Name CompleterActions, Pester | Format-Table Name, Version | Out-String | Write-Host
 
