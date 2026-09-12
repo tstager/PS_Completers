@@ -3,6 +3,58 @@
 
 Set-StrictMode -Version Latest
 
+function Get-WtSettingsNames {
+    param([string]$Kind)
+
+    $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -eq $cache -or $null -eq $cache.Value) {
+        $names = @{ profiles = @(); schemes = @() }
+        foreach ($package in 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe') {
+            $settingsPath = Join-Path -Path $env:LOCALAPPDATA -ChildPath "Packages\$package\LocalState\settings.json"
+            if (-not (Test-Path -LiteralPath $settingsPath)) {
+                continue
+            }
+
+            try {
+                $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+            } catch {
+                continue
+            }
+
+            if ($settings.PSObject.Properties['profiles'] -and $settings.profiles.PSObject.Properties['list']) {
+                $names.profiles += @($settings.profiles.list | ForEach-Object { $_.name } | Where-Object { $_ })
+            }
+
+            if ($settings.PSObject.Properties['schemes']) {
+                $names.schemes += @($settings.schemes | ForEach-Object { $_.name } | Where-Object { $_ })
+            }
+        }
+
+        $names.profiles = @($names.profiles | Sort-Object -Unique)
+        $names.schemes = @($names.schemes | Sort-Object -Unique)
+        Set-Variable -Name 'WtSettingsNames' -Value $names -Scope Script
+        $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script
+    }
+
+    @($cache.Value[$Kind])
+}
+
+function Get-WtValueCompletionData {
+    param([string]$Option)
+
+    $kind = if ($Option -in '-p', '--profile') { 'profiles' } elseif ($Option -eq '--colorScheme') { 'schemes' } else { $null }
+    if (-not $kind) {
+        return @()
+    }
+
+    @(
+        foreach ($name in Get-WtSettingsNames -Kind $kind) {
+            $text = if ($name -match '\s') { '"' + $name + '"' } else { $name }
+            @{ Text = $text; Display = $name; Type = 'ParameterValue'; Tooltip = "Windows Terminal $kind entry" }
+        }
+    )
+}
+
 function Complete-WtNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
@@ -151,10 +203,11 @@ function Complete-WtNative {
     }
 
     $line = $commandAst.ToString()
-    $prefixLength = [Math]::Min($cursorPosition, $line.Length)
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    $prefixLength = [Math]::Max(0, [Math]::Min($relativeCursor, $line.Length))
     $linePrefix = $line.Substring(0, $prefixLength)
     $tokens = @([regex]::Matches($linePrefix, '\S+') | ForEach-Object { $_.Value })
-    $hasTrailingSpace = ($linePrefix -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($linePrefix -match '\s$') -or ($relativeCursor -gt $line.Length)
     $matchPrefix = if ((-not $hasTrailingSpace) -and $tokens.Count -gt 0 -and $tokens[-1] -like '-*') {
         $tokens[-1]
     }
@@ -191,16 +244,39 @@ function Complete-WtNative {
         @()
     }
 
+    $expandedTokens = New-Object System.Collections.Generic.List[string]
+    foreach ($token in $completedTokens) {
+        if ($token -eq ';' -or $token -eq '`;') {
+            $expandedTokens.Add(';')
+            continue
+        }
+
+        if ($token -match '^(.+?)`?;$') {
+            $expandedTokens.Add($Matches[1])
+            $expandedTokens.Add(';')
+            continue
+        }
+
+        $expandedTokens.Add($token)
+    }
+    $completedTokens = @($expandedTokens.ToArray())
+
     $selectedSubcommand = $null
     $expectingValueOption = $null
     foreach ($token in $completedTokens) {
+        if ($token -eq ';') {
+            $selectedSubcommand = $null
+            $expectingValueOption = $null
+            continue
+        }
+
         if ($expectingValueOption) {
             $expectingValueOption = $null
             continue
         }
 
         if (-not $selectedSubcommand) {
-            if ($topLevelValueOptions -contains $token) {
+            if (($topLevelValueOptions + $newTerminalValueOptions) -contains $token) {
                 $expectingValueOption = $token
                 continue
             }
@@ -220,14 +296,14 @@ function Complete-WtNative {
 
     [object[]]$completionData = @()
     if (-not $selectedSubcommand) {
-        if ($topLevelValueOptions -contains $previousToken) {
-            $completionData = @()
+        if (($topLevelValueOptions + $newTerminalValueOptions) -contains $previousToken) {
+            $completionData = Get-WtValueCompletionData -Option $previousToken
         }
         elseif ($matchPrefix -like '-*') {
-            $completionData = $topLevelOptionData
+            $completionData = $topLevelOptionData + $newTerminalOptionData
         }
         else {
-            $completionData = $topLevelOptionData + $subcommandData
+            $completionData = $topLevelOptionData + $newTerminalOptionData + $subcommandData
         }
     }
     else {
@@ -250,7 +326,7 @@ function Complete-WtNative {
             }
             default {
                 if ($subcommandValueOptions[$selectedSubcommand] -contains $previousToken) {
-                    $completionData = @()
+                    $completionData = Get-WtValueCompletionData -Option $previousToken
                 }
                 elseif ($matchPrefix -like '-*') {
                     $completionData = $subcommandOptionData[$selectedSubcommand]
@@ -263,7 +339,7 @@ function Complete-WtNative {
     }
 
     foreach ($item in $completionData) {
-        if ($item.Text -notlike "$matchPrefix*") {
+        if ($item.Text -notlike "$matchPrefix*" -and $item.Display -notlike "$matchPrefix*") {
             continue
         }
 

@@ -30,23 +30,27 @@ function New-XargsCompletionResult {
 
 function Get-XargsOptionSpecs {
     @(
-        [pscustomobject]@{ Token = '-a'; LongToken = '--arg-file'; Description = 'Read arguments from the given file instead of stdin'; ValueKind = 'FilePath' },
-        [pscustomobject]@{ Token = '-d'; LongToken = '--delimiter'; Description = 'Use the given delimiter to split the input'; ValueKind = 'Delimiter' },
-        [pscustomobject]@{ Token = '-x'; LongToken = '--exit'; Description = 'Exit if the number of arguments allowed by -L or -n do not fit'; ValueKind = 'NoValue' },
-        [pscustomobject]@{ Token = '-n'; LongToken = '--max-args'; Description = 'Set the max number of arguments read from stdin to be passed to each command invocation'; ValueKind = 'Integer' },
-        [pscustomobject]@{ Token = '-L'; LongToken = '--max-lines'; Description = 'Set the max number of lines from stdin to be passed to each command invocation'; ValueKind = 'Integer' },
-        [pscustomobject]@{ Token = '-l'; LongToken = ''; Description = 'Equivalent to -L, but with a default value of 1 if max-lines is unspecified'; ValueKind = 'OptionalInteger' },
-        [pscustomobject]@{ Token = '-P'; LongToken = '--max-procs'; Description = 'Run up to this many commands in parallel'; ValueKind = 'Integer' },
-        [pscustomobject]@{ Token = '-r'; LongToken = '--no-run-if-empty'; Description = 'If there are no input arguments, do not run the command at all'; ValueKind = 'NoValue' },
-        [pscustomobject]@{ Token = '-0'; LongToken = '--null'; Description = 'Split the input by null terminators rather than whitespace'; ValueKind = 'NoValue' },
-        [pscustomobject]@{ Token = '-s'; LongToken = '--max-chars'; Description = 'Set the max number of characters to be passed to each invocation'; ValueKind = 'Integer' },
-        [pscustomobject]@{ Token = '-t'; LongToken = '--verbose'; Description = 'Be verbose'; ValueKind = 'NoValue' },
-        [pscustomobject]@{ Token = '-i'; LongToken = '--replace'; Description = 'Replace R in initial arguments with names read from standard input'; ValueKind = 'ReplaceText' },
-        [pscustomobject]@{ Token = '-I'; LongToken = ''; Description = 'Replace R in initial arguments with names read from standard input'; ValueKind = 'ReplaceText' },
-        [pscustomobject]@{ Token = '-E'; LongToken = ''; Description = 'Stop processing the input upon reaching an input item that matches eof-string'; ValueKind = 'EofString' },
-        [pscustomobject]@{ Token = '-e'; LongToken = '--eof'; Description = 'Alias for -E'; ValueKind = 'EofString' },
-        [pscustomobject]@{ Token = '-h'; LongToken = '--help'; Description = 'Print help'; ValueKind = 'NoValue' },
-        [pscustomobject]@{ Token = '-V'; LongToken = '--version'; Description = 'Print version'; ValueKind = 'NoValue' }
+        [pscustomobject]@{ Token = '-0'; LongToken = '--null'; Description = 'Items are separated by a null, not whitespace'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = '-a'; LongToken = '--arg-file'; Description = 'Read arguments from FILE, not standard input'; ValueKind = 'FilePath' },
+        [pscustomobject]@{ Token = '-d'; LongToken = '--delimiter'; Description = 'Items in input stream are separated by CHARACTER'; ValueKind = 'Delimiter' },
+        [pscustomobject]@{ Token = '-E'; LongToken = ''; Description = 'Set logical EOF string'; ValueKind = 'EofString' },
+        [pscustomobject]@{ Token = '-e'; LongToken = '--eof'; Description = 'Equivalent to -E END if END is specified'; ValueKind = 'EofString' },
+        [pscustomobject]@{ Token = '-I'; LongToken = ''; Description = 'Same as --replace=R'; ValueKind = 'ReplaceText' },
+        [pscustomobject]@{ Token = '-i'; LongToken = '--replace'; Description = 'Replace R in INITIAL-ARGS with names read from standard input'; ValueKind = 'ReplaceText' },
+        [pscustomobject]@{ Token = '-L'; LongToken = '--max-lines'; Description = 'Use at most MAX-LINES non-blank input lines per command line'; ValueKind = 'Integer' },
+        [pscustomobject]@{ Token = '-l'; LongToken = ''; Description = 'Similar to -L but defaults to at most one non-blank input line'; ValueKind = 'OptionalInteger' },
+        [pscustomobject]@{ Token = '-n'; LongToken = '--max-args'; Description = 'Use at most MAX-ARGS arguments per command line'; ValueKind = 'Integer' },
+        [pscustomobject]@{ Token = '-o'; LongToken = '--open-tty'; Description = 'Reopen stdin as /dev/tty in the child process'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = '-P'; LongToken = '--max-procs'; Description = 'Run at most MAX-PROCS processes at a time'; ValueKind = 'Integer' },
+        [pscustomobject]@{ Token = '-p'; LongToken = '--interactive'; Description = 'Prompt before running commands'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = ''; LongToken = '--process-slot-var'; Description = 'Set environment variable VAR in child processes'; ValueKind = 'VarName' },
+        [pscustomobject]@{ Token = '-r'; LongToken = '--no-run-if-empty'; Description = 'If there are no arguments, then do not run COMMAND'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = '-s'; LongToken = '--max-chars'; Description = 'Limit length of command line to MAX-CHARS'; ValueKind = 'Integer' },
+        [pscustomobject]@{ Token = ''; LongToken = '--show-limits'; Description = 'Show limits on command-line length'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = '-t'; LongToken = '--verbose'; Description = 'Print commands before executing them'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = '-x'; LongToken = '--exit'; Description = 'Exit if the size (see -s) is exceeded'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = ''; LongToken = '--help'; Description = 'Display help and exit'; ValueKind = 'NoValue' },
+        [pscustomobject]@{ Token = ''; LongToken = '--version'; Description = 'Output version information and exit'; ValueKind = 'NoValue' }
     )
 }
 
@@ -148,7 +152,8 @@ function Get-XargsPathCompletions {
 function Get-XargsValueSuggestions {
     param(
         [pscustomobject]$OptionSpec,
-        [string]$CurrentValue
+        [string]$CurrentValue,
+        [string]$Prefix = ''
     )
 
     if ($null -eq $OptionSpec) {
@@ -158,70 +163,99 @@ function Get-XargsValueSuggestions {
     $typed = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
     $toolTip = if ([string]::IsNullOrWhiteSpace($OptionSpec.Description)) { $OptionSpec.Token } else { $OptionSpec.Description }
 
-    switch ($OptionSpec.ValueKind) {
-        'FilePath' {
-            $results = @(Get-XargsPathCompletions -CurrentValue $typed)
-            if ($results.Count -gt 0) {
-                return $results
-            }
-            $placeholder = '<arg-file>'
-            return @((New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder))
-        }
-        'Delimiter' {
-            $placeholder = '<delimiter>'
-            return @(
-                New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder
-            )
-        }
-        'Integer' {
-            if ([string]::IsNullOrWhiteSpace($typed)) {
-                $placeholder = '<max>'
-                return @((New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder))
-            }
-            return @((New-XargsCompletionResult -CompletionText $typed -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $typed))
-        }
-        'OptionalInteger' {
-            if ([string]::IsNullOrWhiteSpace($typed)) {
-                $placeholder = '[<max-lines>]'
-                return @((New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder))
-            }
-            return @((New-XargsCompletionResult -CompletionText $typed -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $typed))
-        }
-        'ReplaceText' {
-            if ([string]::IsNullOrWhiteSpace($typed)) {
-                $placeholder = '<R>'
-                return @((New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder))
-            }
-            return @((New-XargsCompletionResult -CompletionText $typed -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $typed))
-        }
-        'EofString' {
-            if ([string]::IsNullOrWhiteSpace($typed)) {
-                $placeholder = '<eof-string>'
-                return @((New-XargsCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder))
-            }
-            return @((New-XargsCompletionResult -CompletionText $typed -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $typed))
-        }
-        default {
-            @()
+    if ($OptionSpec.ValueKind -eq 'FilePath') {
+        $results = @(Get-XargsPathCompletions -CurrentValue $typed -Prefix $Prefix)
+        if ($results.Count -gt 0) {
+            return $results
         }
     }
+
+    if (-not [string]::IsNullOrWhiteSpace($typed)) {
+        return @()
+    }
+
+    $placeholder = switch ($OptionSpec.ValueKind) {
+        'FilePath' { '<arg-file>' }
+        'Delimiter' { '<delimiter>' }
+        'Integer' { '<max>' }
+        'OptionalInteger' { '<max-lines>' }
+        'ReplaceText' { '<R>' }
+        'EofString' { '<eof-string>' }
+        'VarName' { '<var>' }
+        default { $null }
+    }
+
+    if ($null -eq $placeholder) {
+        return @()
+    }
+
+    @(New-XargsCompletionResult -CompletionText ($Prefix + $placeholder) -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $placeholder)
+}
+
+function Get-XargsCommandNames {
+    $cache = Get-Variable -Name 'XargsCommandCache' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.Path -eq $env:PATH) {
+        return $cache.Value.Names
+    }
+
+    $names = @(
+        Get-Command -CommandType Application -ErrorAction SilentlyContinue |
+            ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } |
+            Where-Object { $_ -and $_ -ne 'xargs' } |
+            Sort-Object -Unique
+    )
+    Set-Variable -Name 'XargsCommandCache' -Value @{ Path = $env:PATH; Names = $names } -Scope Script
+    $names
 }
 
 function Get-XargsCommandSuggestions {
     param([string]$CurrentValue)
 
     $typed = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
-    $namePattern = if ([string]::IsNullOrWhiteSpace($typed)) { '*' } else { "$typed*" }
 
-    $results = New-Object System.Collections.Generic.List[object]
-    $commands = @(Get-Command -Name $namePattern -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique)
-    foreach ($name in $commands) {
-        if ($name -ne 'xargs' -and $name -ne 'xargs.exe') {
-            [void]$results.Add((New-XargsCompletionResult -CompletionText $name -ResultType 'ParameterValue' -ToolTip 'Command to execute' -ListItemText $name))
+    @(
+        foreach ($name in Get-XargsCommandNames) {
+            if ($name.StartsWith($typed, [System.StringComparison]::OrdinalIgnoreCase)) {
+                New-XargsCompletionResult -CompletionText $name -ResultType 'Command' -ToolTip 'Command to execute' -ListItemText $name
+            }
         }
+    )
+}
+
+function Test-XargsCommandOperandSeen {
+    param([string[]]$TokensBeforeCurrent)
+
+    $skipNext = $false
+    foreach ($token in @($TokensBeforeCurrent)) {
+        if ($skipNext) {
+            $skipNext = $false
+            continue
+        }
+
+        if ($token -match '^--[A-Za-z0-9-]+=') {
+            continue
+        }
+
+        if ($token -match '^--[A-Za-z0-9-]+$') {
+            $spec = Get-XargsOptionSpecByToken -Token $token
+            if ($spec -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger')) {
+                $skipNext = $true
+            }
+            continue
+        }
+
+        if ($token -match '^-[A-Za-z0-9]') {
+            $spec = Get-XargsOptionSpecByToken -Token $token.Substring(0, 2)
+            if ($spec -and $token.Length -eq 2 -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger')) {
+                $skipNext = $true
+            }
+            continue
+        }
+
+        return $true
     }
 
-    @($results.ToArray())
+    $false
 }
 
 function Get-XargsCompletionContext {
@@ -237,6 +271,7 @@ function Get-XargsCompletionContext {
             return [pscustomobject]@{
                 OptionSpec = $optionSpec
                 ValueText  = $matches['value']
+                Prefix     = $matches['option'] + '='
             }
         }
     }
@@ -248,6 +283,7 @@ function Get-XargsCompletionContext {
             return [pscustomobject]@{
                 OptionSpec = $optionSpec
                 ValueText  = $currentValue
+                Prefix     = ''
             }
         }
     }
@@ -267,19 +303,15 @@ Register-ArgumentCompleter -Native -CommandName 'xargs', 'xargs.exe' -ScriptBloc
 
     $context = Get-XargsCompletionContext -CurrentToken $wordToComplete -TokensBeforeCurrent $tokensBeforeCurrent
     if ($context) {
-        return Get-XargsValueSuggestions -OptionSpec $context.OptionSpec -CurrentValue $context.ValueText
+        return Get-XargsValueSuggestions -OptionSpec $context.OptionSpec -CurrentValue $context.ValueText -Prefix $context.Prefix
     }
 
     if (-not [string]::IsNullOrWhiteSpace($wordToComplete) -and $wordToComplete.StartsWith('-')) {
         return Get-XargsOptionSuggestions -CurrentToken $wordToComplete
     }
 
-    if ($tokensBeforeCurrent.Count -eq 0 -or ($tokensBeforeCurrent.Count -eq 1 -and $tokensBeforeCurrent[0] -notmatch '^-[A-Za-z0-9]')) {
+    if (-not (Test-XargsCommandOperandSeen -TokensBeforeCurrent $tokensBeforeCurrent)) {
         return Get-XargsCommandSuggestions -CurrentValue $wordToComplete
-    }
-
-    if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        return Get-XargsCommandSuggestions -CurrentValue ''
     }
 
     @()

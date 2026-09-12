@@ -85,7 +85,7 @@ function Get-JqCompletionOptions {
     }
 
     $helpOutput = Get-JqHelpOutput
-    $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
     foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
         foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
@@ -225,38 +225,75 @@ function Complete-Jq {
 
     $currentToken = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
     $tokens = @(Get-JqCommandTokens -CommandAst $commandAst)
-    $previousToken = if ($tokens.Count -gt 1) { $tokens[$tokens.Count - 1] } else { '' }
 
-    $pathOptions = @('-f', '--from-file', '-L', '--library-path', '--rawfile', '--slurpfile')
-    if ($previousToken -in $pathOptions) {
-        return Get-JqPathCompletions -InputPath $currentToken
+    $arity = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $arity['--arg'] = @('<name>', '<value>')
+    $arity['--argjson'] = @('<name>', '<json>')
+    $arity['--rawfile'] = @('<name>', 'path')
+    $arity['--slurpfile'] = @('<name>', 'path')
+    $arity['-f'] = @('path')
+    $arity['--from-file'] = @('path')
+    $arity['-L'] = @('path')
+    $arity['--library-path'] = @('path')
+    $arity['--indent'] = @('<n>')
+
+    $pending = @()
+    $operands = 0
+    foreach ($token in ($tokens | Select-Object -Skip 1)) {
+        if ($pending.Count -gt 0) {
+            $pending = @($pending | Select-Object -Skip 1)
+            continue
+        }
+
+        if ($arity.ContainsKey($token)) {
+            $pending = @($arity[$token])
+            continue
+        }
+
+        if ($token.StartsWith('-') -and $token.Length -gt 1) {
+            continue
+        }
+
+        $operands++
     }
 
-    $nameOptions = @('--arg', '--argjson')
-    if ($previousToken -in $nameOptions -and [string]::IsNullOrWhiteSpace($currentToken)) {
-        return @(
-            New-JqCompletionResult -CompletionText '<name>' -ListItemText '<name>' -ResultType 'ParameterValue' -ToolTip 'Variable name for jq argument'
-        )
+    if ($pending.Count -gt 0) {
+        $kind = $pending[0]
+        if ($kind -eq 'path') {
+            return Get-JqPathCompletions -InputPath $currentToken
+        }
+
+        if ([string]::IsNullOrWhiteSpace($currentToken)) {
+            return @(
+                New-JqCompletionResult -CompletionText $kind -ListItemText $kind -ResultType 'ParameterValue' -ToolTip 'jq option argument'
+            )
+        }
+
+        return @()
     }
 
-    $fileNameOptions = @('--rawfile', '--slurpfile')
-    if ($previousToken -in $fileNameOptions -and [string]::IsNullOrWhiteSpace($currentToken)) {
-        return @(
-            New-JqCompletionResult -CompletionText '<name>' -ListItemText '<name>' -ResultType 'ParameterValue' -ToolTip 'Variable name for jq file input'
-        )
-    }
-
-    if ([string]::IsNullOrWhiteSpace($currentToken) -or $currentToken.StartsWith('-')) {
+    if ($currentToken.StartsWith('-')) {
         return @(
             foreach ($option in Get-JqCompletionOptions) {
-                if ($option.StartsWith($currentToken, [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($option.StartsWith($currentToken, [System.StringComparison]::Ordinal)) {
                     New-JqCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'jq option'
                 }
             }
         )
     }
 
-    @()
+    if ($operands -eq 0) {
+        $starters = @('.', '.[]', 'keys', 'keys_unsorted', 'length', 'type', 'to_entries', 'from_entries', 'with_entries(', 'map(', 'select(', 'add', 'sort_by(', 'group_by(', 'unique', 'has(', 'del(', 'paths', 'tostring', 'tonumber', 'split(', 'join(', 'test(')
+        return @(
+            foreach ($starter in $starters) {
+                if ($starter.StartsWith($currentToken, [System.StringComparison]::Ordinal)) {
+                    New-JqCompletionResult -CompletionText $starter -ListItemText $starter -ResultType 'ParameterValue' -ToolTip 'jq filter'
+                }
+            }
+        )
+    }
+
+    Get-JqPathCompletions -InputPath $currentToken
 }
 
 Register-ArgumentCompleter -Native -CommandName 'jq', 'jq.exe' -ScriptBlock {

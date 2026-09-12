@@ -1,5 +1,5 @@
 # du tab completion for PowerShell
-# Help-driven native completer for du.exe with level hints and directory-only operand completion.
+# Help-refreshed native completer for GNU coreutils du with option value hints and directory operand completion.
 
 Set-StrictMode -Version 2.0
 
@@ -33,7 +33,7 @@ function Invoke-DuHelpText {
     }
 
     try {
-        @(& $commandName '/?' 2>$null)
+        @($null | & $commandName --help 2>&1)
     } catch {
         @()
     }
@@ -96,47 +96,68 @@ function Initialize-DuCompletionCatalog {
         return
     }
 
-    $catalog = [ordered]@{
-        '-c'        = [pscustomobject]@{ Token = '-c'; Description = 'Print output as CSV.'; TakesValue = $false }
-        '-ct'       = [pscustomobject]@{ Token = '-ct'; Description = 'Print CSV output with tab delimiters.'; TakesValue = $false }
-        '-l'        = [pscustomobject]@{ Token = '-l'; Description = 'Specify subdirectory depth of information.'; TakesValue = $true; ValueKind = 'Levels' }
-        '-n'        = [pscustomobject]@{ Token = '-n'; Description = 'Do not recurse.'; TakesValue = $false }
-        '-q'        = [pscustomobject]@{ Token = '-q'; Description = 'Quiet mode.'; TakesValue = $false }
-        '-u'        = [pscustomobject]@{ Token = '-u'; Description = 'Count each instance of a hardlinked file.'; TakesValue = $false }
-        '-v'        = [pscustomobject]@{ Token = '-v'; Description = 'Show size of all subdirectories.'; TakesValue = $false }
-        '-nobanner' = [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false }
-        '/?'        = [pscustomobject]@{ Token = '/?'; Description = 'Show du help.'; TakesValue = $false }
+    $catalog = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::Ordinal)
+    $entries = @(
+        @('-0', '--null', 'End each output line with NUL, not newline.', $null),
+        @('-a', '--all', 'Write counts for all files, not just directories.', $null),
+        @('', '--apparent-size', 'Print apparent sizes rather than disk usage.', $null),
+        @('-B', '--block-size', 'Scale sizes by SIZE before printing them.', 'Size'),
+        @('-b', '--bytes', 'Equivalent to --apparent-size --block-size=1.', $null),
+        @('-c', '--total', 'Produce a grand total.', $null),
+        @('-D', '--dereference-args', 'Dereference only symlinks listed on the command line.', $null),
+        @('-d', '--max-depth', 'Print the total for a directory only if it is N or fewer levels deep.', 'Levels'),
+        @('', '--files0-from', 'Summarize disk usage of the NUL-terminated file names in file F.', 'File'),
+        @('-H', '', 'Equivalent to --dereference-args.', $null),
+        @('-h', '--human-readable', 'Print sizes in human readable format.', $null),
+        @('', '--inodes', 'List inode usage information instead of block usage.', $null),
+        @('-k', '', 'Like --block-size=1K.', $null),
+        @('-L', '--dereference', 'Dereference all symbolic links.', $null),
+        @('-l', '--count-links', 'Count sizes many times if hard linked.', $null),
+        @('-m', '', 'Like --block-size=1M.', $null),
+        @('-P', '--no-dereference', 'Do not follow any symbolic links.', $null),
+        @('-S', '--separate-dirs', 'For directories do not include size of subdirectories.', $null),
+        @('', '--si', 'Like -h, but use powers of 1000 not 1024.', $null),
+        @('-s', '--summarize', 'Display only a total for each argument.', $null),
+        @('-t', '--threshold', 'Exclude entries smaller than SIZE if positive, or larger if negative.', 'Size'),
+        @('', '--time', 'Show time of the last modification of any file in the directory.', 'TimeWord'),
+        @('', '--time-style', 'Show times using STYLE.', 'TimeStyle'),
+        @('-X', '--exclude-from', 'Exclude files that match any pattern in FILE.', 'File'),
+        @('', '--exclude', 'Exclude files that match PATTERN.', 'Pattern'),
+        @('-x', '--one-file-system', 'Skip directories on different file systems.', $null),
+        @('', '--help', 'Display help and exit.', $null),
+        @('', '--version', 'Output version information and exit.', $null)
+    )
+
+    foreach ($entry in $entries) {
+        foreach ($token in @($entry[0], $entry[1])) {
+            if ([string]::IsNullOrEmpty($token)) {
+                continue
+            }
+
+            $catalog[$token] = [pscustomobject]@{
+                Token       = $token
+                Description = $entry[2]
+                TakesValue  = ($null -ne $entry[3] -and $entry[1] -ne '--time')
+                ValueKind   = $entry[3]
+            }
+        }
     }
 
-    $helpLines = Invoke-DuHelpText
-    foreach ($line in $helpLines) {
-        if ($line -match '^\s*(-c(?:\[t\])?|-l|-n|-q|-u|-v|-nobanner)\s{2,}(.*)$') {
-            $token = $matches[1]
-            $description = $matches[2].Trim()
-            switch ($token.ToLowerInvariant()) {
-                '-c[t]' {
-                    $catalog['-c'] = [pscustomobject]@{ Token = '-c'; Description = $description; TakesValue = $false }
-                    $catalog['-ct'] = [pscustomobject]@{ Token = '-ct'; Description = 'Print output as CSV with tab delimiters.'; TakesValue = $false }
-                }
-                default {
-                    if ($catalog.Contains($token.ToLowerInvariant())) {
-                        $entry = $catalog[$token.ToLowerInvariant()]
-                        $catalog[$token.ToLowerInvariant()] = [pscustomobject]@{
-                            Token       = $entry.Token
-                            Description = $description
-                            TakesValue  = $entry.TakesValue
-                            ValueKind   = if ($entry.PSObject.Properties.Name -contains 'ValueKind') { $entry.ValueKind } else { $null }
-                        }
-                    }
+    foreach ($line in Invoke-DuHelpText) {
+        if ($line -match '^\s+(?:(-[A-Za-z0-9]),\s+)?(--[a-z0-9-]+)(?:[=\[]\S*)?\s{2,}(.*)$' -or $line -match '^\s+(-[A-Za-z0-9])()\s{2,}(.*)$') {
+            $description = $Matches[3].Trim()
+            foreach ($token in @($Matches[1], $Matches[2])) {
+                if ($token -and $catalog.Contains($token)) {
+                    $catalog[$token].Description = $description
                 }
             }
         }
     }
 
     $script:DuCompletionCatalog.Switches = @($catalog.Values)
-    $script:DuCompletionCatalog.SwitchByKey = @{}
+    $script:DuCompletionCatalog.SwitchByKey = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
     foreach ($entry in $script:DuCompletionCatalog.Switches) {
-        $script:DuCompletionCatalog.SwitchByKey[$entry.Token.ToLowerInvariant()] = $entry
+        $script:DuCompletionCatalog.SwitchByKey[$entry.Token] = $entry
     }
 
     $script:DuCompletionCatalog.Initialized = $true
@@ -159,7 +180,7 @@ function Get-DuCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -204,15 +225,20 @@ function Get-DuState {
             continue
         }
 
-        $lookup = $cleanToken.ToLowerInvariant()
+        $lookup = $cleanToken
+        $attachedValue = $cleanToken -match '^(--[a-z0-9-]+)=.*$'
+        if ($attachedValue) {
+            $lookup = $Matches[1]
+        }
+
         if ($script:DuCompletionCatalog.SwitchByKey.ContainsKey($lookup)) {
             $usedSwitches[$lookup] = $true
             $switchSpec = $script:DuCompletionCatalog.SwitchByKey[$lookup]
-            if ($lookup -eq '/?') {
+            if ($lookup -eq '--help') {
                 $helpRequested = $true
             }
 
-            if ($switchSpec.TakesValue) {
+            if ($switchSpec.TakesValue -and -not $attachedValue) {
                 $pendingValueKind = $switchSpec.ValueKind
             }
             continue
@@ -238,27 +264,13 @@ function Get-DuSwitchCompletions {
     Initialize-DuCompletionCatalog
 
     $cleanCurrent = Remove-DuOuterQuotes -Value $CurrentWord
-    $depthModeUsed = ($State.UsedSwitches.ContainsKey('-l') -or $State.UsedSwitches.ContainsKey('-n') -or $State.UsedSwitches.ContainsKey('-v'))
 
     foreach ($switchSpec in $script:DuCompletionCatalog.Switches) {
-        $lookup = $switchSpec.Token.ToLowerInvariant()
-        if ($State.UsedSwitches.ContainsKey($lookup)) {
+        if ($State.UsedSwitches.ContainsKey($switchSpec.Token)) {
             continue
         }
 
-        if ($switchSpec.Token -eq '-ct' -and $State.UsedSwitches.ContainsKey('-c')) {
-            continue
-        }
-
-        if ($switchSpec.Token -eq '-c' -and $State.UsedSwitches.ContainsKey('-ct')) {
-            continue
-        }
-
-        if ($depthModeUsed -and $switchSpec.Token -in @('-l', '-n', '-v')) {
-            continue
-        }
-
-        if ($switchSpec.Token.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($switchSpec.Token.StartsWith($cleanCurrent, [System.StringComparison]::Ordinal)) {
             New-DuCompletionResult -CompletionText $switchSpec.Token -ListItemText $switchSpec.Token -ResultType 'ParameterName' -ToolTip $switchSpec.Description
         }
     }
@@ -307,27 +319,30 @@ function Get-DuDirectoryCompletions {
     }
 }
 
-function Get-DuLevelCompletions {
-    param([string]$CurrentWord)
+function Get-DuValueCompletions {
+    param(
+        [string]$ValueKind,
+        [string]$CurrentWord,
+        [string]$Prefix = ''
+    )
+
+    $values = switch ($ValueKind) {
+        'Levels' { @('0', '1', '2', '3', '5', '10') }
+        'Size' { @('1', '1K', '1M', '1G', 'K', 'M', 'G') }
+        'TimeWord' { @('atime', 'access', 'use', 'ctime', 'status') }
+        'TimeStyle' { @('full-iso', 'long-iso', 'iso', '+%Y-%m-%d') }
+        'Pattern' { @('<pattern>') }
+        default { @() }
+    }
 
     $cleanCurrent = Remove-DuOuterQuotes -Value $CurrentWord
-    $results = New-Object System.Collections.Generic.List[object]
-
-    foreach ($hint in $script:DuCompletionCatalog.LevelHints) {
-        if ($hint.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $results.Add((New-DuCompletionResult -CompletionText $hint -ListItemText $hint -ResultType 'ParameterValue' -ToolTip 'Subdirectory depth for du -l.'))
+    @(
+        foreach ($value in $values) {
+            if ($value.StartsWith($cleanCurrent, [System.StringComparison]::Ordinal)) {
+                New-DuCompletionResult -CompletionText ($Prefix + $value) -ListItemText $value -ResultType 'ParameterValue' -ToolTip "du $ValueKind value."
+            }
         }
-    }
-
-    if ($results.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($CurrentWord)) {
-        $results.Add((New-DuCompletionResult -CompletionText $CurrentWord -ListItemText $CurrentWord -ResultType 'ParameterValue' -ToolTip 'Subdirectory depth for du -l.'))
-    }
-
-    if ($results.Count -eq 0 -and [string]::IsNullOrWhiteSpace($CurrentWord)) {
-        $results.Add((New-DuCompletionResult -CompletionText ' ' -ListItemText '<levels>' -ResultType 'ParameterValue' -ToolTip 'Subdirectory depth for du -l.'))
-    }
-
-    @($results.ToArray())
+    )
 }
 
 function Complete-Du {
@@ -348,30 +363,33 @@ function Complete-Du {
     $state = Get-DuState -TokensBeforeCurrent (Get-DuArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
 
     if ($state.HelpRequested) {
-        return @(
-            New-DuCompletionResult -CompletionText ' ' -ListItemText '<complete>' -ResultType 'ParameterValue' -ToolTip 'du help is terminal for completion.'
-        )
+        return @()
     }
 
-    if ($state.PendingValueKind -eq 'Levels') {
-        return @(Get-DuLevelCompletions -CurrentWord $currentWord)
+    if ($currentWord -match '^(?<option>--[a-z0-9-]+)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $value = $Matches['value']
+        if ($script:DuCompletionCatalog.SwitchByKey.ContainsKey($option)) {
+            return @(Get-DuValueCompletions -ValueKind $script:DuCompletionCatalog.SwitchByKey[$option].ValueKind -CurrentWord $value -Prefix ($option + '='))
+        }
+
+        return @()
+    }
+
+    if ($state.PendingValueKind) {
+        return @(Get-DuValueCompletions -ValueKind $state.PendingValueKind -CurrentWord $currentWord)
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
         return @(Get-DuSwitchCompletions -CurrentWord $currentWord -State $state)
     }
 
-    if ($state.Positionals.Count -eq 0) {
-        $results = @()
-        $results += @(Get-DuDirectoryCompletions -InputPath $currentWord)
-        foreach ($item in @(Get-DuSwitchCompletions -CurrentWord '' -State $state)) {
-            $results += $item
-        }
-
-        return @($results)
+    $results = @(Get-DuDirectoryCompletions -InputPath $currentWord)
+    if ([string]::IsNullOrEmpty($currentWord)) {
+        $results += @(Get-DuSwitchCompletions -CurrentWord '' -State $state)
     }
 
-    @()
+    @($results)
 }
 
 Register-ArgumentCompleter -Native -CommandName 'du', 'du.exe' -ScriptBlock {

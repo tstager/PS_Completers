@@ -91,81 +91,65 @@ function Complete-WslNative {
     $previousToken = if ($argumentTokens.Count -gt 0) { $argumentTokens[-1] } else { '' }
 
     $topLevelSwitches = @(
-        '--',
-        '--cd',
-        '--debug-shell',
-        '--distribution',
-        '-d',
-        '--distribution-id',
-        '--exec',
-        '-e',
-        '--export',
-        '--help',
-        '--import',
-        '--import-in-place',
-        '--install',
-        '--list',
-        '-l',
-        '--manage',
-        '--mount',
-        '--set-default',
-        '-s',
-        '--set-default-version',
-        '--set-version',
-        '--shell-type',
-        '--shutdown',
-        '--status',
-        '--system',
-        '--terminate',
-        '-t',
-        '--uninstall',
-        '--unmount',
-        '--unregister',
-        '--update',
-        '--user',
-        '-u',
-        '--version',
-        '-v'
+        '--', '--cd', '--debug-shell', '--distribution', '-d', '--distribution-id', '--exec', '-e', '--export', '--help',
+        '--import', '--import-in-place', '--install', '--list', '-l', '--manage', '--mount', '--set-default', '-s',
+        '--set-default-version', '--set-version', '--shell-type', '--shutdown', '--status', '--system', '--terminate', '-t',
+        '--uninstall', '--unmount', '--unregister', '--update', '--user', '-u', '--version', '-v'
     )
 
-    $listSwitches = @(
-        '--all',
-        '--running',
-        '--quiet',
-        '-q',
-        '--verbose',
-        '-v',
-        '--online',
-        '-o'
-    )
+    $listSwitches = @('--all', '--running', '--quiet', '-q', '--verbose', '-v', '--online', '-o')
+    $modeSwitches = @{
+        '--install'  = @('--no-launch', '--web-download', '--no-distribution', '--enable-wsl1', '--from-file', '--name', '--location', '--version', '--legacy')
+        '--mount'    = @('--vhd', '--bare', '--name', '--type', '--options', '--partition')
+        '--export'   = @('--vhd', '--format')
+        '--import'   = @('--version', '--vhd')
+        '--shutdown' = @('--force')
+        '--update'   = @('--pre-release')
+        '--list'     = $listSwitches
+        '-l'         = $listSwitches
+        '--manage'   = @('--move', '--resize', '--set-default-user', '--set-sparse', '-s')
+    }
 
-    $manageSwitches = @(
-        '--move',
-        '--resize',
-        '--set-default-user',
-        '--set-sparse',
-        '-s'
-    )
+    $enumValues = @{
+        '--version'             = @('1', '2')
+        '--set-default-version' = @('1', '2')
+        '--shell-type'          = @('standard', 'login', 'none')
+        '--set-sparse'          = @('true', 'false')
+        '--format'              = @('tar', 'tar.gz', 'tar.xz', 'vhd')
+        '--type'                = @('ext4', 'drvfs')
+        '--user'                = @('root')
+        '-u'                    = @('root')
+    }
 
-    $distributionValueSwitches = @(
-        '--distribution',
-        '-d',
-        '--export',
-        '--manage',
-        '--set-default',
-        '--set-version',
-        '--terminate',
-        '-t',
-        '--unregister'
-    )
+    $distributionValueSwitches = @('--distribution', '-d', '--export', '--manage', '--set-default', '--set-version', '--terminate', '-t', '--unregister')
 
-    if ($previousToken -eq '-s' -and $argumentTokens.Count -eq 1) {
-        New-WslCompletionResult -Values (Get-WslDistributionNames) -WordToComplete $wordToComplete
+    $mode = $null
+    foreach ($token in $argumentTokens) {
+        if ($modeSwitches.ContainsKey($token)) {
+            $mode = $token
+            break
+        }
+    }
+
+    if ($previousToken -eq '-s') {
+        if ($mode -eq '--manage') {
+            New-WslCompletionResult -Values @('true', 'false') -WordToComplete $wordToComplete
+            return
+        }
+
+        if ($argumentTokens.Count -eq 1) {
+            New-WslCompletionResult -Values (Get-WslDistributionNames) -WordToComplete $wordToComplete
+            return
+        }
+    }
+
+    if ($enumValues.ContainsKey($previousToken)) {
+        New-WslCompletionResult -Values $enumValues[$previousToken] -WordToComplete $wordToComplete
         return
     }
 
-    if ($previousToken -eq '-u' -or $previousToken -eq '--user') {
-        New-WslCompletionResult -Values @('root') -WordToComplete $wordToComplete
+    if ($argumentTokens.Count -eq 2 -and $argumentTokens[0] -eq '--set-version') {
+        New-WslCompletionResult -Values @('1', '2') -WordToComplete $wordToComplete
         return
     }
 
@@ -179,18 +163,25 @@ function Complete-WslNative {
         return
     }
 
-    if ($previousToken -in @('--list', '-l')) {
-        New-WslCompletionResult -Values $listSwitches -WordToComplete $wordToComplete -ResultType ParameterName
+    if ($previousToken -in @('--from-file', '--location', '--move', '--cd', '--name', '--options', '--partition', '--resize', '--set-default-user')) {
         return
     }
 
-    if (
-        $argumentTokens.Count -ge 2 -and
-        $argumentTokens[0] -eq '--manage' -and
-        $argumentTokens[1] -notlike '-*' -and
-        ($wordToComplete -eq '' -or $wordToComplete -like '-*')
-    ) {
-        New-WslCompletionResult -Values $manageSwitches -WordToComplete $wordToComplete -ResultType ParameterName
+    if ($mode) {
+        $operandSlot = -not ($wordToComplete -like '-*') -and $argumentTokens.Count -eq 1
+        if ($operandSlot -and $mode -in @('--import', '--mount')) {
+            return
+        }
+
+        if (-not ($wordToComplete -like '-*') -and $mode -eq '--import' -and $argumentTokens.Count -le 3) {
+            return
+        }
+
+        if (-not ($wordToComplete -like '-*') -and $mode -eq '--export' -and $argumentTokens.Count -eq 2) {
+            return
+        }
+
+        New-WslCompletionResult -Values $modeSwitches[$mode] -WordToComplete $wordToComplete -ResultType ParameterName
         return
     }
 
