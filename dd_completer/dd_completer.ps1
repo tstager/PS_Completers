@@ -179,6 +179,161 @@ function Get-DdPathCompletions {
     }
 }
 
+function Get-DdOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>[A-Za-z]+)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['if'] = 'path'
+    $table['of'] = 'path'
+    $table['bs'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['ibs'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['obs'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['cbs'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['count'] = @(
+        @{ Text = '<blocks>'; Tip = 'Number of blocks.' }
+    )
+    $table['skip'] = @(
+        @{ Text = '<blocks>'; Tip = 'Number of blocks.' }
+    )
+    $table['seek'] = @(
+        @{ Text = '<blocks>'; Tip = 'Number of blocks.' }
+    )
+    $table['conv'] = @(
+        @{ Text = 'ascii'; Tip = 'EBCDIC to ASCII.' }
+        @{ Text = 'ebcdic'; Tip = 'ASCII to EBCDIC.' }
+        @{ Text = 'block'; Tip = 'Pad newline-terminated records.' }
+        @{ Text = 'unblock'; Tip = 'Replace trailing spaces with newline.' }
+        @{ Text = 'lcase'; Tip = 'Upper to lower case.' }
+        @{ Text = 'ucase'; Tip = 'Lower to upper case.' }
+        @{ Text = 'sparse'; Tip = 'Seek instead of writing NUL blocks.' }
+        @{ Text = 'swab'; Tip = 'Swap every pair of input bytes.' }
+        @{ Text = 'sync'; Tip = 'Pad every input block with NULs.' }
+        @{ Text = 'excl'; Tip = 'Fail if the output file exists.' }
+        @{ Text = 'nocreat'; Tip = 'Do not create the output file.' }
+        @{ Text = 'notrunc'; Tip = 'Do not truncate the output file.' }
+        @{ Text = 'noerror'; Tip = 'Continue after read errors.' }
+        @{ Text = 'fdatasync'; Tip = 'Sync output data before finishing.' }
+        @{ Text = 'fsync'; Tip = 'Sync output data and metadata.' }
+    )
+    $table['iflag'] = @(
+        @{ Text = 'append'; Tip = 'Append mode.' }
+        @{ Text = 'direct'; Tip = 'Direct I/O.' }
+        @{ Text = 'directory'; Tip = 'Fail unless a directory.' }
+        @{ Text = 'dsync'; Tip = 'Synchronized data I/O.' }
+        @{ Text = 'sync'; Tip = 'Synchronized I/O.' }
+        @{ Text = 'fullblock'; Tip = 'Accumulate full input blocks.' }
+        @{ Text = 'nonblock'; Tip = 'Non-blocking I/O.' }
+        @{ Text = 'noatime'; Tip = 'Do not update access time.' }
+        @{ Text = 'nocache'; Tip = 'Request to drop cache.' }
+        @{ Text = 'noctty'; Tip = 'Do not assign a controlling terminal.' }
+        @{ Text = 'nofollow'; Tip = 'Do not follow symlinks.' }
+    )
+    $table['oflag'] = @(
+        @{ Text = 'append'; Tip = 'Append mode.' }
+        @{ Text = 'direct'; Tip = 'Direct I/O.' }
+        @{ Text = 'directory'; Tip = 'Fail unless a directory.' }
+        @{ Text = 'dsync'; Tip = 'Synchronized data I/O.' }
+        @{ Text = 'sync'; Tip = 'Synchronized I/O.' }
+        @{ Text = 'fullblock'; Tip = 'Accumulate full input blocks.' }
+        @{ Text = 'nonblock'; Tip = 'Non-blocking I/O.' }
+        @{ Text = 'noatime'; Tip = 'Do not update access time.' }
+        @{ Text = 'nocache'; Tip = 'Request to drop cache.' }
+        @{ Text = 'noctty'; Tip = 'Do not assign a controlling terminal.' }
+        @{ Text = 'nofollow'; Tip = 'Do not follow symlinks.' }
+    )
+    $table['status'] = @(
+        @{ Text = 'none'; Tip = 'Suppress everything but errors.' }
+        @{ Text = 'noxfer'; Tip = 'Suppress transfer statistics.' }
+        @{ Text = 'progress'; Tip = 'Show periodic transfer statistics.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        if ($CurrentWord.StartsWith('-')) {
+            return @()
+        }
+        $operands = @(
+            @{ Text = 'if='; Tip = 'Input file.' }
+            @{ Text = 'of='; Tip = 'Output file.' }
+            @{ Text = 'bs='; Tip = 'Block size for both input and output.' }
+            @{ Text = 'ibs='; Tip = 'Input block size.' }
+            @{ Text = 'obs='; Tip = 'Output block size.' }
+            @{ Text = 'cbs='; Tip = 'Conversion block size.' }
+            @{ Text = 'count='; Tip = 'Copy only this many input blocks.' }
+            @{ Text = 'skip='; Tip = 'Skip input blocks.' }
+            @{ Text = 'seek='; Tip = 'Skip output blocks.' }
+            @{ Text = 'conv='; Tip = 'Conversion flags.' }
+            @{ Text = 'iflag='; Tip = 'Input flags.' }
+            @{ Text = 'oflag='; Tip = 'Output flags.' }
+            @{ Text = 'status='; Tip = 'Information level.' }
+        )
+        return @(
+            foreach ($entry in $operands) {
+                if ($entry.Text.StartsWith($CurrentWord, [System.StringComparison]::Ordinal)) {
+                    New-DdCompletionResult -CompletionText $entry.Text -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+                }
+            }
+        )
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-DdPathCompletions -InputPath $prefix) {
+                New-DdCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-DdCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Dd {
     param(
         [string]$wordToComplete,
@@ -190,6 +345,11 @@ function Complete-Dd {
         ''
     } else {
         Get-DdCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-DdOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

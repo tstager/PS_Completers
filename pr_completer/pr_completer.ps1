@@ -243,6 +243,135 @@ function Get-PrPathCompletions {
     }
 }
 
+function Get-PrOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--columns'] = @(
+        @{ Text = '<n>'; Tip = 'Number of columns.' }
+    )
+    $table['-D'] = @(
+        @{ Text = '<format>'; Tip = 'strftime date format.' }
+    )
+    $table['--date-format'] = @(
+        @{ Text = '<format>'; Tip = 'strftime date format.' }
+    )
+    $table['-e'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['--expand-tabs'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['-i'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['--output-tabs'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['-s'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['--separator'] = @(
+        @{ Text = '<char>'; Tip = 'Tab or separator character.' }
+    )
+    $table['-h'] = @(
+        @{ Text = '<header>'; Tip = 'Page header text.' }
+    )
+    $table['--header'] = @(
+        @{ Text = '<header>'; Tip = 'Page header text.' }
+    )
+    $table['-l'] = @(
+        @{ Text = '66'; Tip = '66 lines, the default.' }
+        @{ Text = '<lines>'; Tip = 'Page length.' }
+    )
+    $table['--length'] = @(
+        @{ Text = '66'; Tip = '66 lines, the default.' }
+        @{ Text = '<lines>'; Tip = 'Page length.' }
+    )
+    $table['-n'] = @(
+        @{ Text = '<sep>'; Tip = 'Separator after the line number.' }
+    )
+    $table['--number-lines'] = @(
+        @{ Text = '<sep>'; Tip = 'Separator after the line number.' }
+    )
+    $table['-N'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--first-line-number'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-o'] = @(
+        @{ Text = '<margin>'; Tip = 'Left margin width.' }
+    )
+    $table['--indent'] = @(
+        @{ Text = '<margin>'; Tip = 'Left margin width.' }
+    )
+    $table['-S'] = @(
+        @{ Text = '<string>'; Tip = 'Column separator string.' }
+    )
+    $table['--sep-string'] = @(
+        @{ Text = '<string>'; Tip = 'Column separator string.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '72'; Tip = '72 columns, the default.' }
+        @{ Text = '<cols>'; Tip = 'Page width.' }
+    )
+    $table['--width'] = @(
+        @{ Text = '72'; Tip = '72 columns, the default.' }
+        @{ Text = '<cols>'; Tip = 'Page width.' }
+    )
+    $table['-W'] = @(
+        @{ Text = '72'; Tip = '72 columns, the default.' }
+        @{ Text = '<cols>'; Tip = 'Page width.' }
+    )
+    $table['--page-width'] = @(
+        @{ Text = '72'; Tip = '72 columns, the default.' }
+        @{ Text = '<cols>'; Tip = 'Page width.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-PrPathCompletions -InputPath $prefix) {
+                New-PrCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-PrCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Pr {
     param(
         [string]$wordToComplete,
@@ -254,6 +383,11 @@ function Complete-Pr {
         ''
     } else {
         Get-PrCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-PrOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

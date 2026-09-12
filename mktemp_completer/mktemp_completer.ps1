@@ -180,6 +180,59 @@ function Get-MktempPathCompletions {
     }
 }
 
+function Get-MktempOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--suffix'] = @(
+        @{ Text = '<suffix>'; Tip = 'Suffix appended to the template.' }
+    )
+    $table['-p'] = 'path'
+    $table['--tmpdir'] = 'path'
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-MktempPathCompletions -InputPath $prefix) {
+                New-MktempCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-MktempCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Mktemp {
     param(
         [string]$wordToComplete,
@@ -191,6 +244,11 @@ function Complete-Mktemp {
         ''
     } else {
         Get-MktempCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-MktempOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

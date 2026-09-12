@@ -180,6 +180,57 @@ function Get-CommPathCompletions {
     }
 }
 
+function Get-CommOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--output-delimiter'] = @(
+        @{ Text = '<string>'; Tip = 'Column separator.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-CommPathCompletions -InputPath $prefix) {
+                New-CommCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-CommCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Comm {
     param(
         [string]$wordToComplete,
@@ -191,6 +242,11 @@ function Complete-Comm {
         ''
     } else {
         Get-CommCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-CommOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

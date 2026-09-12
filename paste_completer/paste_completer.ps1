@@ -224,6 +224,60 @@ function Get-PastePathCompletions {
     }
 }
 
+function Get-PasteOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-d'] = @(
+        @{ Text = '<list>'; Tip = 'Delimiter characters, reused in turn.' }
+    )
+    $table['--delimiters'] = @(
+        @{ Text = '<list>'; Tip = 'Delimiter characters, reused in turn.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-PastePathCompletions -InputPath $prefix) {
+                New-PasteCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-PasteCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Paste {
     param(
         [string]$wordToComplete,
@@ -235,6 +289,11 @@ function Complete-Paste {
         ''
     } else {
         Get-PasteCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-PasteOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

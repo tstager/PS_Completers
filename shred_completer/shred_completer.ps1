@@ -180,6 +180,80 @@ function Get-ShredPathCompletions {
     }
 }
 
+function Get-ShredOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-n'] = @(
+        @{ Text = '3'; Tip = 'Default, 3 passes.' }
+        @{ Text = '<n>'; Tip = 'Number of passes.' }
+    )
+    $table['--iterations'] = @(
+        @{ Text = '3'; Tip = 'Default, 3 passes.' }
+        @{ Text = '<n>'; Tip = 'Number of passes.' }
+    )
+    $table['--random-source'] = 'path'
+    $table['-s'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['--size'] = @(
+        @{ Text = '<size>'; Tip = 'Size, suffixes K, M, G accepted.' }
+        @{ Text = '1K'; Tip = '1 KiB.' }
+        @{ Text = '1M'; Tip = '1 MiB.' }
+        @{ Text = '1G'; Tip = '1 GiB.' }
+    )
+    $table['--remove'] = @(
+        @{ Text = 'unlink'; Tip = 'Just unlink.' }
+        @{ Text = 'wipe'; Tip = 'Obfuscate the name before unlinking.' }
+        @{ Text = 'wipesync'; Tip = 'Sync each obfuscated byte to disk.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-ShredPathCompletions -InputPath $prefix) {
+                New-ShredCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-ShredCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Shred {
     param(
         [string]$wordToComplete,
@@ -191,6 +265,11 @@ function Complete-Shred {
         ''
     } else {
         Get-ShredCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-ShredOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

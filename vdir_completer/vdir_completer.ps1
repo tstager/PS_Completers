@@ -179,6 +179,141 @@ function Get-VdirPathCompletions {
     }
 }
 
+function Get-VdirOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--block-size'] = @(
+        @{ Text = 'K'; Tip = 'Scale sizes by K.' }
+        @{ Text = 'M'; Tip = 'Scale sizes by M.' }
+        @{ Text = 'G'; Tip = 'Scale sizes by G.' }
+        @{ Text = 'KB'; Tip = 'Scale sizes by KB.' }
+        @{ Text = 'MB'; Tip = 'Scale sizes by MB.' }
+        @{ Text = 'GB'; Tip = 'Scale sizes by GB.' }
+    )
+    $table['--color'] = @(
+        @{ Text = 'always'; Tip = 'Always.' }
+        @{ Text = 'auto'; Tip = 'Only on a terminal.' }
+        @{ Text = 'never'; Tip = 'Never.' }
+    )
+    $table['--hyperlink'] = @(
+        @{ Text = 'always'; Tip = 'Always.' }
+        @{ Text = 'auto'; Tip = 'Only on a terminal.' }
+        @{ Text = 'never'; Tip = 'Never.' }
+    )
+    $table['--format'] = @(
+        @{ Text = 'across'; Tip = 'Entries across, like -x.' }
+        @{ Text = 'commas'; Tip = 'Comma separated, like -m.' }
+        @{ Text = 'horizontal'; Tip = 'Entries across, like -x.' }
+        @{ Text = 'long'; Tip = 'Long listing, like -l.' }
+        @{ Text = 'single-column'; Tip = 'One entry per line, like -1.' }
+        @{ Text = 'verbose'; Tip = 'Long listing, like -l.' }
+        @{ Text = 'vertical'; Tip = 'Entries down columns, like -C.' }
+    )
+    $table['--hide'] = @(
+        @{ Text = '<pattern>'; Tip = 'Shell pattern.' }
+    )
+    $table['-I'] = @(
+        @{ Text = '<pattern>'; Tip = 'Shell pattern.' }
+    )
+    $table['--ignore'] = @(
+        @{ Text = '<pattern>'; Tip = 'Shell pattern.' }
+    )
+    $table['--indicator-style'] = @(
+        @{ Text = 'none'; Tip = 'No indicator.' }
+        @{ Text = 'slash'; Tip = 'Slash after directories, like -p.' }
+        @{ Text = 'file-type'; Tip = 'Indicator for each file type.' }
+        @{ Text = 'classify'; Tip = 'Indicator for each entry, like -F.' }
+    )
+    $table['--quoting-style'] = @(
+        @{ Text = 'literal'; Tip = 'literal quoting.' }
+        @{ Text = 'locale'; Tip = 'locale quoting.' }
+        @{ Text = 'shell'; Tip = 'shell quoting.' }
+        @{ Text = 'shell-always'; Tip = 'shell-always quoting.' }
+        @{ Text = 'shell-escape'; Tip = 'shell-escape quoting.' }
+        @{ Text = 'shell-escape-always'; Tip = 'shell-escape-always quoting.' }
+        @{ Text = 'c'; Tip = 'c quoting.' }
+        @{ Text = 'escape'; Tip = 'escape quoting.' }
+    )
+    $table['--sort'] = @(
+        @{ Text = 'none'; Tip = 'Directory order, like -U.' }
+        @{ Text = 'size'; Tip = 'By size, like -S.' }
+        @{ Text = 'time'; Tip = 'By time, like -t.' }
+        @{ Text = 'version'; Tip = 'By version, like -v.' }
+        @{ Text = 'extension'; Tip = 'By extension, like -X.' }
+        @{ Text = 'width'; Tip = 'By width.' }
+    )
+    $table['--time'] = @(
+        @{ Text = 'atime'; Tip = 'Access time.' }
+        @{ Text = 'access'; Tip = 'Access time.' }
+        @{ Text = 'use'; Tip = 'Access time.' }
+        @{ Text = 'ctime'; Tip = 'Change time.' }
+        @{ Text = 'status'; Tip = 'Change time.' }
+        @{ Text = 'birth'; Tip = 'Creation time.' }
+        @{ Text = 'creation'; Tip = 'Creation time.' }
+    )
+    $table['--time-style'] = @(
+        @{ Text = 'full-iso'; Tip = 'Full ISO 8601.' }
+        @{ Text = 'long-iso'; Tip = 'Long ISO 8601.' }
+        @{ Text = 'iso'; Tip = 'Short ISO 8601.' }
+        @{ Text = 'locale'; Tip = 'Locale format.' }
+    )
+    $table['-T'] = @(
+        @{ Text = '<cols>'; Tip = 'Column count.' }
+    )
+    $table['--tabsize'] = @(
+        @{ Text = '<cols>'; Tip = 'Column count.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '<cols>'; Tip = 'Column count.' }
+    )
+    $table['--width'] = @(
+        @{ Text = '<cols>'; Tip = 'Column count.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-VdirPathCompletions -InputPath $prefix) {
+                New-VdirCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-VdirCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Vdir {
     param(
         [string]$wordToComplete,
@@ -190,6 +325,11 @@ function Complete-Vdir {
         ''
     } else {
         Get-VdirCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-VdirOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

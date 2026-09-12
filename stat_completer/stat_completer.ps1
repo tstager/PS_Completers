@@ -180,6 +180,95 @@ function Get-StatPathCompletions {
     }
 }
 
+function Get-StatOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--cached'] = @(
+        @{ Text = 'always'; Tip = 'Use cached attributes.' }
+        @{ Text = 'never'; Tip = 'Never use cached attributes.' }
+        @{ Text = 'default'; Tip = 'Let the system decide.' }
+    )
+    $table['-c'] = @(
+        @{ Text = '%n'; Tip = 'File name.' }
+        @{ Text = '%s'; Tip = 'Size in bytes.' }
+        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
+        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
+        @{ Text = '%U'; Tip = 'Owner name.' }
+        @{ Text = '%F'; Tip = 'File type.' }
+        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
+        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
+        @{ Text = '%i'; Tip = 'Inode number.' }
+        @{ Text = '<format>'; Tip = 'Custom stat format.' }
+    )
+    $table['--format'] = @(
+        @{ Text = '%n'; Tip = 'File name.' }
+        @{ Text = '%s'; Tip = 'Size in bytes.' }
+        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
+        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
+        @{ Text = '%U'; Tip = 'Owner name.' }
+        @{ Text = '%F'; Tip = 'File type.' }
+        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
+        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
+        @{ Text = '%i'; Tip = 'Inode number.' }
+        @{ Text = '<format>'; Tip = 'Custom stat format.' }
+    )
+    $table['--printf'] = @(
+        @{ Text = '%n'; Tip = 'File name.' }
+        @{ Text = '%s'; Tip = 'Size in bytes.' }
+        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
+        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
+        @{ Text = '%U'; Tip = 'Owner name.' }
+        @{ Text = '%F'; Tip = 'File type.' }
+        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
+        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
+        @{ Text = '%i'; Tip = 'Inode number.' }
+        @{ Text = '<format>'; Tip = 'Custom stat format.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-StatPathCompletions -InputPath $prefix) {
+                New-StatCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-StatCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Stat {
     param(
         [string]$wordToComplete,
@@ -191,6 +280,11 @@ function Complete-Stat {
         ''
     } else {
         Get-StatCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-StatOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

@@ -180,6 +180,92 @@ function Get-TailPathCompletions {
     }
 }
 
+function Get-TailOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-c'] = @(
+        @{ Text = '<num>'; Tip = 'Last NUM units.' }
+        @{ Text = '+<num>'; Tip = 'Starting at unit NUM.' }
+    )
+    $table['--bytes'] = @(
+        @{ Text = '<num>'; Tip = 'Last NUM units.' }
+        @{ Text = '+<num>'; Tip = 'Starting at unit NUM.' }
+    )
+    $table['-n'] = @(
+        @{ Text = '<num>'; Tip = 'Last NUM units.' }
+        @{ Text = '+<num>'; Tip = 'Starting at unit NUM.' }
+    )
+    $table['--lines'] = @(
+        @{ Text = '<num>'; Tip = 'Last NUM units.' }
+        @{ Text = '+<num>'; Tip = 'Starting at unit NUM.' }
+    )
+    $table['-f'] = @(
+        @{ Text = 'name'; Tip = 'Follow by file name.' }
+        @{ Text = 'descriptor'; Tip = 'Follow by file descriptor.' }
+    )
+    $table['--follow'] = @(
+        @{ Text = 'name'; Tip = 'Follow by file name.' }
+        @{ Text = 'descriptor'; Tip = 'Follow by file descriptor.' }
+    )
+    $table['--max-unchanged-stats'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--pid'] = { foreach ($process in (Get-Process | Sort-Object -Property Id)) { @{ Text = [string]$process.Id; Tip = $process.ProcessName } } }
+    $table['-s'] = @(
+        @{ Text = '1'; Tip = '1 second.' }
+        @{ Text = '5'; Tip = '5 seconds.' }
+        @{ Text = '<seconds>'; Tip = 'Sleep interval.' }
+    )
+    $table['--sleep-interval'] = @(
+        @{ Text = '1'; Tip = '1 second.' }
+        @{ Text = '5'; Tip = '5 seconds.' }
+        @{ Text = '<seconds>'; Tip = 'Sleep interval.' }
+    )
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-TailPathCompletions -InputPath $prefix) {
+                New-TailCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-TailCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Tail {
     param(
         [string]$wordToComplete,
@@ -191,6 +277,11 @@ function Complete-Tail {
         ''
     } else {
         Get-TailCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-TailOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
