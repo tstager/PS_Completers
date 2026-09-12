@@ -18,7 +18,7 @@ This PowerShell argument completer provides tab completion for the `opencode` co
    ```
 3. Or add it directly to your profile:
    ```powershell
-   & "C:\path\to\opencode_completer\opencode_completer.ps1"
+   . "C:\path\to\opencode_completer\opencode_completer.ps1"
    ```
 
 ## Usage
