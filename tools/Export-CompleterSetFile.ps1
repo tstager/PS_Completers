@@ -31,4 +31,4 @@ $registrations = foreach ($script in $scripts)
 $registrations | Export-CompleterSet -Path $setPath -Confirm:$false
 
 $entryCount = @((Import-PowerShellDataFile -LiteralPath $setPath).Entries).Count
-Write-Host "Wrote $entryCount entries for $($scripts.Count) scripts to $setPath"
+"Wrote $entryCount entries for $($scripts.Count) scripts to $setPath"

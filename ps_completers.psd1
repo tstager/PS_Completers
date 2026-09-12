@@ -2,7 +2,7 @@
     Version = 1
     Entries = @(
         @{
-            Path    = '7z_completer\7z_completer.ps1'
+            Path    = '7z_completer/7z_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = '7z'; Native = $true }
@@ -10,7 +10,7 @@
             )
         }
         @{
-            Path    = 'accesschk_completer\accesschk_completer.ps1'
+            Path    = 'accesschk_completer/accesschk_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'accesschk'; Native = $true }
@@ -18,7 +18,7 @@
             )
         }
         @{
-            Path    = 'apm_completer\apm_completer.ps1'
+            Path    = 'apm_completer/apm_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'apm'; Native = $true }
@@ -26,7 +26,7 @@
             )
         }
         @{
-            Path    = 'attrib_completer\attrib_completer.ps1'
+            Path    = 'attrib_completer/attrib_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'attrib'; Native = $true }
@@ -34,7 +34,7 @@
             )
         }
         @{
-            Path    = 'autorunsc_completer\autorunsc_completer.ps1'
+            Path    = 'autorunsc_completer/autorunsc_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'autorunsc'; Native = $true }
@@ -42,7 +42,7 @@
             )
         }
         @{
-            Path    = 'base32_completer\base32_completer.ps1'
+            Path    = 'base32_completer/base32_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'base32'; Native = $true }
@@ -50,7 +50,7 @@
             )
         }
         @{
-            Path    = 'base64_completer\base64_completer.ps1'
+            Path    = 'base64_completer/base64_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'base64'; Native = $true }
@@ -58,7 +58,7 @@
             )
         }
         @{
-            Path    = 'basename_completer\basename_completer.ps1'
+            Path    = 'basename_completer/basename_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'basename'; Native = $true }
@@ -66,7 +66,7 @@
             )
         }
         @{
-            Path    = 'bun_completer\bun_completer.ps1'
+            Path    = 'bun_completer/bun_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'bun'; Native = $true }
@@ -74,7 +74,7 @@
             )
         }
         @{
-            Path    = 'cargo_binstall_completer\cargo_binstall_completer.ps1'
+            Path    = 'cargo_binstall_completer/cargo_binstall_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cargo-binstall'; Native = $true }
@@ -82,7 +82,7 @@
             )
         }
         @{
-            Path    = 'cargo_clippy_completer\cargo_clippy_completer.ps1'
+            Path    = 'cargo_clippy_completer/cargo_clippy_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cargo-clippy'; Native = $true }
@@ -90,7 +90,7 @@
             )
         }
         @{
-            Path    = 'cargo_completer\cargo_completer.ps1'
+            Path    = 'cargo_completer/cargo_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cargo'; Native = $true }
@@ -98,7 +98,7 @@
             )
         }
         @{
-            Path    = 'cksum_completer\cksum_completer.ps1'
+            Path    = 'cksum_completer/cksum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cksum'; Native = $true }
@@ -106,7 +106,7 @@
             )
         }
         @{
-            Path    = 'claude_completer\claude_completer.ps1'
+            Path    = 'claude_completer/claude_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'claude'; Native = $true }
@@ -114,7 +114,7 @@
             )
         }
         @{
-            Path    = 'cmd_completer\cmd_completer.ps1'
+            Path    = 'cmd_completer/cmd_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cmd'; Native = $true }
@@ -122,7 +122,7 @@
             )
         }
         @{
-            Path    = 'code_insiders_completer\code_insiders_completer.ps1'
+            Path    = 'code_insiders_completer/code_insiders_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'code-insiders'; Native = $true }
@@ -130,7 +130,7 @@
             )
         }
         @{
-            Path    = 'codex_completer\codex_completer.ps1'
+            Path    = 'codex_completer/codex_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'codex'; Native = $true }
@@ -139,7 +139,7 @@
             )
         }
         @{
-            Path    = 'comm_completer\comm_completer.ps1'
+            Path    = 'comm_completer/comm_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'comm'; Native = $true }
@@ -147,7 +147,7 @@
             )
         }
         @{
-            Path    = 'compact_completer\compact_completer.ps1'
+            Path    = 'compact_completer/compact_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'compact'; Native = $true }
@@ -155,7 +155,7 @@
             )
         }
         @{
-            Path    = 'contig_completer\contig_completer.ps1'
+            Path    = 'contig_completer/contig_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'contig'; Native = $true }
@@ -163,7 +163,7 @@
             )
         }
         @{
-            Path    = 'copilot_completer\copilot_completer.ps1'
+            Path    = 'copilot_completer/copilot_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'copilot'; Native = $true }
@@ -171,7 +171,7 @@
             )
         }
         @{
-            Path    = 'csplit_completer\csplit_completer.ps1'
+            Path    = 'csplit_completer/csplit_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'csplit'; Native = $true }
@@ -179,7 +179,7 @@
             )
         }
         @{
-            Path    = 'curl_completer\curl_completer.ps1'
+            Path    = 'curl_completer/curl_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'curl'; Native = $true }
@@ -187,7 +187,7 @@
             )
         }
         @{
-            Path    = 'cursor_agent_completer\cursor_agent_completer.ps1'
+            Path    = 'cursor_agent_completer/cursor_agent_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cursor-agent'; Native = $true }
@@ -196,7 +196,7 @@
             )
         }
         @{
-            Path    = 'cut_completer\cut_completer.ps1'
+            Path    = 'cut_completer/cut_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'cut'; Native = $true }
@@ -204,7 +204,7 @@
             )
         }
         @{
-            Path    = 'date_completer\date_completer.ps1'
+            Path    = 'date_completer/date_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'date'; Native = $true }
@@ -212,7 +212,7 @@
             )
         }
         @{
-            Path    = 'dd_completer\dd_completer.ps1'
+            Path    = 'dd_completer/dd_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dd'; Native = $true }
@@ -220,7 +220,7 @@
             )
         }
         @{
-            Path    = 'df_completer\df_completer.ps1'
+            Path    = 'df_completer/df_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'df'; Native = $true }
@@ -228,7 +228,7 @@
             )
         }
         @{
-            Path    = 'dircolors_completer\dircolors_completer.ps1'
+            Path    = 'dircolors_completer/dircolors_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dircolors'; Native = $true }
@@ -236,7 +236,7 @@
             )
         }
         @{
-            Path    = 'dirname_completer\dirname_completer.ps1'
+            Path    = 'dirname_completer/dirname_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dirname'; Native = $true }
@@ -244,14 +244,14 @@
             )
         }
         @{
-            Path    = 'dism_completer\dism_completer.ps1'
+            Path    = 'dism_completer/dism_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dism'; Native = $true }
             )
         }
         @{
-            Path    = 'docker_completer\docker_completer.ps1'
+            Path    = 'docker_completer/docker_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'docker'; Native = $true }
@@ -259,21 +259,21 @@
             )
         }
         @{
-            Path    = 'dotnet_completer\dotnet_completer.ps1'
+            Path    = 'dotnet_completer/dotnet_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dotnet'; Native = $true }
             )
         }
         @{
-            Path    = 'DSC_completer\DSC_completer.ps1'
+            Path    = 'DSC_completer/DSC_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'dsc'; Native = $true }
             )
         }
         @{
-            Path    = 'du_completer\du_completer.ps1'
+            Path    = 'du_completer/du_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'du'; Native = $true }
@@ -281,7 +281,7 @@
             )
         }
         @{
-            Path    = 'env_completer\env_completer.ps1'
+            Path    = 'env_completer/env_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'env'; Native = $true }
@@ -289,7 +289,7 @@
             )
         }
         @{
-            Path    = 'expr_completer\expr_completer.ps1'
+            Path    = 'expr_completer/expr_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'expr'; Native = $true }
@@ -297,7 +297,7 @@
             )
         }
         @{
-            Path    = 'factor_completer\factor_completer.ps1'
+            Path    = 'factor_completer/factor_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'factor'; Native = $true }
@@ -305,7 +305,7 @@
             )
         }
         @{
-            Path    = 'false_completer\false_completer.ps1'
+            Path    = 'false_completer/false_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'false'; Native = $true }
@@ -313,7 +313,7 @@
             )
         }
         @{
-            Path    = 'fd_completer\fd_completer.ps1'
+            Path    = 'fd_completer/fd_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'fd'; Native = $true }
@@ -321,7 +321,7 @@
             )
         }
         @{
-            Path    = 'findstr_completer\findstr_completer.ps1'
+            Path    = 'findstr_completer/findstr_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'findstr'; Native = $true }
@@ -329,7 +329,7 @@
             )
         }
         @{
-            Path    = 'fmt_completer\fmt_completer.ps1'
+            Path    = 'fmt_completer/fmt_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'fmt'; Native = $true }
@@ -337,7 +337,7 @@
             )
         }
         @{
-            Path    = 'fold_completer\fold_completer.ps1'
+            Path    = 'fold_completer/fold_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'fold'; Native = $true }
@@ -345,7 +345,7 @@
             )
         }
         @{
-            Path    = 'fsutil_completer\fsutil_completer.ps1'
+            Path    = 'fsutil_completer/fsutil_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'fsutil'; Native = $true }
@@ -353,7 +353,7 @@
             )
         }
         @{
-            Path    = 'gawk_completer\gawk_completer.ps1'
+            Path    = 'gawk_completer/gawk_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'gawk'; Native = $true }
@@ -363,7 +363,7 @@
             )
         }
         @{
-            Path    = 'gh_cli_completer\gh_cli_completer.ps1'
+            Path    = 'gh_cli_completer/gh_cli_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'gh'; Native = $true }
@@ -371,7 +371,7 @@
             )
         }
         @{
-            Path    = 'Git_completer\Git_completer.ps1'
+            Path    = 'Git_completer/Git_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'git'; Native = $true }
@@ -379,7 +379,7 @@
             )
         }
         @{
-            Path    = 'go_completer\go_completer.ps1'
+            Path    = 'go_completer/go_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'go'; Native = $true }
@@ -387,7 +387,7 @@
             )
         }
         @{
-            Path    = 'grep_completer\grep_completer.ps1'
+            Path    = 'grep_completer/grep_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'grep'; Native = $true }
@@ -395,7 +395,7 @@
             )
         }
         @{
-            Path    = 'groff_completer\groff_completer.ps1'
+            Path    = 'groff_completer/groff_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'groff'; Native = $true }
@@ -403,7 +403,7 @@
             )
         }
         @{
-            Path    = 'grok_completer\grok_completer.ps1'
+            Path    = 'grok_completer/grok_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'grok'; Native = $true }
@@ -412,7 +412,7 @@
             )
         }
         @{
-            Path    = 'handle_completer\handle_completer.ps1'
+            Path    = 'handle_completer/handle_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'handle'; Native = $true }
@@ -420,7 +420,7 @@
             )
         }
         @{
-            Path    = 'head_completer\head_completer.ps1'
+            Path    = 'head_completer/head_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'head'; Native = $true }
@@ -428,7 +428,7 @@
             )
         }
         @{
-            Path    = 'icacls_completer\icacls_completer.ps1'
+            Path    = 'icacls_completer/icacls_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'icacls'; Native = $true }
@@ -436,7 +436,7 @@
             )
         }
         @{
-            Path    = 'ipconfig_completer\ipconfig_completer.ps1'
+            Path    = 'ipconfig_completer/ipconfig_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'ipconfig'; Native = $true }
@@ -444,7 +444,7 @@
             )
         }
         @{
-            Path    = 'join_completer\join_completer.ps1'
+            Path    = 'join_completer/join_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'join'; Native = $true }
@@ -452,7 +452,7 @@
             )
         }
         @{
-            Path    = 'jq_completer\jq_completer.ps1'
+            Path    = 'jq_completer/jq_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'jq'; Native = $true }
@@ -460,7 +460,7 @@
             )
         }
         @{
-            Path    = 'just_completer\just_completer.ps1'
+            Path    = 'just_completer/just_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'just'; Native = $true }
@@ -468,7 +468,7 @@
             )
         }
         @{
-            Path    = 'link_completer\link_completer.ps1'
+            Path    = 'link_completer/link_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'link'; Native = $true }
@@ -476,7 +476,7 @@
             )
         }
         @{
-            Path    = 'listdlls_completer\listdlls_completer.ps1'
+            Path    = 'listdlls_completer/listdlls_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'Listdlls'; Native = $true }
@@ -484,7 +484,7 @@
             )
         }
         @{
-            Path    = 'ln_completer\ln_completer.ps1'
+            Path    = 'ln_completer/ln_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'ln'; Native = $true }
@@ -492,7 +492,7 @@
             )
         }
         @{
-            Path    = 'markitdown_completer\markitdown_completer.ps1'
+            Path    = 'markitdown_completer/markitdown_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'markitdown'; Native = $true }
@@ -500,7 +500,7 @@
             )
         }
         @{
-            Path    = 'md5sum_completer\md5sum_completer.ps1'
+            Path    = 'md5sum_completer/md5sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'md5sum'; Native = $true }
@@ -508,7 +508,7 @@
             )
         }
         @{
-            Path    = 'mktemp_completer\mktemp_completer.ps1'
+            Path    = 'mktemp_completer/mktemp_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'mktemp'; Native = $true }
@@ -516,7 +516,7 @@
             )
         }
         @{
-            Path    = 'netsh_completer\netsh_completer.ps1'
+            Path    = 'netsh_completer/netsh_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'netsh'; Native = $true }
@@ -524,7 +524,7 @@
             )
         }
         @{
-            Path    = 'nl_completer\nl_completer.ps1'
+            Path    = 'nl_completer/nl_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'nl'; Native = $true }
@@ -532,7 +532,7 @@
             )
         }
         @{
-            Path    = 'npm_completer\npm_completer.ps1'
+            Path    = 'npm_completer/npm_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'npm'; Native = $true }
@@ -542,7 +542,7 @@
             )
         }
         @{
-            Path    = 'nproc_completer\nproc_completer.ps1'
+            Path    = 'nproc_completer/nproc_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'nproc'; Native = $true }
@@ -550,7 +550,7 @@
             )
         }
         @{
-            Path    = 'numfmt_completer\numfmt_completer.ps1'
+            Path    = 'numfmt_completer/numfmt_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'numfmt'; Native = $true }
@@ -558,7 +558,7 @@
             )
         }
         @{
-            Path    = 'od_completer\od_completer.ps1'
+            Path    = 'od_completer/od_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'od'; Native = $true }
@@ -566,7 +566,7 @@
             )
         }
         @{
-            Path    = 'OhMyPosh_completer\OhMyPosh_completer.ps1'
+            Path    = 'OhMyPosh_completer/OhMyPosh_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'oh-my-posh.exe'; Native = $true }
@@ -574,7 +574,7 @@
             )
         }
         @{
-            Path    = 'ollama_completer\ollama_completer.ps1'
+            Path    = 'ollama_completer/ollama_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'ollama'; Native = $true }
@@ -582,7 +582,7 @@
             )
         }
         @{
-            Path    = 'onemd_completer\onemd_completer.ps1'
+            Path    = 'onemd_completer/onemd_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'onemd'; Native = $true }
@@ -592,7 +592,7 @@
             )
         }
         @{
-            Path    = 'opencode_completer\opencode_completer.ps1'
+            Path    = 'opencode_completer/opencode_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'opencode'; Native = $true }
@@ -600,7 +600,7 @@
             )
         }
         @{
-            Path    = 'paste_completer\paste_completer.ps1'
+            Path    = 'paste_completer/paste_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'paste'; Native = $true }
@@ -608,7 +608,7 @@
             )
         }
         @{
-            Path    = 'pathchk_completer\pathchk_completer.ps1'
+            Path    = 'pathchk_completer/pathchk_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pathchk'; Native = $true }
@@ -616,7 +616,7 @@
             )
         }
         @{
-            Path    = 'pi_completer\pi_completer.ps1'
+            Path    = 'pi_completer/pi_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pi'; Native = $true }
@@ -625,7 +625,7 @@
             )
         }
         @{
-            Path    = 'playwright_cli_completer\playwright_cli_completer.ps1'
+            Path    = 'playwright_cli_completer/playwright_cli_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'playwright-cli'; Native = $true }
@@ -634,7 +634,7 @@
             )
         }
         @{
-            Path    = 'pnpm_completer\pnpm_completer.ps1'
+            Path    = 'pnpm_completer/pnpm_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pnpm'; Native = $true }
@@ -643,7 +643,7 @@
             )
         }
         @{
-            Path    = 'pr_completer\pr_completer.ps1'
+            Path    = 'pr_completer/pr_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pr'; Native = $true }
@@ -651,7 +651,7 @@
             )
         }
         @{
-            Path    = 'printenv_completer\printenv_completer.ps1'
+            Path    = 'printenv_completer/printenv_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'printenv'; Native = $true }
@@ -659,7 +659,7 @@
             )
         }
         @{
-            Path    = 'printf_completer\printf_completer.ps1'
+            Path    = 'printf_completer/printf_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'printf'; Native = $true }
@@ -667,7 +667,7 @@
             )
         }
         @{
-            Path    = 'procdump_completer\procdump_completer.ps1'
+            Path    = 'procdump_completer/procdump_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'procdump'; Native = $true }
@@ -675,7 +675,7 @@
             )
         }
         @{
-            Path    = 'psexec_completer\psexec_completer.ps1'
+            Path    = 'psexec_completer/psexec_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psexec'; Native = $true }
@@ -683,7 +683,7 @@
             )
         }
         @{
-            Path    = 'psfile_completer\psfile_completer.ps1'
+            Path    = 'psfile_completer/psfile_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psfile'; Native = $true }
@@ -691,7 +691,7 @@
             )
         }
         @{
-            Path    = 'psgetsid_completer\psgetsid_completer.ps1'
+            Path    = 'psgetsid_completer/psgetsid_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psgetsid'; Native = $true }
@@ -699,7 +699,7 @@
             )
         }
         @{
-            Path    = 'psinfo_completer\psinfo_completer.ps1'
+            Path    = 'psinfo_completer/psinfo_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psinfo'; Native = $true }
@@ -707,7 +707,7 @@
             )
         }
         @{
-            Path    = 'pskill_completer\pskill_completer.ps1'
+            Path    = 'pskill_completer/pskill_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pskill'; Native = $true }
@@ -715,7 +715,7 @@
             )
         }
         @{
-            Path    = 'pslist_completer\pslist_completer.ps1'
+            Path    = 'pslist_completer/pslist_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pslist'; Native = $true }
@@ -723,7 +723,7 @@
             )
         }
         @{
-            Path    = 'psloglist_completer\psloglist_completer.ps1'
+            Path    = 'psloglist_completer/psloglist_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psloglist'; Native = $true }
@@ -731,7 +731,7 @@
             )
         }
         @{
-            Path    = 'psmux_completer\psmux_completer.ps1'
+            Path    = 'psmux_completer/psmux_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psmux'; Native = $true }
@@ -739,7 +739,7 @@
             )
         }
         @{
-            Path    = 'pspasswd_completer\pspasswd_completer.ps1'
+            Path    = 'pspasswd_completer/pspasswd_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pspasswd'; Native = $true }
@@ -747,7 +747,7 @@
             )
         }
         @{
-            Path    = 'psping_completer\psping_completer.ps1'
+            Path    = 'psping_completer/psping_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psping'; Native = $true }
@@ -755,7 +755,7 @@
             )
         }
         @{
-            Path    = 'psservice_completer\psservice_completer.ps1'
+            Path    = 'psservice_completer/psservice_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psservice'; Native = $true }
@@ -763,7 +763,7 @@
             )
         }
         @{
-            Path    = 'psshutdown_completer\psshutdown_completer.ps1'
+            Path    = 'psshutdown_completer/psshutdown_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'psshutdown'; Native = $true }
@@ -771,7 +771,7 @@
             )
         }
         @{
-            Path    = 'pssuspend_completer\pssuspend_completer.ps1'
+            Path    = 'pssuspend_completer/pssuspend_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pssuspend'; Native = $true }
@@ -779,7 +779,7 @@
             )
         }
         @{
-            Path    = 'ptx_completer\ptx_completer.ps1'
+            Path    = 'ptx_completer/ptx_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'ptx'; Native = $true }
@@ -787,7 +787,7 @@
             )
         }
         @{
-            Path    = 'pwsh_completer\pwsh_completer.ps1'
+            Path    = 'pwsh_completer/pwsh_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'pwsh'; Native = $true }
@@ -795,7 +795,7 @@
             )
         }
         @{
-            Path    = 'py_completer\py_completer.ps1'
+            Path    = 'py_completer/py_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'py'; Native = $true }
@@ -803,7 +803,7 @@
             )
         }
         @{
-            Path    = 'python_completer\python_completer.ps1'
+            Path    = 'python_completer/python_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'python'; Native = $true }
@@ -811,7 +811,7 @@
             )
         }
         @{
-            Path    = 'qwen_completer\qwen_completer.ps1'
+            Path    = 'qwen_completer/qwen_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'qwen'; Native = $true }
@@ -820,7 +820,7 @@
             )
         }
         @{
-            Path    = 'readlink_completer\readlink_completer.ps1'
+            Path    = 'readlink_completer/readlink_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'readlink'; Native = $true }
@@ -828,7 +828,7 @@
             )
         }
         @{
-            Path    = 'realpath_completer\realpath_completer.ps1'
+            Path    = 'realpath_completer/realpath_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'realpath'; Native = $true }
@@ -836,7 +836,7 @@
             )
         }
         @{
-            Path    = 'reg_completer\reg_completer.ps1'
+            Path    = 'reg_completer/reg_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'reg'; Native = $true }
@@ -844,7 +844,7 @@
             )
         }
         @{
-            Path    = 'RegDelNull_completer\RegDelNull_completer.ps1'
+            Path    = 'RegDelNull_completer/RegDelNull_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'RegDelNull'; Native = $true }
@@ -852,7 +852,7 @@
             )
         }
         @{
-            Path    = 'regjump_completer\regjump_completer.ps1'
+            Path    = 'regjump_completer/regjump_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'regjump'; Native = $true }
@@ -860,7 +860,7 @@
             )
         }
         @{
-            Path    = 'rg_completer\rg_completer.ps1'
+            Path    = 'rg_completer/rg_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'rg'; Native = $true }
@@ -868,7 +868,7 @@
             )
         }
         @{
-            Path    = 'robocopy_completer\robocopy_completer.ps1'
+            Path    = 'robocopy_completer/robocopy_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'robocopy'; Native = $true }
@@ -876,7 +876,7 @@
             )
         }
         @{
-            Path    = 'rtk_completer\rtk_completer.ps1'
+            Path    = 'rtk_completer/rtk_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'rtk'; Native = $true }
@@ -884,7 +884,7 @@
             )
         }
         @{
-            Path    = 'ru_completer\ru_completer.ps1'
+            Path    = 'ru_completer/ru_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'ru'; Native = $true }
@@ -892,7 +892,7 @@
             )
         }
         @{
-            Path    = 'rustc_completer\rustc_completer.ps1'
+            Path    = 'rustc_completer/rustc_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'rustc'; Native = $true }
@@ -900,7 +900,7 @@
             )
         }
         @{
-            Path    = 'rustfmt_completer\rustfmt_completer.ps1'
+            Path    = 'rustfmt_completer/rustfmt_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'rustfmt'; Native = $true }
@@ -908,7 +908,7 @@
             )
         }
         @{
-            Path    = 'rustup_completer\rustup_completer.ps1'
+            Path    = 'rustup_completer/rustup_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'rustup'; Native = $true }
@@ -916,7 +916,7 @@
             )
         }
         @{
-            Path    = 'sc_completer\sc_completer.ps1'
+            Path    = 'sc_completer/sc_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sc'; Native = $true }
@@ -924,7 +924,7 @@
             )
         }
         @{
-            Path    = 'schtasks_completer\schtasks_completer.ps1'
+            Path    = 'schtasks_completer/schtasks_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'schtasks'; Native = $true }
@@ -932,7 +932,7 @@
             )
         }
         @{
-            Path    = 'scoop_completer\scoop_completer.ps1'
+            Path    = 'scoop_completer/scoop_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'scoop'; Native = $true }
@@ -941,7 +941,7 @@
             )
         }
         @{
-            Path    = 'sdelete_completer\sdelete_completer.ps1'
+            Path    = 'sdelete_completer/sdelete_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sdelete'; Native = $true }
@@ -949,7 +949,7 @@
             )
         }
         @{
-            Path    = 'sed_completer\sed_completer.ps1'
+            Path    = 'sed_completer/sed_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sed'; Native = $true }
@@ -957,7 +957,7 @@
             )
         }
         @{
-            Path    = 'seq_completer\seq_completer.ps1'
+            Path    = 'seq_completer/seq_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'seq'; Native = $true }
@@ -965,7 +965,7 @@
             )
         }
         @{
-            Path    = 'sha1sum_completer\sha1sum_completer.ps1'
+            Path    = 'sha1sum_completer/sha1sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sha1sum'; Native = $true }
@@ -973,7 +973,7 @@
             )
         }
         @{
-            Path    = 'sha224sum_completer\sha224sum_completer.ps1'
+            Path    = 'sha224sum_completer/sha224sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sha224sum'; Native = $true }
@@ -981,7 +981,7 @@
             )
         }
         @{
-            Path    = 'sha256sum_completer\sha256sum_completer.ps1'
+            Path    = 'sha256sum_completer/sha256sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sha256sum'; Native = $true }
@@ -989,7 +989,7 @@
             )
         }
         @{
-            Path    = 'sha384sum_completer\sha384sum_completer.ps1'
+            Path    = 'sha384sum_completer/sha384sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sha384sum'; Native = $true }
@@ -997,7 +997,7 @@
             )
         }
         @{
-            Path    = 'sha512sum_completer\sha512sum_completer.ps1'
+            Path    = 'sha512sum_completer/sha512sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sha512sum'; Native = $true }
@@ -1005,7 +1005,7 @@
             )
         }
         @{
-            Path    = 'shellrunas_completer\shellrunas_completer.ps1'
+            Path    = 'shellrunas_completer/shellrunas_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'shellrunas'; Native = $true }
@@ -1013,7 +1013,7 @@
             )
         }
         @{
-            Path    = 'shred_completer\shred_completer.ps1'
+            Path    = 'shred_completer/shred_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'shred'; Native = $true }
@@ -1021,7 +1021,7 @@
             )
         }
         @{
-            Path    = 'shuf_completer\shuf_completer.ps1'
+            Path    = 'shuf_completer/shuf_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'shuf'; Native = $true }
@@ -1029,7 +1029,7 @@
             )
         }
         @{
-            Path    = 'sigcheck_completer\sigcheck_completer.ps1'
+            Path    = 'sigcheck_completer/sigcheck_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sigcheck'; Native = $true }
@@ -1037,7 +1037,7 @@
             )
         }
         @{
-            Path    = 'split_completer\split_completer.ps1'
+            Path    = 'split_completer/split_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'split'; Native = $true }
@@ -1045,7 +1045,7 @@
             )
         }
         @{
-            Path    = 'stat_completer\stat_completer.ps1'
+            Path    = 'stat_completer/stat_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'stat'; Native = $true }
@@ -1053,7 +1053,7 @@
             )
         }
         @{
-            Path    = 'stdbuf_completer\stdbuf_completer.ps1'
+            Path    = 'stdbuf_completer/stdbuf_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'stdbuf'; Native = $true }
@@ -1061,7 +1061,7 @@
             )
         }
         @{
-            Path    = 'strings_completer\strings_completer.ps1'
+            Path    = 'strings_completer/strings_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'strings'; Native = $true }
@@ -1069,7 +1069,7 @@
             )
         }
         @{
-            Path    = 'sum_completer\sum_completer.ps1'
+            Path    = 'sum_completer/sum_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'sum'; Native = $true }
@@ -1077,7 +1077,7 @@
             )
         }
         @{
-            Path    = 'systeminfo_completer\systeminfo_completer.ps1'
+            Path    = 'systeminfo_completer/systeminfo_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'systeminfo'; Native = $true }
@@ -1085,7 +1085,7 @@
             )
         }
         @{
-            Path    = 'tac_completer\tac_completer.ps1'
+            Path    = 'tac_completer/tac_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tac'; Native = $true }
@@ -1093,7 +1093,7 @@
             )
         }
         @{
-            Path    = 'tail_completer\tail_completer.ps1'
+            Path    = 'tail_completer/tail_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tail'; Native = $true }
@@ -1101,7 +1101,7 @@
             )
         }
         @{
-            Path    = 'takeown_completer\takeown_completer.ps1'
+            Path    = 'takeown_completer/takeown_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'takeown'; Native = $true }
@@ -1109,7 +1109,7 @@
             )
         }
         @{
-            Path    = 'tar_completer\tar_completer.ps1'
+            Path    = 'tar_completer/tar_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tar'; Native = $true }
@@ -1117,7 +1117,7 @@
             )
         }
         @{
-            Path    = 'tasklist_completer\tasklist_completer.ps1'
+            Path    = 'tasklist_completer/tasklist_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tasklist'; Native = $true }
@@ -1125,7 +1125,7 @@
             )
         }
         @{
-            Path    = 'test_completer\test_completer.ps1'
+            Path    = 'test_completer/test_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'test'; Native = $true }
@@ -1133,7 +1133,7 @@
             )
         }
         @{
-            Path    = 'testlimit_completer\testlimit_completer.ps1'
+            Path    = 'testlimit_completer/testlimit_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'Testlimit'; Native = $true }
@@ -1141,7 +1141,7 @@
             )
         }
         @{
-            Path    = 'touch_completer\touch_completer.ps1'
+            Path    = 'touch_completer/touch_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'touch'; Native = $true }
@@ -1149,7 +1149,7 @@
             )
         }
         @{
-            Path    = 'tr_completer\tr_completer.ps1'
+            Path    = 'tr_completer/tr_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tr'; Native = $true }
@@ -1157,7 +1157,7 @@
             )
         }
         @{
-            Path    = 'truncate_completer\truncate_completer.ps1'
+            Path    = 'truncate_completer/truncate_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'truncate'; Native = $true }
@@ -1165,7 +1165,7 @@
             )
         }
         @{
-            Path    = 'tskill_completer\tskill_completer.ps1'
+            Path    = 'tskill_completer/tskill_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tskill'; Native = $true }
@@ -1173,7 +1173,7 @@
             )
         }
         @{
-            Path    = 'tsort_completer\tsort_completer.ps1'
+            Path    = 'tsort_completer/tsort_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tsort'; Native = $true }
@@ -1181,7 +1181,7 @@
             )
         }
         @{
-            Path    = 'tty_completer\tty_completer.ps1'
+            Path    = 'tty_completer/tty_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'tty'; Native = $true }
@@ -1189,7 +1189,7 @@
             )
         }
         @{
-            Path    = 'uname_completer\uname_completer.ps1'
+            Path    = 'uname_completer/uname_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'uname'; Native = $true }
@@ -1197,7 +1197,7 @@
             )
         }
         @{
-            Path    = 'unexpand_completer\unexpand_completer.ps1'
+            Path    = 'unexpand_completer/unexpand_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'unexpand'; Native = $true }
@@ -1205,7 +1205,7 @@
             )
         }
         @{
-            Path    = 'uniq_completer\uniq_completer.ps1'
+            Path    = 'uniq_completer/uniq_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'uniq'; Native = $true }
@@ -1213,7 +1213,7 @@
             )
         }
         @{
-            Path    = 'unlink_completer\unlink_completer.ps1'
+            Path    = 'unlink_completer/unlink_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'unlink'; Native = $true }
@@ -1221,7 +1221,7 @@
             )
         }
         @{
-            Path    = 'uptime_completer\uptime_completer.ps1'
+            Path    = 'uptime_completer/uptime_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'uptime'; Native = $true }
@@ -1229,7 +1229,7 @@
             )
         }
         @{
-            Path    = 'uv_completer\uv_completer.ps1'
+            Path    = 'uv_completer/uv_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'uv'; Native = $true }
@@ -1239,7 +1239,7 @@
             )
         }
         @{
-            Path    = 'vdir_completer\vdir_completer.ps1'
+            Path    = 'vdir_completer/vdir_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'vdir'; Native = $true }
@@ -1247,7 +1247,7 @@
             )
         }
         @{
-            Path    = 'wc_completer\wc_completer.ps1'
+            Path    = 'wc_completer/wc_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wc'; Native = $true }
@@ -1255,7 +1255,7 @@
             )
         }
         @{
-            Path    = 'wecutil_completer\wecutil_completer.ps1'
+            Path    = 'wecutil_completer/wecutil_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wecutil'; Native = $true }
@@ -1263,7 +1263,7 @@
             )
         }
         @{
-            Path    = 'wevtutil_completer\wevtutil_completer.ps1'
+            Path    = 'wevtutil_completer/wevtutil_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wevtutil'; Native = $true }
@@ -1271,7 +1271,7 @@
             )
         }
         @{
-            Path    = 'where_completer\where_completer.ps1'
+            Path    = 'where_completer/where_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'where.exe'; Native = $true }
@@ -1279,7 +1279,7 @@
             )
         }
         @{
-            Path    = 'whoami_completer\whoami_completer.ps1'
+            Path    = 'whoami_completer/whoami_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'whoami'; Native = $true }
@@ -1287,7 +1287,7 @@
             )
         }
         @{
-            Path    = 'winapp_completer\winapp_completer.ps1'
+            Path    = 'winapp_completer/winapp_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'winapp'; Native = $true }
@@ -1295,7 +1295,7 @@
             )
         }
         @{
-            Path    = 'wpr_completer\wpr_completer.ps1'
+            Path    = 'wpr_completer/wpr_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wpr'; Native = $true }
@@ -1303,7 +1303,7 @@
             )
         }
         @{
-            Path    = 'wsb_completer\wsb_completer.ps1'
+            Path    = 'wsb_completer/wsb_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wsb'; Native = $true }
@@ -1311,7 +1311,7 @@
             )
         }
         @{
-            Path    = 'wsl_completer\wsl_completer.ps1'
+            Path    = 'wsl_completer/wsl_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wsl'; Native = $true }
@@ -1319,7 +1319,7 @@
             )
         }
         @{
-            Path    = 'wslconfig_completer\wslconfig_completer.ps1'
+            Path    = 'wslconfig_completer/wslconfig_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wslconfig'; Native = $true }
@@ -1327,7 +1327,7 @@
             )
         }
         @{
-            Path    = 'wt_completer\wt_completer.ps1'
+            Path    = 'wt_completer/wt_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'wt'; Native = $true }
@@ -1335,7 +1335,7 @@
             )
         }
         @{
-            Path    = 'xargs_completer\xargs_completer.ps1'
+            Path    = 'xargs_completer/xargs_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'xargs'; Native = $true }
@@ -1343,7 +1343,7 @@
             )
         }
         @{
-            Path    = 'xcopy_completer\xcopy_completer.ps1'
+            Path    = 'xcopy_completer/xcopy_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'xcopy'; Native = $true }
@@ -1351,7 +1351,7 @@
             )
         }
         @{
-            Path    = 'yes_completer\yes_completer.ps1'
+            Path    = 'yes_completer/yes_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'yes'; Native = $true }
@@ -1359,7 +1359,7 @@
             )
         }
         @{
-            Path    = 'zip_completer\zip_completer.ps1'
+            Path    = 'zip_completer/zip_completer.ps1'
             Trusted = $false
             Targets = @(
                 @{ CommandName = 'zip'; Native = $true }
