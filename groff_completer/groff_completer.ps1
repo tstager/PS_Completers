@@ -243,25 +243,6 @@ function Get-GroffExecutablePath {
     $null
 }
 
-function Ensure-GroffCommandAlias {
-    $existingAlias = Get-Alias -Name groff -ErrorAction SilentlyContinue
-    if ($existingAlias) {
-        return
-    }
-
-    $groffExeCommand = Get-Command -Name groff.exe -ErrorAction SilentlyContinue
-    if (-not $groffExeCommand) {
-        return
-    }
-
-    $groffCommand = Get-Command -Name groff -ErrorAction SilentlyContinue
-    if ($groffCommand -and
-        ($groffCommand.CommandType -ne 'Application' -or $groffCommand.Name -ne 'groff.exe')) {
-        return
-    }
-
-    Set-Alias -Name groff -Value groff.exe -Option AllScope -Scope Global
-}
 
 function Get-GroffHelpText {
     if ($null -ne $script:GroffCompletionCatalog.HelpText) {
@@ -275,7 +256,7 @@ function Get-GroffHelpText {
     }
 
     try {
-        $script:GroffCompletionCatalog.HelpText = ((& $executablePath --help 2>&1) -join [Environment]::NewLine)
+        $script:GroffCompletionCatalog.HelpText = (($null | & $executablePath --help 2>&1) -join [Environment]::NewLine)
     } catch {
         $script:GroffCompletionCatalog.HelpText = ''
     }
@@ -898,6 +879,5 @@ function Complete-Groff {
 
 Register-ArgumentCompleter -Native -CommandName @('groff', 'groff.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    Ensure-GroffCommandAlias
     Complete-Groff -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }

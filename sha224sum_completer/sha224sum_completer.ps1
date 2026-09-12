@@ -18,7 +18,7 @@ function Get-Sha224sumCompletionOptions {
         }
 
         try {
-            $helpOutput = & $command.Source --help 2>&1 | Out-String
+            $helpOutput = $null | & $command.Source --help 2>&1 | Out-String
         } catch {
             continue
         }

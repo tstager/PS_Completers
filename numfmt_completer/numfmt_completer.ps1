@@ -18,7 +18,7 @@ function Get-NumfmtCompletionOptions {
         }
 
         try {
-            $helpOutput = & $command.Source --help 2>&1 | Out-String
+            $helpOutput = $null | & $command.Source --help 2>&1 | Out-String
         } catch {
             continue
         }
@@ -270,7 +270,7 @@ function Complete-Numfmt {
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        $valueCompletions = Get-NumfmtValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete
+        $valueCompletions = @(Get-NumfmtValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete)
         if ($valueCompletions.Count -gt 0) {
             return $valueCompletions
         }

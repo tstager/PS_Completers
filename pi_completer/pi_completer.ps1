@@ -308,6 +308,7 @@ function Invoke-PiCapture {
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
         $startInfo.Environment['PI_OFFLINE'] = '1'
         $startInfo.Environment['FORCE_COLOR'] = '0'
         $startInfo.Environment['NO_COLOR'] = '1'
@@ -351,9 +352,15 @@ function Invoke-PiCapture {
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         [void]$process.Start()
-        $standardOutput = $process.StandardOutput.ReadToEnd()
-        $null = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
+        $process.StandardInput.Close()
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            try { $process.Kill($true) } catch { }
+            return @()
+        }
+        $standardOutput = $outputTask.GetAwaiter().GetResult()
+        $null = $errorTask.GetAwaiter().GetResult()
 
         if ([string]::IsNullOrWhiteSpace($standardOutput)) {
             return @()

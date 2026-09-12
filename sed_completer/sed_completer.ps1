@@ -221,7 +221,7 @@ function Get-SedHelpText {
     }
 
     try {
-        ((& $executablePath --help 2>$null) -join "`n")
+        (($null | & $executablePath --help 2>$null) -join "`n")
     } catch {
         ''
     }

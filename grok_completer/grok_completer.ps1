@@ -45,7 +45,7 @@ function Get-GrokRootHelpOutput {
     }
 
     try {
-        return (& $commandPath --help 2>&1 | Out-String)
+        return ($null | & $commandPath --help 2>&1 | Out-String)
     } catch {
         return ''
     }
@@ -60,7 +60,7 @@ function Get-GrokSubcommandHelpOutput {
     }
 
     try {
-        return (& $commandPath help $SubcommandName 2>&1 | Out-String)
+        return ($null | & $commandPath help $SubcommandName 2>&1 | Out-String)
     } catch {
         return ''
     }

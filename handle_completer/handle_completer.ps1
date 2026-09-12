@@ -124,7 +124,7 @@ function Invoke-HandleHelpText {
 
     try {
         @(
-            & $commandPath '/?' 2>&1 |
+            $null | & $commandPath '/?' 2>&1 |
                 ForEach-Object { $_.ToString() }
         )
     } catch {

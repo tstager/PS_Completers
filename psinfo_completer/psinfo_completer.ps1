@@ -213,27 +213,8 @@ function Complete-PsInfo {
     @($results.ToArray())
 }
 
-function Ensure-PsInfoCommandAlias {
-    $existingAlias = Get-Alias -Name psinfo -ErrorAction SilentlyContinue
-    if ($existingAlias) {
-        return
-    }
-
-    $exeCommand = Get-Command -Name psinfo.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) {
-        return
-    }
-
-    $bareCommand = Get-Command -Name psinfo -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
-        return
-    }
-
-    Set-Alias -Name psinfo -Value psinfo.exe -Option AllScope -Scope Global
-}
 
 Register-ArgumentCompleter -Native -CommandName @('psinfo', 'psinfo.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    Ensure-PsInfoCommandAlias
     Complete-PsInfo -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

@@ -53,20 +53,20 @@ function Get-OnemdHelpOutput {
 
     try {
         if ($subcommandPath.Count -eq 0) {
-            $resultText = (& $resolvedCommandPath --help 2>&1 | Out-String)
+            $resultText = ($null | & $resolvedCommandPath --help 2>&1 | Out-String)
             if (-not [string]::IsNullOrWhiteSpace($resultText)) {
                 return $resultText
             }
 
-            return (& $resolvedCommandPath help 2>&1 | Out-String)
+            return ($null | & $resolvedCommandPath help 2>&1 | Out-String)
         }
 
-        $resultText = (& $resolvedCommandPath help $subcommandPath[0] 2>&1 | Out-String)
+        $resultText = ($null | & $resolvedCommandPath help $subcommandPath[0] 2>&1 | Out-String)
         if (-not [string]::IsNullOrWhiteSpace($resultText)) {
             return $resultText
         }
 
-        return (& $resolvedCommandPath $subcommandPath[0] --help 2>&1 | Out-String)
+        return ($null | & $resolvedCommandPath $subcommandPath[0] --help 2>&1 | Out-String)
     } catch {
         return ''
     }

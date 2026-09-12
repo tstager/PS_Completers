@@ -18,7 +18,7 @@ function Get-NprocCompletionOptions {
         }
 
         try {
-            $helpOutput = & $command.Source --help 2>&1 | Out-String
+            $helpOutput = $null | & $command.Source --help 2>&1 | Out-String
         } catch {
             continue
         }
@@ -185,7 +185,7 @@ function Complete-Nproc {
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        $valueCompletions = Get-NprocValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete
+        $valueCompletions = @(Get-NprocValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete)
         if ($valueCompletions.Count -gt 0) {
             return $valueCompletions
         }

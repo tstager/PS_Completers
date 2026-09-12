@@ -57,7 +57,7 @@ function Get-CursorAgentRootHelpOutput {
     }
 
     try {
-        return (& $commandPath --help 2>&1 | Out-String)
+        return ($null | & $commandPath --help 2>&1 | Out-String)
     } catch {
         return ''
     }
@@ -72,7 +72,7 @@ function Get-CursorAgentSubcommandHelpOutput {
     }
 
     try {
-        return (& $commandPath $SubcommandName --help 2>&1 | Out-String)
+        return ($null | & $commandPath $SubcommandName --help 2>&1 | Out-String)
     } catch {
         return ''
     }

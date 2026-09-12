@@ -176,27 +176,8 @@ function Complete-ShellRunas {
     Get-ShellRunasProgramCompletions -CurrentWord $currentWord
 }
 
-function Ensure-ShellRunasCommandAlias {
-    $existingAlias = Get-Alias -Name shellrunas -ErrorAction SilentlyContinue
-    if ($existingAlias) {
-        return
-    }
-
-    $exeCommand = Get-Command -Name shellrunas.exe -ErrorAction SilentlyContinue
-    if (-not $exeCommand) {
-        return
-    }
-
-    $bareCommand = Get-Command -Name shellrunas -ErrorAction SilentlyContinue
-    if ($bareCommand -and $bareCommand.CommandType -ne 'Application') {
-        return
-    }
-
-    Set-Alias -Name shellrunas -Value shellrunas.exe -Option AllScope -Scope Global
-}
 
 Register-ArgumentCompleter -Native -CommandName @('shellrunas', 'shellrunas.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    Ensure-ShellRunasCommandAlias
     Complete-ShellRunas -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }

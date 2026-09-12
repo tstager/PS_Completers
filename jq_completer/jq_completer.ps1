@@ -65,7 +65,7 @@ function Get-JqHelpOutput {
     }
 
     try {
-        $helpOutput = & $commandPath --help 2>&1 | Out-String
+        $helpOutput = $null | & $commandPath --help 2>&1 | Out-String
     } catch {
         $helpOutput = ''
     }

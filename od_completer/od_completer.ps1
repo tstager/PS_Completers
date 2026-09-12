@@ -18,7 +18,7 @@ function Get-OdCompletionOptions {
         }
 
         try {
-            $helpOutput = & $command.Source --help 2>&1 | Out-String
+            $helpOutput = $null | & $command.Source --help 2>&1 | Out-String
         } catch {
             continue
         }
@@ -255,7 +255,7 @@ function Complete-Od {
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        $valueCompletions = Get-OdValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete
+        $valueCompletions = @(Get-OdValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete)
         if ($valueCompletions.Count -gt 0) {
             return $valueCompletions
         }
