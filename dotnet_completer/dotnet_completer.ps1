@@ -1391,5 +1391,5 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
             break
         }
     }
-    $completions | Where-Object -FilterScript { $_.CompletionText -like "$wordToComplete*" } | Sort-Object -Property ListItemText
+    $completions | Where-Object -FilterScript { $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } | Sort-Object -Property ListItemText
 }

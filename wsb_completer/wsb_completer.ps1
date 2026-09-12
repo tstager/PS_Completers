@@ -76,7 +76,7 @@ function New-WsbCommandSpec {
 }
 
 function Get-WsbMetadata {
-    if (Get-Variable -Name WsbMetadata -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WsbMetadata -Scope Script -ErrorAction Ignore) {
         return $script:WsbMetadata
     }
 
@@ -222,7 +222,7 @@ function Get-WsbArgumentsFromTokenState {
 }
 
 function Get-WsbRunningSandboxIds {
-    if (Get-Variable -Name WsbSandboxIdCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WsbSandboxIdCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WsbSandboxIdCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 10) {
             return $cache.Values

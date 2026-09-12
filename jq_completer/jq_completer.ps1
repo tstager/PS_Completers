@@ -15,7 +15,7 @@ function Get-JqCommandPath {
 }
 
 function Get-JqHelpOutput {
-    $cache = Get-Variable -Name 'JqHelpOutput' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'JqHelpOutput' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -79,7 +79,7 @@ function Get-JqHelpOutput {
 }
 
 function Get-JqCompletionOptions {
-    $cache = Get-Variable -Name 'JqCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'JqCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }

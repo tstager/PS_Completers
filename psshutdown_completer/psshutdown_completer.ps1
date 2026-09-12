@@ -95,7 +95,7 @@ function Get-PsShutdownSwitchSpecs {
     )
 }
 
-if (-not (Get-Variable -Name PsShutdownCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PsShutdownCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsShutdownCompletionCatalog = @{
         Initialized         = $false
         Actions             = @()

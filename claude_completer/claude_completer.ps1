@@ -14,7 +14,7 @@
 Set-StrictMode -Version Latest
 
 function Initialize-ClaudeCompleterData {
-    if (Get-Variable -Name ClaudeTopCommands -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name ClaudeTopCommands -Scope Script -ErrorAction Ignore) {
         return
     }
 
@@ -680,7 +680,7 @@ function Write-ClaudeFlagValue {
     )
     $enumVals = Get-ClaudeEnumValues -FlagName $Flag -Sub $Sub -SubSub $SubSub
     if ($enumVals) {
-        $enumVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+        $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
             $tip = ($script:ClaudeFlagDesc[$Flag] ?? $_)
             if ($InlinePrefix) {
                 New-ClaudeCompletion "$InlinePrefix$_" -ListItemText $_ -Tooltip $tip
@@ -693,7 +693,7 @@ function Write-ClaudeFlagValue {
 
     # Model hints.
     if ($script:ClaudeModelFlags -contains $Flag) {
-        $script:ClaudeModelHints | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+        $script:ClaudeModelHints | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
             if ($InlinePrefix) {
                 New-ClaudeCompletion "$InlinePrefix$_" -ListItemText $_ -Tooltip "Model: $_"
             } else {
@@ -706,7 +706,7 @@ function Write-ClaudeFlagValue {
     # Comma-separated hint flags.
     $hints = $script:ClaudeHintFlags[$Flag]
     if ($hints) {
-        $hints | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+        $hints | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
             if ($InlinePrefix) {
                 New-ClaudeCompletion "$InlinePrefix$_" -ListItemText $_ -Tooltip "Value: $_"
             } else {
@@ -735,14 +735,14 @@ function Write-ClaudeFlagValue {
     # Number placeholder.
     if ($script:ClaudeNumberFlags -contains $Flag -or
         $script:ClaudeContextNumberFlagSet.Contains($Flag)) {
-        if ('' -like "$WordToComplete*") {
+        if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-ClaudeCompletion '<n>' -Tooltip "Numeric value for $Flag"
         }
         return
     }
 
     # Generic placeholder — suppresses filesystem fallback for string/array flags.
-    if ('' -like "$WordToComplete*") {
+    if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
         New-ClaudeCompletion '<value>' -Tooltip "Value for $Flag"
     }
 }
@@ -1001,7 +1001,7 @@ function Complete-ClaudeNative {
         $l3k  = "$sub.$subsub"
         $l3cs = $script:ClaudeL3Subcommands[$l3k]
         if ($l3cs) {
-            $l3cs | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $l3cs | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 $tip = $script:ClaudeSubcmdDesc["$sub.$subsub.$_"] ?? $_
                 New-ClaudeCompletion $_ -Tooltip $tip
             }
@@ -1012,7 +1012,7 @@ function Complete-ClaudeNative {
         $emitted = $false
         $posVals = $script:ClaudePositionalEnums[$l3k]
         if ($posVals) {
-            $posVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $posVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 New-ClaudeCompletion $_ -Tooltip "Positional: $_"
                 $emitted = $true
             }
@@ -1023,7 +1023,7 @@ function Complete-ClaudeNative {
         }
 
         $placeholder = Get-ClaudePositionalPlaceholder -ContextKey $l3k -PositionIndex $positionalCount
-        if ($placeholder -and $placeholder -like "$WordToComplete*") {
+        if ($placeholder -and $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-ClaudeCompletion $placeholder -Tooltip "Positional value for $l3k"
             $emitted = $true
         }
@@ -1045,13 +1045,13 @@ function Complete-ClaudeNative {
         $emitted = $false
         $posVals = $script:ClaudePositionalEnums[$posKey]
         if ($posVals) {
-            $posVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $posVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 New-ClaudeCompletion $_ -Tooltip "Positional: $_"
                 $emitted = $true
             }
         }
         $placeholder = Get-ClaudePositionalPlaceholder -ContextKey $posKey -PositionIndex $positionalCount
-        if ($placeholder -and $placeholder -like "$WordToComplete*") {
+        if ($placeholder -and $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-ClaudeCompletion $placeholder -Tooltip "Positional value for $posKey"
             $emitted = $true
         }
@@ -1069,7 +1069,7 @@ function Complete-ClaudeNative {
     if ($sub -and $null -eq $subsub) {
         $subs = $script:ClaudeSubSubcommands[$sub]
         if ($subs -and $subs.Count -gt 0) {
-            $subs | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $subs | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 $tip = $script:ClaudeSubcmdDesc["$sub.$_"] ?? $_
                 New-ClaudeCompletion $_ -Tooltip $tip
             }
@@ -1080,7 +1080,7 @@ function Complete-ClaudeNative {
         $emitted = $false
         $posVals = $script:ClaudePositionalEnums[$sub]
         if ($posVals) {
-            $posVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $posVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 New-ClaudeCompletion $_ -Tooltip "Positional: $_"
                 $emitted = $true
             }
@@ -1090,7 +1090,7 @@ function Complete-ClaudeNative {
             $emitted = $true
         }
         $placeholder = Get-ClaudePositionalPlaceholder -ContextKey $sub -PositionIndex $positionalCount
-        if ($placeholder -and $placeholder -like "$WordToComplete*") {
+        if ($placeholder -and $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-ClaudeCompletion $placeholder -Tooltip "Positional value for $sub"
             $emitted = $true
         }
@@ -1104,7 +1104,7 @@ function Complete-ClaudeNative {
     }
 
     # --- 4d. Top level → offer L1 subcommands. ---
-    $script:ClaudeTopCommands | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+    $script:ClaudeTopCommands | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
         $tip = $script:ClaudeCmdDesc[$_] ?? $_
         New-ClaudeCompletion $_ -Tooltip $tip
     }

@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name ContigCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name ContigCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:ContigCompletionCatalog = @{
         MetadataFiles = @(
             '$Mft', '$LogFile', '$Volume', '$AttrDef', '$Bitmap',

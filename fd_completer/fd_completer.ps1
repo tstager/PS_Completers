@@ -389,47 +389,47 @@ function Get-FdValueCompletions {
 
     switch ([string]$Spec.ValueKind) {
         'ColorWhen' {
-            return Get-FdColorWhenValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdColorWhenValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Color output mode.'
             }
         }
         'HyperlinkWhen' {
-            return Get-FdHyperlinkValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdHyperlinkValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Hyperlink output mode.'
             }
         }
         'StripMode' {
-            return Get-FdStripModeValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdStripModeValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Strip ./ prefix behavior.'
             }
         }
         'PathSeparator' {
-            return Get-FdPathSeparatorValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdPathSeparatorValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Path separator in printed output.'
             }
         }
         'FileType' {
-            return Get-FdFileTypeValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdFileTypeValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'File type filter.'
             }
         }
         'Extension' {
-            return Get-FdExtensionValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdExtensionValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Allowed file extension.'
             }
         }
         'Size' {
-            return Get-FdSizeValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdSizeValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'File size expression.'
             }
         }
         'DateOrDuration' {
-            return Get-FdDateValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdDateValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Date or duration filter.'
             }
         }
         'Format' {
-            return Get-FdFormatValues | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-FdFormatValues | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Output format placeholder.'
             }
         }
@@ -441,27 +441,27 @@ function Get-FdValueCompletions {
             return $results
         }
         'Integer' {
-            return @('1', '2', '4', '8', '16') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return @('1', '2', '4', '8', '16') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Integer value.'
             }
         }
         'GlobPattern' {
-            return @('*.log', '*.tmp', 'node_modules', 'bin') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return @('*.log', '*.tmp', 'node_modules', 'bin') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Glob pattern.'
             }
         }
         'Pattern' {
-            return @('<pattern>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return @('<pattern>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Additional required search pattern.'
             }
         }
         'Name' {
-            return @('.git', 'node_modules', '.venv') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return @('.git', 'node_modules', '.venv') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'Directory marker name.'
             }
         }
         'CommandTail' {
-            return @('{}', '{/}', '{//}', '{.}', '{/.}') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return @('{}', '{/}', '{//}', '{.}', '{/.}') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-FdCompletionResult -CompletionText $_ -ToolTip 'fd exec placeholder.'
             }
         }
@@ -476,7 +476,7 @@ function Get-FdOptionCompletions {
     Initialize-FdCompletionCatalog
     foreach ($spec in (Get-FdCompletionCatalog).Options) {
         foreach ($token in $spec.Tokens) {
-            if ($token -like "$CurrentWord*") {
+            if ($token -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
                 New-FdCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $spec.Description
             }
         }

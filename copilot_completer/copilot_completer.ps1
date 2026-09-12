@@ -17,7 +17,7 @@ Load this script once per session, or dot-source it from your PowerShell profile
 
 Set-StrictMode -Version Latest
 
-if (-not (Get-Variable -Name CopilotCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name CopilotCompletionCache -Scope Script -ErrorAction Ignore)) {
     $script:CopilotCompletionCache = @{
         ExecutablePath             = $null
         ExecutablePathProbed       = $false
@@ -655,29 +655,29 @@ function Get-CopilotValueResults {
             }
 
             return $models |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object {
                     New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Model name discovered from `copilot help config`.'
                 }
         }
         'ReasoningEffort' {
             return @('low', 'medium', 'high', 'xhigh') |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Reasoning effort level.' }
         }
         'OutputFormat' {
             return @('text', 'json') |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Output format.' }
         }
         'OnOff' {
             return @('on', 'off') |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Boolean on/off value.' }
         }
         'LogLevel' {
             return @('none', 'error', 'warning', 'info', 'debug', 'all', 'default') |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'CLI log level.' }
         }
         'DirectoryPath' {
@@ -701,7 +701,7 @@ function Get-CopilotValueResults {
             }
 
             $results = New-Object System.Collections.Generic.List[object]
-            if ([string]::IsNullOrWhiteSpace($typedValue) -or '@' -like "$typedValue*") {
+            if ([string]::IsNullOrWhiteSpace($typedValue) -or '@' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
                 [void]$results.Add((New-CopilotCompletionResult -CompletionText ($Prefix + '@') -ToolTip 'Prefix a file path with @ to load JSON from disk.'))
             }
 
@@ -713,7 +713,7 @@ function Get-CopilotValueResults {
         }
         'HelpTopic' {
             return $script:CopilotCompletionCache.HelpTopics |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Copilot help topic.' }
         }
         'InstalledPlugin' {
@@ -723,7 +723,7 @@ function Get-CopilotValueResults {
             }
 
             return $plugins |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Installed plugin.' }
         }
         'MarketplaceName' {
@@ -733,7 +733,7 @@ function Get-CopilotValueResults {
             }
 
             return $marketplaces |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Registered marketplace.' }
         }
         'PluginSource' {
@@ -919,7 +919,7 @@ function Get-CopilotSuggestions {
 
     if ($currentWord.StartsWith('-')) {
         return @(Get-CopilotOptionsForPath -Path $state.Path) |
-            Where-Object { $_.Token -like "$currentWord*" } |
+            Where-Object { $_.Token -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-CopilotCompletionResult -CompletionText $_.Token -ResultType 'ParameterName' -ToolTip $_.Description
             }
@@ -935,14 +935,14 @@ function Get-CopilotSuggestions {
     }
 
     foreach ($commandName in $spec.Commands.Keys) {
-        if ($commandName -like "$currentWord*") {
+        if ($commandName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
             [void]$results.Add((New-CopilotCompletionResult -CompletionText $commandName -ToolTip $spec.Commands[$commandName]))
         }
     }
 
     if ([string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-')) {
         foreach ($option in @(Get-CopilotOptionsForPath -Path $state.Path)) {
-            if ($option.Token -like "$currentWord*") {
+            if ($option.Token -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-CopilotCompletionResult -CompletionText $option.Token -ResultType 'ParameterName' -ToolTip $option.Description))
             }
         }

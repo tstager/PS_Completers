@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name OhMyPoshCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name OhMyPoshCompletionCache -Scope Script -ErrorAction Ignore)) {
     $script:OhMyPoshCompletionCache = @{
         ExecutablePath   = $null
         ExecutableProbed = $false

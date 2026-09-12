@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Initialize-AutorunscCompletionCatalog {
-    if (Get-Variable -Name AutorunscCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name AutorunscCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return
     }
 
@@ -370,8 +370,8 @@ function Complete-Autorunsc {
     Initialize-AutorunscCompletionCatalog
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if ($cursorPosition -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition)
+    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
+        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
     }
     $tokenState = Get-AutorunscTokenState -Line $line -CursorPosition $CursorPosition
     $argumentsState = Get-AutorunscArgumentsFromTokenState -TokenState $tokenState

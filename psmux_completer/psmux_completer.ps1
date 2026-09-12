@@ -551,17 +551,17 @@ function Get-PsmuxOptionValueCompletions {
 
     switch ($ValueKind) {
         'Path'          { return @(Get-PsmuxPathCompletions -InputPath $CurrentWord) }
-        'SessionName'   { return ((Get-PsmuxSessionSuggestions + @('<session-name>')) | Sort-Object -Unique | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session name.' }) }
-        'SessionTarget' { return ((Get-PsmuxSessionSuggestions + @('default', 'work')) | Sort-Object -Unique | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target session.' }) }
-        'WindowName'    { return @('<window-name>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window name.' } }
-        'PaneTarget'    { return @('%1', '%2', ':1.0', ':2.1') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target pane.' } }
-        'Target'        { return (Get-PsmuxTargetSuggestions | Sort-Object -Unique | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session/window/pane target.' }) }
-        'Index'         { return @('0','1','2','3','4','5','6','7','8','9') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window index.' } }
-        'Percent'       { return @('25','33','50','66','75') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Percentage.' } }
-        'Count'         { return @('1','2','5','10') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Resize count.' } }
-        'Cols'          { return @('80','100','120') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Column count.' } }
-        'Rows'          { return @('24','30','40') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Row count.' } }
-        'Name'          { return @('default', 'main', 'dev') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Name value.' } }
+        'SessionName'   { return ((Get-PsmuxSessionSuggestions + @('<session-name>')) | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session name.' }) }
+        'SessionTarget' { return ((Get-PsmuxSessionSuggestions + @('default', 'work')) | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target session.' }) }
+        'WindowName'    { return @('<window-name>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window name.' } }
+        'PaneTarget'    { return @('%1', '%2', ':1.0', ':2.1') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target pane.' } }
+        'Target'        { return (Get-PsmuxTargetSuggestions | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session/window/pane target.' }) }
+        'Index'         { return @('0','1','2','3','4','5','6','7','8','9') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window index.' } }
+        'Percent'       { return @('25','33','50','66','75') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Percentage.' } }
+        'Count'         { return @('1','2','5','10') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Resize count.' } }
+        'Cols'          { return @('80','100','120') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Column count.' } }
+        'Rows'          { return @('24','30','40') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Row count.' } }
+        'Name'          { return @('default', 'main', 'dev') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Name value.' } }
     }
 
     @()
@@ -587,21 +587,21 @@ function Get-PsmuxPositionalCompletions {
     $kind = $spec.Positionals[$positionIndex]
     switch ($kind) {
         'SessionName'   { return Get-PsmuxOptionValueCompletions -ValueKind 'SessionName' -CurrentWord $CurrentWord -Positionals $Positionals }
-        'WindowName'    { return @('<window-name>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window name.' } }
+        'WindowName'    { return @('<window-name>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window name.' } }
         'Path'          { return @(Get-PsmuxPathCompletions -InputPath $CurrentWord) }
-        'Layout'        { return Get-PsmuxLayoutSuggestions | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Layout preset.' } }
-        'EnvName'       { return Get-PsmuxEnvVarSuggestions | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Environment variable.' } }
-        'EnvValue'      { return @('<value>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Environment variable value.' } }
-        'Keys'          { return Get-PsmuxKeySuggestions | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Key name.' } }
-        'HookName'      { return Get-PsmuxHookSuggestions | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Hook event.' } }
-        'ChannelName'   { return @('build', 'deploy', 'sync') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Wait/signal channel.' } }
-        'Query'         { return @('<query>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Search string.' } }
-        'HelpTopic'     { return Get-PsmuxRootSubcommands | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'psmux command topic.' } }
-        'FormatOrMessage' { return @('#S', '#W', '#{?window_active,yes,no}', '<message>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Message or format expression.' } }
+        'Layout'        { return Get-PsmuxLayoutSuggestions | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Layout preset.' } }
+        'EnvName'       { return Get-PsmuxEnvVarSuggestions | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Environment variable.' } }
+        'EnvValue'      { return @('<value>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Environment variable value.' } }
+        'Keys'          { return Get-PsmuxKeySuggestions | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Key name.' } }
+        'HookName'      { return Get-PsmuxHookSuggestions | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Hook event.' } }
+        'ChannelName'   { return @('build', 'deploy', 'sync') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Wait/signal channel.' } }
+        'Query'         { return @('<query>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Search string.' } }
+        'HelpTopic'     { return Get-PsmuxRootSubcommands | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'psmux command topic.' } }
+        'FormatOrMessage' { return @('#S', '#W', '#{?window_active,yes,no}', '<message>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Message or format expression.' } }
         'CommandTail' {
             $suggestions = New-Object System.Collections.Generic.List[object]
             foreach ($name in @('pwsh', 'powershell', 'cmd', 'python', 'git')) {
-                if ($name -like "$CurrentWord*") {
+                if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
                     [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $name -ToolTip 'Executable name.'))
                 }
             }
@@ -617,7 +617,7 @@ function Get-PsmuxPositionalCompletions {
             return @($suggestions.ToArray())
         }
         'OptionName' {
-            return Get-PsmuxOptionNames | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+            return Get-PsmuxOptionNames | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'psmux option name.'
             }
         }
@@ -625,22 +625,22 @@ function Get-PsmuxPositionalCompletions {
             $optionName = if ($Positionals.Count -gt 0) { $Positionals[0] } else { '' }
             $boolOptions = @('mouse','status','focus-events','renumber-windows','automatic-rename','monitor-activity','synchronize-panes','remain-on-exit','aggressive-resize','set-titles','visual-bell','cursor-blink','prediction-dimming')
             if ($boolOptions -contains $optionName) {
-                return @('on','off','true','false') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+                return @('on','off','true','false') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                     New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Boolean option value.'
                 }
             }
 
             switch ($optionName) {
-                'mode-keys'      { return @('vi','emacs') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Key mode.' } }
-                'status-position'{ return @('top','bottom') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Status bar position.' } }
-                'default-shell'  { return @('pwsh','powershell','cmd','nu','bash') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Default shell.' } }
-                'default-command'{ return @('pwsh','cmd /K','python') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Default command.' } }
-                'cursor-style'   { return @('block','underline','bar') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Cursor style.' } }
-                'bell-action'    { return @('any','none','current','other') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Bell handling mode.' } }
-                'status-justify' { return @('left','centre','right') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Status alignment.' } }
-                'prefix'         { return @('C-b','C-a') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Prefix key.' } }
+                'mode-keys'      { return @('vi','emacs') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Key mode.' } }
+                'status-position'{ return @('top','bottom') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Status bar position.' } }
+                'default-shell'  { return @('pwsh','powershell','cmd','nu','bash') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Default shell.' } }
+                'default-command'{ return @('pwsh','cmd /K','python') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Default command.' } }
+                'cursor-style'   { return @('block','underline','bar') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Cursor style.' } }
+                'bell-action'    { return @('any','none','current','other') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Bell handling mode.' } }
+                'status-justify' { return @('left','centre','right') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Status alignment.' } }
+                'prefix'         { return @('C-b','C-a') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Prefix key.' } }
                 default {
-                    return @('<value>') | Where-Object { $_ -like "$CurrentWord*" } | ForEach-Object {
+                    return @('<value>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                         New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Option value.'
                     }
                 }
@@ -659,7 +659,7 @@ function Get-PsmuxOptionCompletions {
 
     foreach ($option in $Spec.Options + (Get-PsmuxCommandSpecByPath -Path '').Options) {
         foreach ($token in $option.Tokens) {
-            if ($token -like "$CurrentWord*") {
+            if ($token -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
                 New-PsmuxCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $option.Description
             }
         }
@@ -694,7 +694,7 @@ function Complete-Psmux {
 
     if ([string]::IsNullOrWhiteSpace($context.ActivePath) -and $context.Positionals.Count -eq 0) {
         foreach ($commandName in $context.RootSpec.Subcommands) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $commandName -like "$currentWord*") {
+            if ([string]::IsNullOrWhiteSpace($currentWord) -or $commandName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-PsmuxCompletionResult -CompletionText $commandName -ToolTip 'psmux subcommand.'))
             }
         }
@@ -708,7 +708,7 @@ function Complete-Psmux {
 
     if ($context.ActiveSpec.Subcommands.Count -gt 0 -and $context.Positionals.Count -eq 0) {
         foreach ($commandName in $context.ActiveSpec.Subcommands) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $commandName -like "$currentWord*") {
+            if ([string]::IsNullOrWhiteSpace($currentWord) -or $commandName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-PsmuxCompletionResult -CompletionText $commandName -ToolTip 'psmux subcommand.'))
             }
         }

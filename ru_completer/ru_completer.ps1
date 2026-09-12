@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name RuCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name RuCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:RuCompletionCatalog = @{
         Initialized = $false
         CommandName = $null
@@ -60,7 +60,7 @@ function Invoke-RuHelpText {
     }
 
     try {
-        @(& $commandName '/?' 2>$null)
+        @($null | & $commandName '/?' 2>$null)
     } catch {
         @()
     }

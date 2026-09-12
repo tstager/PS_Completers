@@ -222,7 +222,7 @@ function ConvertFrom-GrokHelp {
 }
 
 function Get-GrokCompletionCatalog {
-    $catalog = Get-Variable -Name 'GrokCompletionCatalog' -Scope Script -ErrorAction SilentlyContinue
+    $catalog = Get-Variable -Name 'GrokCompletionCatalog' -Scope Script -ErrorAction Ignore
     if ($null -ne $catalog -and $null -ne $catalog.Value) {
         return $catalog.Value
     }
@@ -468,7 +468,7 @@ function Complete-Grok {
                 if ($optionSpec.Values.Count -gt 0) {
                     return @(
                         foreach ($value in $optionSpec.Values) {
-                            if ($value -like "$currentToken*") {
+                            if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
                                 New-GrokCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip $optionSpec.Description
                             }
                         }
@@ -500,7 +500,7 @@ function Complete-Grok {
 
         if ($null -ne $argumentSpec -and $argumentSpec.Values.Count -gt 0) {
             foreach ($value in $argumentSpec.Values) {
-                if ($value -like "$currentToken*") {
+                if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
                     [void]$results.Add((New-GrokCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip 'Shell for grok completions'))
                 }
             }
@@ -511,14 +511,14 @@ function Complete-Grok {
 
     if ($currentWord.StartsWith('-')) {
         foreach ($option in @($activeCatalog.Options)) {
-            if ($option.Name -like "$currentWord*") {
+            if ($option.Name -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText $option.Name -ListItemText $option.Name -ResultType 'ParameterName' -ToolTip $option.Description))
             }
         }
     } else {
         # When not starting with '-', offer both subcommands and options at the command level
         foreach ($subcommand in @($activeCatalog.Subcommands)) {
-            if ($subcommand -like "$currentWord*") {
+            if ($subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText $subcommand -ListItemText $subcommand -ResultType 'ParameterValue' -ToolTip 'grok subcommand'))
             }
         }

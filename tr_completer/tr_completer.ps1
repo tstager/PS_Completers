@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-TrCompletionOptions {
-    $cache = Get-Variable -Name 'TrCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'TrCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-TrCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-TrCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'TrCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'TrCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'TrCompletionOptions' -Scope Script).Value
         }
     }
@@ -180,6 +188,17 @@ function Get-TrPathCompletions {
     }
 }
 
+function Get-TrOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'TrCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for tr.'
+}
+
 function Complete-Tr {
     param(
         [string]$wordToComplete,
@@ -201,7 +220,7 @@ function Complete-Tr {
         return @(
             foreach ($option in Get-TrCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-TrCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for tr.'
+                    New-TrCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-TrOptionDescription -Option $option)
                 }
             }
         )

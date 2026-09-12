@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-DdCompletionOptions {
-    $cache = Get-Variable -Name 'DdCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'DdCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-DdCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-DdCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'DdCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'DdCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'DdCompletionOptions' -Scope Script).Value
         }
     }
@@ -334,6 +342,17 @@ function Get-DdOptionValueCompletions {
     )
 }
 
+function Get-DdOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'DdCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for dd.'
+}
+
 function Complete-Dd {
     param(
         [string]$wordToComplete,
@@ -360,7 +379,7 @@ function Complete-Dd {
         return @(
             foreach ($option in Get-DdCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-DdCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for dd.'
+                    New-DdCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-DdOptionDescription -Option $option)
                 }
             }
         )

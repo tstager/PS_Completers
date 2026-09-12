@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-MktempCompletionOptions {
-    $cache = Get-Variable -Name 'MktempCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'MktempCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-MktempCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-MktempCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'MktempCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'MktempCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'MktempCompletionOptions' -Scope Script).Value
         }
     }
@@ -233,6 +241,17 @@ function Get-MktempOptionValueCompletions {
     )
 }
 
+function Get-MktempOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'MktempCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for mktemp.'
+}
+
 function Complete-Mktemp {
     param(
         [string]$wordToComplete,
@@ -259,7 +278,7 @@ function Complete-Mktemp {
         return @(
             foreach ($option in Get-MktempCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-MktempCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for mktemp.'
+                    New-MktempCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-MktempOptionDescription -Option $option)
                 }
             }
         )

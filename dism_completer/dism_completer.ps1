@@ -4,7 +4,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name DismCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name DismCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:DismCompletionCatalog = @{
         Initialized       = $false
         Commands          = @()
@@ -337,7 +337,7 @@ Register-ArgumentCompleter -Native -CommandName 'dism' -ScriptBlock {
         if ($optionValues.Count -gt 0) {
             $typedValue = $wordToComplete.Substring($currentPrefix.Length)
             return $optionValues |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { "$currentPrefix$_" }
         }
 
@@ -362,7 +362,7 @@ Register-ArgumentCompleter -Native -CommandName 'dism' -ScriptBlock {
 
         return $suggestions |
             Sort-Object -Unique |
-            Where-Object { $_ -like "$wordToComplete*" }
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') }
     }
 
     if ($wordToComplete -like '*\*' -or $wordToComplete -like '[A-Za-z]:*') {

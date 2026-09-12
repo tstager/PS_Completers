@@ -4,7 +4,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name TasklistCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name TasklistCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:TasklistCompletionCatalog = @{
         Initialized            = $false
         SwitchTokens           = @()
@@ -684,7 +684,7 @@ function Get-TasklistSwitchCompletions {
 
     $prefix = if ([string]::IsNullOrEmpty($CurrentWord)) { '' } else { $CurrentWord }
     $script:TasklistCompletionCatalog.SwitchTokens |
-        Where-Object { $_ -like "$prefix*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*') } |
         ForEach-Object {
             $toolTip = $script:TasklistCompletionCatalog.OptionToolTipsByToken[$_]
             New-TasklistCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $toolTip
@@ -696,7 +696,7 @@ function Get-TasklistFormatCompletions {
 
     $prefix = if ([string]::IsNullOrEmpty($CurrentWord)) { '' } else { $CurrentWord.Trim('"') }
     $script:TasklistCompletionCatalog.ValueHintsByOption['/FO'] |
-        Where-Object { $_ -like "$prefix*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*') } |
         ForEach-Object {
             New-TasklistCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip "Output format $_"
         }
@@ -729,7 +729,7 @@ function Get-TasklistFilterExpressionCompletions {
     if ($parts.Count -eq 1 -and -not $endsWithWhitespace) {
         return @(
             $script:TasklistCompletionCatalog.FilterNames |
-                Where-Object { $_ -like "$partialFilterName*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($partialFilterName) + '*') } |
                 ForEach-Object {
                     $completionText = Format-TasklistFilterExpressionCompletion -Expression "$_ " -CloseQuote $false
                     New-TasklistCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip "Filter $_"
@@ -757,7 +757,7 @@ function Get-TasklistFilterExpressionCompletions {
     if ($parts.Count -eq 2 -and -not $endsWithWhitespace) {
         return @(
             $operators |
-                Where-Object { $_ -like "$partialOperator*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($partialOperator) + '*') } |
                 ForEach-Object {
                     $completionText = Format-TasklistFilterExpressionCompletion -Expression "$filterName $_ " -CloseQuote $false
                     New-TasklistCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip "$filterName $_"
@@ -790,7 +790,7 @@ function Get-TasklistFilterExpressionCompletions {
 
     @(
         $valueItems |
-            Where-Object { $_.CompletionText -like "$typedValue*" } |
+            Where-Object { $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
             ForEach-Object {
                 $completionText = Format-TasklistFilterExpressionCompletion -Expression "$filterName $resolvedOperator $($_.CompletionText)" -CloseQuote $true
                 New-TasklistCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $_.ToolTip

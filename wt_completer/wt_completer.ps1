@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 function Get-WtSettingsNames {
     param([string]$Kind)
 
-    $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script -ErrorAction Ignore
     if ($null -eq $cache -or $null -eq $cache.Value) {
         $names = @{ profiles = @(); schemes = @() }
         foreach ($package in 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe') {

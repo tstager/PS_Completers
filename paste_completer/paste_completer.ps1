@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-PasteCompletionOptions {
-    $cache = Get-Variable -Name 'PasteCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'PasteCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-PasteCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-PasteCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'PasteCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'PasteCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'PasteCompletionOptions' -Scope Script).Value
         }
     }
@@ -278,6 +286,17 @@ function Get-PasteOptionValueCompletions {
     )
 }
 
+function Get-PasteOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'PasteCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for paste.'
+}
+
 function Complete-Paste {
     param(
         [string]$wordToComplete,
@@ -309,7 +328,7 @@ function Complete-Paste {
         return @(
             foreach ($option in Get-PasteCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-PasteCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for paste.'
+                    New-PasteCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-PasteOptionDescription -Option $option)
                 }
             }
         )

@@ -4,7 +4,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PslistCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PslistCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PslistCompletionCatalog = @{
         Initialized             = $false
         SwitchOrder             = @('-d', '-m', '-x', '-t', '-s', '-r', '-nobanner', '-u', '-p', '-e', '-?', '/?')

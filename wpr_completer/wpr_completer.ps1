@@ -44,7 +44,7 @@ function New-WprCompletionResult {
 }
 
 function Get-WprCommandSpecs {
-    if (Get-Variable -Name WprCommandSpecs -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WprCommandSpecs -Scope Script -ErrorAction Ignore) {
         return $script:WprCommandSpecs
     }
 
@@ -86,7 +86,7 @@ function Get-WprCommandSpecs {
 }
 
 function Get-WprCommandLookup {
-    if (Get-Variable -Name WprCommandLookup -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WprCommandLookup -Scope Script -ErrorAction Ignore) {
         return $script:WprCommandLookup
     }
 
@@ -385,7 +385,7 @@ function Get-WprCommandCompletions {
 }
 
 function Get-WprProfileNames {
-    if (Get-Variable -Name WprProfileCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WprProfileCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WprProfileCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 30) {
             return $cache.Values
@@ -492,7 +492,7 @@ function Get-WprPlusListCompletions {
 }
 
 function Get-WprProcessNames {
-    if (Get-Variable -Name WprProcessNameCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WprProcessNameCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WprProcessNameCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 10) {
             return $cache.Values
@@ -510,7 +510,7 @@ function Get-WprProcessNames {
 }
 
 function Get-WprProcessIds {
-    if (Get-Variable -Name WprProcessIdCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WprProcessIdCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WprProcessIdCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 10) {
             return $cache.Values

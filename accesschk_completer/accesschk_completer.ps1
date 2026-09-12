@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name AccessChkCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name AccessChkCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:AccessChkCompletionCatalog = @{
         Switches            = @(
             @{ Token = '-a'; Description = 'Treat the name as a Windows account right.' }
@@ -513,8 +513,8 @@ function Complete-AccessChk {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if ($cursorPosition -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition)
+    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
+        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
     }
     $tokenState = Get-AccessChkTokenState -Line $line -CursorPosition $CursorPosition
     $argumentsState = Get-AccessChkArgumentsFromTokenState -TokenState $tokenState

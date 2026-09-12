@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-NlCompletionOptions {
-    $cache = Get-Variable -Name 'NlCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'NlCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-NlCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-NlCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'NlCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'NlCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'NlCompletionOptions' -Scope Script).Value
         }
     }
@@ -311,6 +319,17 @@ function Get-NlOptionValueCompletions {
     )
 }
 
+function Get-NlOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'NlCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for nl.'
+}
+
 function Complete-Nl {
     param(
         [string]$wordToComplete,
@@ -337,7 +356,7 @@ function Complete-Nl {
         return @(
             foreach ($option in Get-NlCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-NlCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for nl.'
+                    New-NlCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-NlOptionDescription -Option $option)
                 }
             }
         )

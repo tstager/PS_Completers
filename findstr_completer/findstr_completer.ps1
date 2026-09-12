@@ -58,7 +58,7 @@ function New-FindStrSwitchSpec {
 }
 
 function Get-FindStrCompletionCatalog {
-    if (Get-Variable -Name FindStrCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name FindStrCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:FindStrCompletionCatalog
     }
 

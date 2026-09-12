@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-PrintfCompletionOptions {
-    $cache = Get-Variable -Name 'PrintfCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'PrintfCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-PrintfCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-PrintfCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'PrintfCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'PrintfCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'PrintfCompletionOptions' -Scope Script).Value
         }
     }
@@ -179,6 +187,17 @@ function Get-PrintfPathCompletions {
     }
 }
 
+function Get-PrintfOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'PrintfCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for printf.'
+}
+
 function Complete-Printf {
     param(
         [string]$wordToComplete,
@@ -200,7 +219,7 @@ function Complete-Printf {
         return @(
             foreach ($option in Get-PrintfCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-PrintfCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for printf.'
+                    New-PrintfCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-PrintfOptionDescription -Option $option)
                 }
             }
         )

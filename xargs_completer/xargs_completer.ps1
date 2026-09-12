@@ -89,7 +89,7 @@ function Get-XargsOptionSuggestions {
             continue
         }
 
-        if ($matchingText -like "$typed*") {
+        if ($matchingText -like ([System.Management.Automation.WildcardPattern]::Escape($typed) + '*')) {
             $completionText = if ($Prefix) { $Prefix + $matchingText } else { $matchingText }
             [void]$results.Add((New-XargsCompletionResult -CompletionText $completionText -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $matchingText))
         }
@@ -193,7 +193,7 @@ function Get-XargsValueSuggestions {
 }
 
 function Get-XargsCommandNames {
-    $cache = Get-Variable -Name 'XargsCommandCache' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'XargsCommandCache' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.Path -eq $env:PATH) {
         return $cache.Value.Names
     }

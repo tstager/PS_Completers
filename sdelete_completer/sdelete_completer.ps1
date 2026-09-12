@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SDeleteCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SDeleteCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SDeleteCompletionCatalog = @{
         PassHints = @('1', '3', '7', '10')
         Switches  = @(

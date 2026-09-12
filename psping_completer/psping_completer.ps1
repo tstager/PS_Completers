@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PsPingCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PsPingCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsPingCompletionCatalog = @{
         Initialized       = $false
         CommandName       = $null
@@ -118,7 +118,7 @@ function Get-PsPingRootHelpText {
     }
 
     try {
-        $script:PsPingCompletionCatalog.RootHelpText = ((& $commandName -? 2>&1) -join [Environment]::NewLine)
+        $script:PsPingCompletionCatalog.RootHelpText = (($null | & $commandName -? 2>&1) -join [Environment]::NewLine)
     } catch {
         $script:PsPingCompletionCatalog.RootHelpText = ''
     }

@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Initialize-PsInfoCompletionCatalog {
-    if (Get-Variable -Name PsInfoCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) { return }
+    if (Get-Variable -Name PsInfoCompletionCatalog -Scope Script -ErrorAction Ignore) { return }
 
     $script:PsInfoCompletionCatalog = @{
         Switches = @(

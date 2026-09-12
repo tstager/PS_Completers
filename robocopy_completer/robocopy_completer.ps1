@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name RobocopyCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name RobocopyCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:RobocopyCompletionCatalog = @{
         Initialized     = $false
         Options         = @()
@@ -697,7 +697,7 @@ function Get-RobocopyWildcardSuggestions {
 
     $cleanWord = Remove-RobocopyOuterQuotes $WordToComplete
     foreach ($candidate in ($Candidates | Sort-Object -Unique)) {
-        if ($candidate -like "$cleanWord*") {
+        if ($candidate -like ([System.Management.Automation.WildcardPattern]::Escape($cleanWord) + '*')) {
             New-RobocopyCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip 'Wildcard selection pattern.'
         }
     }
@@ -783,7 +783,7 @@ function Get-RobocopyJobCompletions {
 
     foreach ($jobFile in $jobFiles | Sort-Object -Property Name) {
         $jobName = [System.IO.Path]::GetFileNameWithoutExtension($jobFile.Name)
-        if ($jobName -like "$cleanCurrentValue*") {
+        if ($jobName -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrentValue) + '*')) {
             $tokenText = $Prefix + $jobName
             New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $jobFile.FullName
         }

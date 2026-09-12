@@ -17,7 +17,7 @@ function Complete-GitNative {
         return
     }
 
-    $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
     if ($hasTrailingSpace) {
         $argIndex = $tokens.Count - 1
     }
@@ -39,7 +39,7 @@ function Complete-GitNative {
         $values |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique |
-            Where-Object { $_ -like "$wordToComplete*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } |
             ForEach-Object { & $newResult $_ }
     }
 
@@ -56,7 +56,7 @@ function Complete-GitNative {
                 continue
             }
 
-            if ($value -like "$prefix*") {
+            if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                 & $newResult $value
             }
         }
@@ -132,7 +132,7 @@ function Complete-GitNative {
         '--no-pager'
     )
 
-    if (-not (Get-Variable -Name GitHelpMetadataCache -Scope Global -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name GitHelpMetadataCache -Scope Global -ErrorAction Ignore)) {
         $global:GitHelpMetadataCache = @{}
     }
 
@@ -650,7 +650,7 @@ function Complete-GitNative {
         )
 
         $orderedSubcommands |
-            Where-Object { $_ -like "$wordToComplete*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } |
             ForEach-Object { & $newResult $_ }
         return
     }

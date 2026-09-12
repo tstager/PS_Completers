@@ -69,7 +69,7 @@ function Complete-WslNative {
 
     $line = $commandAst.ToString()
     $tokens = @([regex]::Matches($line, '\S+') | ForEach-Object { $_.Value })
-    $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
 
     if ($hasTrailingSpace) {
         $completedTokens = $tokens

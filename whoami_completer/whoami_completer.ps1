@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-WhoamiCompletionCatalog {
-    if (-not (Get-Variable -Name WhoamiCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name WhoamiCompletionCatalog -Scope Script -ErrorAction Ignore)) {
         $script:WhoamiCompletionCatalog = @{
             Initialized      = $false
             SwitchOrder      = @('/UPN', '/FQDN', '/LOGONID', '/USER', '/GROUPS', '/CLAIMS', '/PRIV', '/ALL', '/FO', '/NH', '/?')

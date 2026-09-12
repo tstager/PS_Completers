@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SchtasksCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SchtasksCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SchtasksCompletionCatalog = @{
         Initialized          = $false
         Subcommands          = @()
@@ -233,7 +233,7 @@ function Get-SchtasksTaskNameCompletions {
     $alwaysQuote = $WordToComplete.StartsWith('"')
 
     $script:SchtasksCompletionCatalog.TaskNameCache |
-        Where-Object { $_ -like "$cleanPrefix*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($cleanPrefix) + '*') } |
         ForEach-Object { ConvertTo-SchtasksQuotedValue -Value $_ -AlwaysQuote $alwaysQuote }
 }
 
@@ -326,7 +326,7 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
     } else {
         $wordToComplete
     }
-    $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
 
     if ($hasTrailingSpace) {
         $tokensBeforeCurrent = @($tokens)
@@ -362,7 +362,7 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
         $optionKey = $expectedValueOption.ToLowerInvariant()
         if ($script:SchtasksCompletionCatalog.ValueHintsByOption.ContainsKey($optionKey)) {
             return $script:SchtasksCompletionCatalog.ValueHintsByOption[$optionKey] |
-                Where-Object { $_ -like "$currentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                 ForEach-Object {
                     New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
@@ -374,7 +374,7 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
         if ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('/')) {
             return $topSuggestions |
                 Sort-Object -Unique |
-                Where-Object { $_ -like "$currentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                 ForEach-Object {
                     New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
                 }
@@ -393,7 +393,7 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
 
         return $suggestions |
             Sort-Object -Unique |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
             }

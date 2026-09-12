@@ -254,23 +254,23 @@ function Get-MarkItDownValueCompletions {
         }
         'Extension' {
             return Get-MarkItDownExtensionSuggestions |
-                Where-Object { $_ -like "$CurrentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
                 ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input extension hint.' }
         }
         'MimeType' {
             return Get-MarkItDownMimeTypeSuggestions |
-                Where-Object { $_ -like "$CurrentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
                 ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input MIME type hint.' }
         }
         'Charset' {
             return Get-MarkItDownCharsetSuggestions |
-                Where-Object { $_ -like "$CurrentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
                 ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input charset hint.' }
         }
         'Endpoint' {
             $suggestions = @('https://<resource>.cognitiveservices.azure.com/')
             return $suggestions |
-                Where-Object { $_ -like "$CurrentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
                 ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Azure Document Intelligence endpoint.' }
         }
     }
@@ -283,7 +283,7 @@ function Get-MarkItDownOptionCompletions {
 
     foreach ($spec in Get-MarkItDownOptionSpecs) {
         foreach ($token in $spec.Tokens) {
-            if ($token -like "$CurrentWord*") {
+            if ($token -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
                 New-MarkItDownCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $spec.Description
             }
         }

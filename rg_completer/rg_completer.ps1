@@ -115,7 +115,7 @@ function Get-RgColorSpecSuggestions {
 }
 
 function Get-RgCompletionCatalog {
-    if (Get-Variable -Name RgCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name RgCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:RgCompletionCatalog
     }
 
@@ -562,7 +562,7 @@ function Get-RgEnumValueResults {
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
     foreach ($value in @($Values)) {
-        if ($value -like "$typedValue*") {
+        if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
             New-RgCompletionResult -CompletionText ($Prefix + $value) -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
@@ -598,7 +598,7 @@ function Get-RgPathValueResults {
     $results = New-Object System.Collections.Generic.List[object]
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
-    if ($AllowStdinSentinel -and ('-' -like "$typedValue*")) {
+    if ($AllowStdinSentinel -and ('-' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*'))) {
         [void]$results.Add((New-RgCompletionResult -CompletionText ($Prefix + '-') -ResultType 'ParameterValue' -ToolTip 'Read this value from standard input.'))
     }
 

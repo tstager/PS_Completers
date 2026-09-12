@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
 function Get-NpmCompletionCache {
-    if (-not (Get-Variable -Name NpmCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name NpmCompletionCache -Scope Script -ErrorAction Ignore)) {
         $script:NpmCompletionCache = @{
                 ExecutablePath          = $null
                 ExecutablePathProbed    = $false

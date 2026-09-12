@@ -156,7 +156,7 @@ function Get-CompactArgumentsFromTokenState {
 }
 
 function Get-CompactCatalog {
-    if (Get-Variable -Name CompactCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name CompactCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:CompactCompletionCatalog
     }
 

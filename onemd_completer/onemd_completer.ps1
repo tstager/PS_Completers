@@ -226,7 +226,7 @@ function Test-OnemdPathLikeSlot {
 }
 
 function Get-OnemdCompletionCatalog {
-    $catalog = Get-Variable -Name 'OnemdCompletionCatalog' -Scope Script -ErrorAction SilentlyContinue
+    $catalog = Get-Variable -Name 'OnemdCompletionCatalog' -Scope Script -ErrorAction Ignore
     if ($null -ne $catalog -and $null -ne $catalog.Value) {
         return $catalog.Value
     }
@@ -425,7 +425,7 @@ function Get-OnemdValueCompletions {
     if ($OptionSpec.Values.Count -gt 0) {
         return @(
             foreach ($value in $OptionSpec.Values) {
-                if ($value -like "$CurrentWord*") {
+                if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
                     New-OnemdCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip $OptionSpec.Description
                 }
             }
@@ -488,7 +488,7 @@ function Complete-Onemd {
     if ($currentWord.StartsWith('-')) {
         foreach ($option in @($activeCatalog.Options)) {
             foreach ($name in @($option.Names)) {
-                if ($name -like "$currentWord*") {
+                if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                     [void]$results.Add((New-OnemdCompletionResult -CompletionText $name -ListItemText $name -ResultType 'ParameterName' -ToolTip $option.Description))
                 }
             }
@@ -503,7 +503,7 @@ function Complete-Onemd {
 
     if ($rootCommands.Count -gt 0 -and ($activePath.Count -eq 0 -or ($activePath.Count -eq 1 -and $activePath[0] -eq 'help'))) {
         foreach ($commandName in $rootCommands) {
-            if ($commandName -like "$currentWord*") {
+            if ($commandName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-OnemdCompletionResult -CompletionText $commandName -ListItemText $commandName -ResultType 'ParameterValue' -ToolTip 'onemd subcommand'))
             }
         }
@@ -511,7 +511,7 @@ function Complete-Onemd {
 
     if ($activeCommands.Count -gt 0 -and $activePath.Count -gt 0) {
         foreach ($commandName in $activeCommands) {
-            if ($commandName -like "$currentWord*") {
+            if ($commandName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                 [void]$results.Add((New-OnemdCompletionResult -CompletionText $commandName -ListItemText $commandName -ResultType 'ParameterValue' -ToolTip 'onemd subcommand'))
             }
         }
@@ -524,7 +524,7 @@ function Complete-Onemd {
             }
         } else {
             foreach ($name in @($option.Names)) {
-                if ($name -like "$currentWord*") {
+                if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                     [void]$results.Add((New-OnemdCompletionResult -CompletionText $name -ListItemText $name -ResultType 'ParameterName' -ToolTip $option.Description))
                 }
             }

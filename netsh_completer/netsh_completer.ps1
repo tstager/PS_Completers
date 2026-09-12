@@ -741,7 +741,7 @@ function Get-NetshContextValueCompletions {
     foreach ($contextPath in $script:NetshCompletionCatalog.ContextPathsByKey.Values) {
         $contextPath = @($contextPath)
         $pathText = Get-NetshPathText -PathTokens $contextPath
-        if ([string]::IsNullOrWhiteSpace($prefix) -or $pathText -like "$prefix*") {
+        if ([string]::IsNullOrWhiteSpace($prefix) -or $pathText -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
             $completionText = ConvertTo-NetshQuotedValue -Value $pathText -AlwaysQuote:$alwaysQuote
             if ($contextPath.Count -gt 1) {
                 $completionText = ConvertTo-NetshQuotedValue -Value $pathText -AlwaysQuote:$true
@@ -765,7 +765,7 @@ function Get-NetshGlobalOptionSuggestions {
     param([string]$WordToComplete)
 
     $results = foreach ($option in $script:NetshCompletionCatalog.GlobalOptions) {
-        if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $option.Token -like "$WordToComplete*") {
+        if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $option.Token -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             [pscustomobject]@{
                 CompletionText = $option.Token
                 ToolTip        = $option.ToolTip
@@ -789,7 +789,7 @@ function Get-NetshCollectionSuggestions {
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($entry in $Collection.Values) {
-        if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $entry.CompletionText -like "$WordToComplete*") {
+        if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $entry.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             $results.Add($entry)
         }
     }
@@ -818,7 +818,7 @@ function Get-NetshInlineTagValueSuggestions {
     }
 
     $results = foreach ($value in $ValueHintsByTag[$tagKey]) {
-        if ([string]::IsNullOrWhiteSpace($valuePrefix) -or $value -like "$valuePrefix*") {
+        if ([string]::IsNullOrWhiteSpace($valuePrefix) -or $value -like ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*')) {
             [pscustomobject]@{
                 CompletionText = "$($matches.Tag)=$value"
                 ToolTip        = "Accepted value for $($matches.Tag)= in netsh."
@@ -838,7 +838,7 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
     $line = $commandAst.Extent.Text
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { '' } else { Get-NetshCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
     $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $safeCursor = [Math]::Min([Math]::Max($cursorPosition, 0), $line.Length)
+    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete) -or ($line.Substring(0, $safeCursor) -match '\s$')
     $tokensBeforeCurrent = Get-NetshTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace:$hasTrailingSpace
 
@@ -858,7 +858,7 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
                 return
             }
             'Password' {
-                if ([string]::IsNullOrWhiteSpace($currentWord) -or '*' -like "$currentWord*") {
+                if ([string]::IsNullOrWhiteSpace($currentWord) -or '*' -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                     New-NetshCompletionResult -CompletionText '*' -ResultType 'ParameterValue' -ToolTip 'Prompt for the password.'
                 }
                 return

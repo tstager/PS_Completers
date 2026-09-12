@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name XcopyCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name XcopyCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:XcopyCompletionCatalog = @{
         Initialized     = $false
         Options         = @()

@@ -156,7 +156,7 @@ function Get-TakeownArgumentsFromTokenState {
 }
 
 function Get-TakeownCatalog {
-    if (Get-Variable -Name TakeownCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name TakeownCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:TakeownCompletionCatalog
     }
 

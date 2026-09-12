@@ -14,7 +14,7 @@
 Set-StrictMode -Version Latest
 
 function Initialize-QwenCompleterData {
-    if (Get-Variable -Name QwenTopCommands -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name QwenTopCommands -Scope Script -ErrorAction Ignore) {
         return
     }
 
@@ -741,7 +741,7 @@ function Complete-QwenNative {
 
         $enumVals = Get-QwenEnumValues -FlagName $resolved -Sub $sub -SubSub $subsub -SubSubSub $sub3
         if ($enumVals) {
-            $enumVals | Where-Object { $_ -like "$valPfx*" } | ForEach-Object {
+            $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($valPfx) + '*') } | ForEach-Object {
                 $tip = ($script:QwenFlagDesc[$resolved] ?? $_)
                 New-QwenCompletion "$flagPart=$_" -ListItemText $_ -Tooltip $tip
             }
@@ -767,7 +767,7 @@ function Complete-QwenNative {
     if ($expectingValue) {
         $enumVals = Get-QwenEnumValues -FlagName $currentFlag -Sub $sub -SubSub $subsub -SubSubSub $sub3
         if ($enumVals) {
-            $enumVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 $tip = ($script:QwenFlagDesc[$currentFlag] ?? $_)
                 New-QwenCompletion $_ -Tooltip $tip
             }
@@ -783,14 +783,14 @@ function Complete-QwenNative {
 
         # Number placeholder — suppresses filesystem fallback.
         if ($script:QwenNumberFlags -contains $currentFlag) {
-            if ('' -like "$WordToComplete*") {
+            if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 New-QwenCompletion '<n>' -Tooltip "Numeric value for $currentFlag"
             }
             return
         }
 
         # Generic placeholder — suppresses filesystem fallback for string/array flags.
-        if ('' -like "$WordToComplete*") {
+        if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-QwenCompletion '<value>' -Tooltip "Value for $currentFlag"
         }
         return
@@ -831,7 +831,7 @@ function Complete-QwenNative {
         $l3k  = "$sub.$subsub"
         $l3cs = $script:QwenL3Subcommands[$l3k]
         if ($l3cs) {
-            $l3cs | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $l3cs | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 $tip = $script:QwenSubcmdDesc["$sub.$subsub.$_"] ?? $_
                 New-QwenCompletion $_ -Tooltip $tip
             }
@@ -842,7 +842,7 @@ function Complete-QwenNative {
         $emitted = $false
         $posVals = $script:QwenPositionalEnums[$l3k]
         if ($posVals) {
-            $posVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $posVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 New-QwenCompletion $_ -Tooltip "Positional: $_"
                 $emitted = $true
             }
@@ -853,7 +853,7 @@ function Complete-QwenNative {
         }
 
         $placeholder = Get-QwenPositionalPlaceholder -ContextKey $l3k -PositionIndex $positionalCount
-        if ($placeholder -and $placeholder -like "$WordToComplete*") {
+        if ($placeholder -and $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-QwenCompletion $placeholder -Tooltip "Positional value for $l3k"
             $emitted = $true
         }
@@ -875,13 +875,13 @@ function Complete-QwenNative {
         $emitted = $false
         $posVals = $script:QwenPositionalEnums[$posKey]
         if ($posVals) {
-            $posVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $posVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 New-QwenCompletion $_ -Tooltip "Positional: $_"
                 $emitted = $true
             }
         }
         $placeholder = Get-QwenPositionalPlaceholder -ContextKey $posKey -PositionIndex $positionalCount
-        if ($placeholder -and $placeholder -like "$WordToComplete*") {
+        if ($placeholder -and $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-QwenCompletion $placeholder -Tooltip "Positional value for $posKey"
             $emitted = $true
         }
@@ -899,7 +899,7 @@ function Complete-QwenNative {
     if ($sub -and $null -eq $subsub) {
         $subs = $script:QwenSubSubcommands[$sub]
         if ($subs) {
-            $subs | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+            $subs | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
                 $tip = $script:QwenSubcmdDesc["$sub.$_"] ?? $_
                 New-QwenCompletion $_ -Tooltip $tip
             }
@@ -910,7 +910,7 @@ function Complete-QwenNative {
     }
 
     # --- 4d. Top level → offer L1 subcommands. ---
-    $script:QwenTopCommands | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+    $script:QwenTopCommands | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
         $tip = $script:QwenCmdDesc[$_] ?? $_
         New-QwenCompletion $_ -Tooltip $tip
     }

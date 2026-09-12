@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-SeqCompletionOptions {
-    $cache = Get-Variable -Name 'SeqCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'SeqCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-SeqCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-SeqCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'SeqCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'SeqCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'SeqCompletionOptions' -Scope Script).Value
         }
     }
@@ -256,6 +264,17 @@ function Get-SeqOptionValueCompletions {
     )
 }
 
+function Get-SeqOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'SeqCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for seq.'
+}
+
 function Complete-Seq {
     param(
         [string]$wordToComplete,
@@ -282,7 +301,7 @@ function Complete-Seq {
         return @(
             foreach ($option in Get-SeqCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-SeqCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for seq.'
+                    New-SeqCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-SeqOptionDescription -Option $option)
                 }
             }
         )

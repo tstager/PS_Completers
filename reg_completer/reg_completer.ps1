@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name RegCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name RegCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:RegCompletionCatalog = @{
         Initialized      = $false
         CommandName      = $null
@@ -78,7 +78,7 @@ function Invoke-RegHelpText {
     }
 
     try {
-        @(& $commandName @Arguments '/?' 2>$null)
+        @($null | & $commandName @Arguments '/?' 2>$null)
     } catch {
         @()
     }
@@ -1067,7 +1067,7 @@ function Complete-Reg {
     Initialize-RegCompletionCatalog
 
     $line = $commandAst.ToString()
-    $prefixLength = [Math]::Min([Math]::Max($cursorPosition, 0), $line.Length)
+    $prefixLength = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $prefixLength)
     $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)

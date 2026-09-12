@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Initialize-PsLogListCompletionCatalog {
-    if (-not (Get-Variable -Name PsLogListCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name PsLogListCompletionCatalog -Scope Script -ErrorAction Ignore)) {
         $script:PsLogListCompletionCatalog = @{
             Switches = @(
                 [pscustomobject]@{ Token = '-u'; Description = 'Optional user name for remote login.'; TakesValue = $true; ValueKind = 'User' }

@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-PathchkCompletionOptions {
-    $cache = Get-Variable -Name 'PathchkCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'PathchkCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-PathchkCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-PathchkCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'PathchkCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'PathchkCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'PathchkCompletionOptions' -Scope Script).Value
         }
     }
@@ -179,6 +187,17 @@ function Get-PathchkPathCompletions {
     }
 }
 
+function Get-PathchkOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'PathchkCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for pathchk.'
+}
+
 function Complete-Pathchk {
     param(
         [string]$wordToComplete,
@@ -200,7 +219,7 @@ function Complete-Pathchk {
         return @(
             foreach ($option in Get-PathchkCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-PathchkCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for pathchk.'
+                    New-PathchkCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-PathchkOptionDescription -Option $option)
                 }
             }
         )

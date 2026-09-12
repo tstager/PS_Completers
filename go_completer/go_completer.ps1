@@ -906,7 +906,7 @@ function Get-GoOptionCompletions {
 
     return ,@(
         foreach ($option in $Options) {
-            if ([string]::IsNullOrEmpty($WordToComplete) -or $option -like "$WordToComplete*") {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or $option -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 New-GoCompletionResult -CompletionText $option -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -ToolTip "Go option $option"
             }
         }
@@ -922,7 +922,7 @@ function Get-GoCommandCompletions {
     $metadata = Get-GoRootCommandMetadata
     return ,@(
         foreach ($command in $Commands) {
-            if ([string]::IsNullOrEmpty($WordToComplete) -or $command -like "$WordToComplete*") {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or $command -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 New-GoCompletionResult -CompletionText $command -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$command]
             }
         }
@@ -938,7 +938,7 @@ function Get-GoTopicCompletions {
     $metadata = Get-GoHelpTopicMetadata
     return ,@(
         foreach ($topic in $Topics) {
-            if ([string]::IsNullOrEmpty($WordToComplete) -or $topic -like "$WordToComplete*") {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or $topic -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 New-GoCompletionResult -CompletionText $topic -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$topic]
             }
         }
@@ -955,7 +955,7 @@ function Get-GoNestedCommandCompletions {
     $metadata = Get-GoNestedCommandMetadata -CommandName $CommandName
     return ,@(
         foreach ($name in $NestedCommands) {
-            if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like "$WordToComplete*") {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 New-GoCompletionResult -CompletionText $name -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$name]
             }
         }
@@ -987,7 +987,7 @@ function Get-GoEnvWriteCompletions {
     }
 
     $results = foreach ($name in $envNames) {
-        if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like "$WordToComplete*") {
+        if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-GoCompletionResult -CompletionText "$name=<value>" -ToolTip "Set $name with go env -w"
         }
     }
@@ -1003,7 +1003,7 @@ function Get-GoEnvUnsetCompletions {
     param([string]$WordToComplete)
 
     $results = foreach ($name in (Get-GoEnvNames)) {
-        if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like "$WordToComplete*") {
+        if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             New-GoCompletionResult -CompletionText $name -ToolTip "Unset $name with go env -u"
         }
     }
@@ -1027,7 +1027,7 @@ function Get-GoValueCompletions {
     if ($enumValues.Count -gt 0) {
         return ,@(
             foreach ($value in $enumValues) {
-                if ([string]::IsNullOrEmpty($WordToComplete) -or $value -like "$WordToComplete*") {
+                if ([string]::IsNullOrEmpty($WordToComplete) -or $value -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                     $completionText = if ($InlinePrefix) { $InlinePrefix + $value } else { $value }
                     New-GoCompletionResult -CompletionText $completionText -ListItemText $value -ToolTip "Value for $OptionName"
                 }
@@ -1054,7 +1054,7 @@ function Get-GoValueCompletions {
         '-pgo' {
             return ,@(
                 foreach ($special in @('auto', 'off')) {
-                    if ([string]::IsNullOrEmpty($WordToComplete) -or $special -like "$WordToComplete*") {
+                    if ([string]::IsNullOrEmpty($WordToComplete) -or $special -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                         $completionText = if ($InlinePrefix) { $InlinePrefix + $special } else { $special }
                         New-GoCompletionResult -CompletionText $completionText -ListItemText $special -ToolTip 'Value for -pgo'
                     }
@@ -1184,7 +1184,7 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
                 $tools = Get-GoToolNames
                 if ($tools.Count -gt 0) {
                     foreach ($toolName in $tools) {
-                        if ([string]::IsNullOrEmpty($currentWord) -or $toolName -like "$currentWord*") {
+                        if ([string]::IsNullOrEmpty($currentWord) -or $toolName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
                             New-GoCompletionResult -CompletionText $toolName -ToolTip 'Installed go tool'
                         }
                     }

@@ -30,7 +30,7 @@ Set-StrictMode -Version Latest
 # enum overlay.  This is the ONLY function that runs external commands or mutates
 # script-scoped state.  It never throws and is safe to call on every completion.
 function Initialize-WinAppCompleterData {
-    if (Get-Variable -Name WinAppSchemaProbed -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WinAppSchemaProbed -Scope Script -ErrorAction Ignore) {
         return
     }
 
@@ -218,7 +218,7 @@ function Write-WinAppOptionValue {
     # 1. Enum overlay.
     $enumVals = Get-WinAppEnumChoices -ValueType $valueType
     if ($enumVals) {
-        $enumVals | Where-Object { $_ -like "$WordToComplete*" } | ForEach-Object {
+        $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
             $tip = "$canonical value: $_"
             if ($InlinePrefix) {
                 New-WinAppCompletion "$InlinePrefix$_" -ListItemText $_ -Tooltip $tip
@@ -253,7 +253,7 @@ function Write-WinAppOptionValue {
 
     # 4. Numeric placeholder.
     if ($valueType -like '*System.Int32*' -or $valueType -like '*System.Int64*') {
-        if ('' -like "$WordToComplete*") {
+        if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             $text = if ($InlinePrefix) { "$InlinePrefix<n>" } else { '<n>' }
             New-WinAppCompletion $text -ListItemText '<n>' -Tooltip "Numeric value for $canonical"
         }
@@ -261,7 +261,7 @@ function Write-WinAppOptionValue {
     }
 
     # 5. Generic string placeholder (suppresses filesystem fallback).
-    if ('' -like "$WordToComplete*") {
+    if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
         $ph = if ($helpName) { "<$helpName>" } else { '<value>' }
         $text = if ($InlinePrefix) { "$InlinePrefix$ph" } else { $ph }
         New-WinAppCompletion $text -ListItemText $ph -Tooltip "Value for $canonical"
@@ -345,7 +345,7 @@ function Write-WinAppOptionList {
             }
         } else {
             $aliasNote = if ($aliases.Count -gt 0) { " (alias: $($aliases -join ', '))" } else { '' }
-            if ($name -like "$WordToComplete*") {
+            if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 $tip = "${name}${aliasNote} ${typeTag}: $desc"
                 New-WinAppCompletion $name -ResultType ParameterName -Tooltip $tip
             }
@@ -427,7 +427,7 @@ function Write-WinAppPositionalValue {
     }
 
     # Free-form string / string[] -> name-based placeholder.
-    if ('' -like "$WordToComplete*") {
+    if ('' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
         New-WinAppCompletion "<$name>" -Tooltip "Positional value: $name"
     }
 }
@@ -712,7 +712,7 @@ function Complete-WinAppNative {
 
 #region -- Registration -------------------------------------------------------------------------
 
-if (-not ((Get-Variable -Name WinAppCompleterRegistered -Scope Script -ErrorAction SilentlyContinue) -and $script:WinAppCompleterRegistered)) {
+if (-not ((Get-Variable -Name WinAppCompleterRegistered -Scope Script -ErrorAction Ignore) -and $script:WinAppCompleterRegistered)) {
     Register-ArgumentCompleter -CommandName @('winapp', 'winapp.exe') -Native -ScriptBlock {
         param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
         Complete-WinAppNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter

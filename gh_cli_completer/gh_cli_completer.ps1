@@ -31,7 +31,7 @@ function Get-GhCliGeneratedCompletionScript {
     }
 
     try {
-        $completionScript = & $ghCommandPath completion -s powershell | Out-String
+        $completionScript = $null | & $ghCommandPath completion -s powershell | Out-String
 
         if ([string]::IsNullOrWhiteSpace($completionScript)) {
             Write-Error "gh returned an empty completion script. Check your gh installation by running: gh --version"
@@ -45,7 +45,7 @@ function Get-GhCliGeneratedCompletionScript {
 }
 
 function Get-GhCliCompletionInvoker {
-    $cachedInvoker = Get-Variable -Name GhCliCompletionInvoker -Scope Script -ErrorAction SilentlyContinue
+    $cachedInvoker = Get-Variable -Name GhCliCompletionInvoker -Scope Script -ErrorAction Ignore
     if ($null -ne $cachedInvoker) {
         return $cachedInvoker.Value
     }

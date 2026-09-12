@@ -1,7 +1,7 @@
 Set-StrictMode -Version 2.0
 
 function Resolve-JustCommandName {
-    if (Get-Variable -Name JustCompletionCommandName -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name JustCompletionCommandName -Scope Script -ErrorAction Ignore) {
         return $script:JustCompletionCommandName
     }
 

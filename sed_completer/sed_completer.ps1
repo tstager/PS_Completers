@@ -1,6 +1,6 @@
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SedCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SedCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SedCompletionCatalog = @{
         Initialized        = $false
         ProbedExecutable   = $false

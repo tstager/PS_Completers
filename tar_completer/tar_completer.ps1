@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:TarCompletionCatalog = @{
         Initialized       = $false
         CommandName       = $null
@@ -896,10 +896,10 @@ function Complete-Tar {
     Initialize-TarCompletionCatalog
 
     $line = $commandAst.ToString()
-    $prefixLength = [Math]::Min([Math]::Max($cursorPosition, 0), $line.Length)
+    $prefixLength = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $prefixLength)
     $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    $hasTrailingSpace = ($linePrefix -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
     $currentToken = if ($hasTrailingSpace) { '' } else { Get-TarCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
     [object[]]$argumentTokens = if ($tokens.Count -gt 1) {

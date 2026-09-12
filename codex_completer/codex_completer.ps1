@@ -17,9 +17,9 @@ because all three launcher names can be relevant on Windows.
 Set-StrictMode -Version Latest
 
 function Get-CodexCompletionExecutablePath {
-    $pathProbeComplete = Get-Variable -Name CodexCompletionExecutablePathProbed -Scope Script -ErrorAction SilentlyContinue
+    $pathProbeComplete = Get-Variable -Name CodexCompletionExecutablePathProbed -Scope Script -ErrorAction Ignore
     if ($null -ne $pathProbeComplete -and $pathProbeComplete.Value) {
-        $cachedPath = Get-Variable -Name CodexCompletionExecutablePath -Scope Script -ErrorAction SilentlyContinue
+        $cachedPath = Get-Variable -Name CodexCompletionExecutablePath -Scope Script -ErrorAction Ignore
         if ($null -ne $cachedPath) {
             return $cachedPath.Value
         }
@@ -95,7 +95,7 @@ $rewrittenScript
 }
 
 function Get-CodexCompletionInvoker {
-    $cachedInvoker = Get-Variable -Name CodexCompletionInvoker -Scope Script -ErrorAction SilentlyContinue
+    $cachedInvoker = Get-Variable -Name CodexCompletionInvoker -Scope Script -ErrorAction Ignore
     if ($null -ne $cachedInvoker) {
         return $cachedInvoker.Value
     }

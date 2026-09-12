@@ -4,7 +4,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name WhereCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name WhereCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:WhereCompletionCatalog = @{
         Initialized       = $false
         GlobalSwitches    = @()
@@ -191,7 +191,7 @@ function Complete-Where {
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('/')) {
         return $script:WhereCompletionCatalog.GlobalSwitches |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-WhereCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
             }

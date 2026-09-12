@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name WevtutilCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name WevtutilCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:WevtutilCompletionCatalog = @{
         Initialized                = $false
         CommandAliases             = @{}
@@ -554,7 +554,7 @@ function Get-WevtutilLogNameCompletions {
     $alwaysQuote = $WordToComplete.StartsWith('"')
 
     $script:WevtutilCompletionCatalog.LogNamesCache |
-        Where-Object { $_ -like "$cleanPrefix*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($cleanPrefix) + '*') } |
         ForEach-Object { ConvertTo-WevtutilQuotedValue -Value $_ -AlwaysQuote $alwaysQuote }
 }
 
@@ -592,7 +592,7 @@ function Get-WevtutilPublisherNameCompletions {
     $alwaysQuote = $WordToComplete.StartsWith('"')
 
     $script:WevtutilCompletionCatalog.PublisherNamesCache |
-        Where-Object { $_ -like "$cleanPrefix*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($cleanPrefix) + '*') } |
         ForEach-Object { ConvertTo-WevtutilQuotedValue -Value $_ -AlwaysQuote $alwaysQuote }
 }
 
@@ -635,7 +635,7 @@ function Complete-Wevtutil {
 
         if (@($valueHints).Count -gt 0) {
             return $valueHints |
-                Where-Object { $_ -like "$typedValue*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object {
                     New-WevtutilCompletionResult -CompletionText "$currentPrefix$_" -ResultType 'ParameterValue' -ToolTip $_
                 }
@@ -653,7 +653,7 @@ function Complete-Wevtutil {
     if (-not $activeCommand) {
         if ([string]::IsNullOrWhiteSpace($currentWord) -or -not $currentWord.StartsWith('/')) {
             return $script:WevtutilCompletionCatalog.CommandSuggestions |
-                Where-Object { $_.CompletionText -like "$currentWord*" } |
+                Where-Object { $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                 ForEach-Object {
                     New-WevtutilCompletionResult -CompletionText $_.CompletionText -ResultType 'ParameterName' -ToolTip $_.ToolTip
                 }
@@ -661,7 +661,7 @@ function Complete-Wevtutil {
 
         if ($currentWord.StartsWith('/')) {
             return @('/?') |
-                Where-Object { $_ -like "$currentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                 ForEach-Object {
                     New-WevtutilCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
                 }
@@ -703,7 +703,7 @@ function Complete-Wevtutil {
 
         return $suggestions |
             Sort-Object -Unique |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-WevtutilCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
             }

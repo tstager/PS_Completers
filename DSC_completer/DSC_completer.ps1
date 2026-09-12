@@ -419,6 +419,6 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
         }
     })
 
-    $completions.Where{ $_.CompletionText -like "$wordToComplete*" } |
+    $completions.Where{ $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } |
         Sort-Object -Property ListItemText
 }

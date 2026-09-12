@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-if (-not (Get-Variable -Name BunCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name BunCompletionCache -Scope Script -ErrorAction Ignore)) {
     $script:BunCompletionCache = @{
         ExecutablePath       = $null
         ExecutablePathProbed = $false

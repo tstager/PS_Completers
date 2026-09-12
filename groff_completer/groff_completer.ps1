@@ -1,6 +1,6 @@
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name GroffCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name GroffCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:GroffCompletionCatalog = @{
         Initialized        = $false
         ExecutablePath     = $null

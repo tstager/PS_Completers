@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name RegDelNullCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name RegDelNullCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:RegDelNullCompletionCatalog = @{
         RootKeys = @('HKLM', 'HKCU', 'HKCR', 'HKU', 'HKCC')
         RootLongNames = @{

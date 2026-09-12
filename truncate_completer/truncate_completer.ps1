@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-TruncateCompletionOptions {
-    $cache = Get-Variable -Name 'TruncateCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'TruncateCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-TruncateCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-TruncateCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'TruncateCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'TruncateCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'TruncateCompletionOptions' -Scope Script).Value
         }
     }
@@ -241,6 +249,17 @@ function Get-TruncateOptionValueCompletions {
     )
 }
 
+function Get-TruncateOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'TruncateCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for truncate.'
+}
+
 function Complete-Truncate {
     param(
         [string]$wordToComplete,
@@ -267,7 +286,7 @@ function Complete-Truncate {
         return @(
             foreach ($option in Get-TruncateCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-TruncateCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for truncate.'
+                    New-TruncateCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-TruncateOptionDescription -Option $option)
                 }
             }
         )

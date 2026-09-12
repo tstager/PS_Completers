@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PsGetsidCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PsGetsidCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsGetsidCompletionCatalog = @{
         Initialized            = $false
         RootSwitchOrder        = @('-nobanner', '-?', '/?')

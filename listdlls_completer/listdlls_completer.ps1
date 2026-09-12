@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name ListdllsCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name ListdllsCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:ListdllsCompletionCatalog = @{
         Initialized             = $false
         SwitchOrder             = @('-r', '-v', '-u', '-d', '-?', '/?', '--help')
@@ -359,7 +359,7 @@ function Complete-Listdlls {
     Initialize-ListdllsCompletionCatalog
 
     $line = $commandAst.ToString()
-    $safeCursor = [Math]::Min([Math]::Max($cursorPosition, 0), $line.Length)
+    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $safeCursor)
     $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
     [object[]]$argumentTokens = if ($commandTokens.Count -gt 1) {
@@ -375,7 +375,7 @@ function Complete-Listdlls {
         $wordToComplete
     }
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or ($cursorPosition -gt $line.Length))
+    $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
     [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
         @($argumentTokens)
     } elseif ($argumentTokens.Count -gt 0) {

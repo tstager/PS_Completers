@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SysteminfoCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SysteminfoCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SysteminfoCompletionCatalog = @{
         Initialized  = $false
         SwitchOrder  = @('/S', '/U', '/P', '/FO', '/NH', '/?')

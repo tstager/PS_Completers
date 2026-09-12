@@ -129,7 +129,7 @@ function Get-WslConfigArgumentsFromTokenState {
 }
 
 function Get-WslConfigCatalog {
-    if (Get-Variable -Name WslConfigCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WslConfigCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:WslConfigCompletionCatalog
     }
 
@@ -164,7 +164,7 @@ function Get-WslConfigCatalog {
 }
 
 function Get-WslConfigDistributionNames {
-    if (Get-Variable -Name WslConfigDistributionCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WslConfigDistributionCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WslConfigDistributionCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 15) {
             return $cache.Values

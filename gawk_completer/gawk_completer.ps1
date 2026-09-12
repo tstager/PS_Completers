@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-if (-not (Get-Variable -Name GawkCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name GawkCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:GawkCompletionCatalog = @{
         Initialized             = $false
         ProbedExecutable        = $false

@@ -45,7 +45,7 @@ function Get-DockerExecutablePath {
 }
 
 function Get-DockerCatalogCache {
-    $cache = Get-Variable -Name 'DockerCatalogCache' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'DockerCatalogCache' -Scope Script -ErrorAction Ignore
     if ($null -eq $cache -or $null -eq $cache.Value) {
         Set-Variable -Name 'DockerCatalogCache' -Value @{} -Scope Script
     }
@@ -296,7 +296,7 @@ function Complete-DockerCommand {
     if ($prefix -match '^-') {
         foreach ($option in @($context.Catalog.Options)) {
             foreach ($optionName in @($option.Names)) {
-                if ($optionName -like "$prefix*") {
+                if ($optionName -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                     [void]$results.Add((New-DockerCompletionResult -CompletionText $optionName -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $optionName))
                 }
             }
@@ -306,7 +306,7 @@ function Complete-DockerCommand {
     }
 
     foreach ($command in @($context.Catalog.Commands)) {
-        if ($command -like "$prefix*") {
+        if ($command -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
             $toolTip = "docker $($context.Path -join ' ') $command"
             [void]$results.Add((New-DockerCompletionResult -CompletionText $command -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText $command))
         }
@@ -314,7 +314,7 @@ function Complete-DockerCommand {
 
     foreach ($option in @($context.Catalog.Options)) {
         foreach ($optionName in @($option.Names)) {
-            if ($optionName -like "$prefix*") {
+            if ($optionName -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                 [void]$results.Add((New-DockerCompletionResult -CompletionText $optionName -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $optionName))
             }
         }

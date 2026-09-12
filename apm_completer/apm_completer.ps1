@@ -761,9 +761,9 @@ function Get-ApmPositionalResults {
         [string]$WordToComplete
     )
 
-    $configKeys = (Get-Variable -Name ApmConfigKeyValues -Scope Script -ErrorAction SilentlyContinue).Value
-    $booleanValues = (Get-Variable -Name ApmBooleanValues -Scope Script -ErrorAction SilentlyContinue).Value
-    $runtimeValues = (Get-Variable -Name ApmRuntimeValues -Scope Script -ErrorAction SilentlyContinue).Value
+    $configKeys = (Get-Variable -Name ApmConfigKeyValues -Scope Script -ErrorAction Ignore).Value
+    $booleanValues = (Get-Variable -Name ApmBooleanValues -Scope Script -ErrorAction Ignore).Value
+    $runtimeValues = (Get-Variable -Name ApmRuntimeValues -Scope Script -ErrorAction Ignore).Value
 
     switch ($CommandKey) {
         'init' {

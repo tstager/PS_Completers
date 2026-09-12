@@ -80,7 +80,7 @@ function Get-CurlDefaultHelpSubjects {
 }
 
 function Get-CurlCompletionCatalog {
-    if (Get-Variable -Name CurlCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name CurlCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:CurlCompletionCatalog
     }
 
@@ -465,7 +465,7 @@ function Get-CurlEnumValueResults {
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
     foreach ($value in @($Values)) {
-        if ($value -like "$typedValue*") {
+        if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
             New-CurlCompletionResult -CompletionText ($Prefix + $value) -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
@@ -591,10 +591,10 @@ function Get-CurlVariableValueResults {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    if ([string]::IsNullOrWhiteSpace($typedValue) -or '%' -like "$typedValue*") {
+    if ([string]::IsNullOrWhiteSpace($typedValue) -or '%' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
         foreach ($envName in (Get-ChildItem Env: | Select-Object -ExpandProperty Name | Sort-Object -Unique)) {
             $candidate = "%$envName"
-            if ($candidate -like "$typedValue*") {
+            if ($candidate -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
                 [void]$results.Add((New-CurlCompletionResult -CompletionText ($Prefix + $candidate) -ResultType 'ParameterValue' -ToolTip 'Import environment variable into a curl variable.'))
             }
         }
@@ -604,7 +604,7 @@ function Get-CurlVariableValueResults {
         [void]$results.Add($item)
     }
 
-    if ([string]::IsNullOrWhiteSpace($typedValue) -or 'name@file' -like "$typedValue*") {
+    if ([string]::IsNullOrWhiteSpace($typedValue) -or 'name@file' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
         [void]$results.Add((New-CurlCompletionResult -CompletionText ($Prefix + 'name@file') -ResultType 'ParameterValue' -ToolTip 'Set a curl variable from a file.'))
     }
 
@@ -628,7 +628,7 @@ function Get-CurlAtFileValueResults {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    if ([string]::IsNullOrWhiteSpace($typedValue) -or '@' -like "$typedValue*") {
+    if ([string]::IsNullOrWhiteSpace($typedValue) -or '@' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
         [void]$results.Add((New-CurlCompletionResult -CompletionText ($Prefix + '@') -ResultType 'ParameterValue' -ToolTip 'Prefix a file path with @ to load content from disk.'))
     }
 
@@ -790,7 +790,7 @@ function Get-CurlOptionCompletions {
     $cleanCurrent = Remove-CurlOuterQuotes -Value $CurrentWord
 
     foreach ($option in $catalog.Options) {
-        if ($option.Token -like "$cleanCurrent*") {
+        if ($option.Token -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrent) + '*')) {
             $toolTip = if ([string]::IsNullOrWhiteSpace($option.Description)) { $option.DisplayText } else { $option.Description }
             New-CurlCompletionResult -CompletionText $option.Token -ListItemText $option.DisplayText -ResultType 'ParameterName' -ToolTip $toolTip
         }

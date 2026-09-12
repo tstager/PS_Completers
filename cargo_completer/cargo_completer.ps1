@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-CargoCompletionCache {
-    $cache = Get-Variable -Name CargoCompletionCache -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name CargoCompletionCache -Scope Script -ErrorAction Ignore
     if ($cache) {
         return $cache.Value
     }

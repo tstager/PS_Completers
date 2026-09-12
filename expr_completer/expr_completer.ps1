@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-ExprCompletionOptions {
-    $cache = Get-Variable -Name 'ExprCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'ExprCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-ExprCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-ExprCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'ExprCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'ExprCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'ExprCompletionOptions' -Scope Script).Value
         }
     }
@@ -120,6 +128,17 @@ function Get-ExprValueCompletions {
     )
 }
 
+function Get-ExprOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'ExprCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for expr.'
+}
+
 function Complete-Expr {
     param(
         [string]$wordToComplete,
@@ -141,7 +160,7 @@ function Complete-Expr {
         return @(
             foreach ($option in Get-ExprCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-ExprCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for expr.'
+                    New-ExprCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-ExprOptionDescription -Option $option)
                 }
             }
         )

@@ -79,7 +79,7 @@ function New-PlaywrightCliCommandSpec {
 }
 
 function Get-PlaywrightCliMetadata {
-    if (Get-Variable -Name PlaywrightCliMetadata -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name PlaywrightCliMetadata -Scope Script -ErrorAction Ignore) {
         return $script:PlaywrightCliMetadata
     }
 
@@ -733,7 +733,7 @@ function Complete-PlaywrightCli {
 
     if (-not $commandSpec) {
         foreach ($command in $metadata.Commands) {
-            if ($command.Name -like "$WordToComplete*") {
+            if ($command.Name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 [void]$results.Add(
                     (New-PlaywrightCliCompletionResult -CompletionText $command.Name -ToolTip $command.Description)
                 )

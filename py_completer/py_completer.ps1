@@ -75,7 +75,7 @@ function Get-PyLauncherOptionMap {
 }
 
 function Resolve-PyCommandName {
-    $cache = Get-Variable -Name PyCompletionResolvedCommand -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name PyCompletionResolvedCommand -Scope Script -ErrorAction Ignore
     if ($cache) {
         return $cache.Value
     }
@@ -91,7 +91,7 @@ function Resolve-PyCommandName {
 }
 
 function Get-PyRuntimeTagCatalog {
-    $cache = Get-Variable -Name PyCompletionRuntimeTagCatalog -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name PyCompletionRuntimeTagCatalog -Scope Script -ErrorAction Ignore
     if ($cache) {
         $age = (Get-Date) - $cache.Value.UpdatedAt
         if ($age.TotalSeconds -lt 300) {

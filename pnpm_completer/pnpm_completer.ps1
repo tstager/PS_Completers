@@ -21,9 +21,9 @@ because all three launcher names can be relevant on Windows.
 Set-StrictMode -Version Latest
 
 function Get-PnpmCompletionExecutablePath {
-    $pathProbeComplete = Get-Variable -Name PnpmCompletionExecutablePathProbed -Scope Script -ErrorAction SilentlyContinue
+    $pathProbeComplete = Get-Variable -Name PnpmCompletionExecutablePathProbed -Scope Script -ErrorAction Ignore
     if ($null -ne $pathProbeComplete -and $pathProbeComplete.Value) {
-        $cachedPath = Get-Variable -Name PnpmCompletionExecutablePath -Scope Script -ErrorAction SilentlyContinue
+        $cachedPath = Get-Variable -Name PnpmCompletionExecutablePath -Scope Script -ErrorAction Ignore
         if ($null -ne $cachedPath) {
             return $cachedPath.Value
         }
@@ -99,7 +99,7 @@ $rewrittenScript
 }
 
 function Get-PnpmCompletionInvoker {
-    $cachedInvoker = Get-Variable -Name PnpmCompletionInvoker -Scope Script -ErrorAction SilentlyContinue
+    $cachedInvoker = Get-Variable -Name PnpmCompletionInvoker -Scope Script -ErrorAction Ignore
     if ($null -ne $cachedInvoker) {
         return $cachedInvoker.Value
     }
@@ -115,7 +115,7 @@ function Get-PnpmCompletionInvoker {
     }
 
     try {
-        $loadCount = Get-Variable -Name PnpmCompletionInvokerLoadCount -Scope Script -ErrorAction SilentlyContinue
+        $loadCount = Get-Variable -Name PnpmCompletionInvokerLoadCount -Scope Script -ErrorAction Ignore
         if ($null -eq $loadCount) {
             $script:PnpmCompletionInvokerLoadCount = 0
         }
@@ -184,7 +184,7 @@ function Get-PnpmHelpText {
 }
 
 function Get-PnpmRootCommandEntries {
-    $cachedEntries = Get-Variable -Name PnpmRootCommandEntries -Scope Script -ErrorAction SilentlyContinue
+    $cachedEntries = Get-Variable -Name PnpmRootCommandEntries -Scope Script -ErrorAction Ignore
     if ($null -ne $cachedEntries) {
         return $cachedEntries.Value
     }
@@ -259,7 +259,7 @@ function Get-PnpmCommandHelpEntry {
         return $null
     }
 
-    $cacheVariable = Get-Variable -Name PnpmCommandHelpCache -Scope Script -ErrorAction SilentlyContinue
+    $cacheVariable = Get-Variable -Name PnpmCommandHelpCache -Scope Script -ErrorAction Ignore
     if ($null -eq $cacheVariable) {
         $script:PnpmCommandHelpCache = @{}
     }

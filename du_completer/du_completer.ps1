@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name DuCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name DuCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:DuCompletionCatalog = @{
         Initialized  = $false
         CommandName  = $null

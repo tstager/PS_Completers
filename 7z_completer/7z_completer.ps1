@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SevenZipCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SevenZipCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SevenZipCompletionCatalog = @{
         Initialized        = $false
         HelpCommand        = $null
@@ -34,7 +34,7 @@ function Invoke-SevenZipHelpText {
     }
 
     try {
-        @(& $commandName --help 2>$null)
+        @($null | & $commandName --help 2>$null)
     } catch {
         @()
     }
@@ -412,7 +412,7 @@ function Complete-SevenZip {
 
             if ($script:SevenZipCompletionCatalog.ValueHintsBySwitch.ContainsKey($switchKey)) {
                 return $script:SevenZipCompletionCatalog.ValueHintsBySwitch[$switchKey] |
-                    Where-Object { $_ -like "$typedValue*" } |
+                    Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                     ForEach-Object {
                         New-SevenZipCompletionResult -CompletionText ($inlineValueSwitch + $_) -ResultType 'ParameterValue' -ToolTip ($inlineValueSwitch + $_)
                     }
@@ -429,7 +429,7 @@ function Complete-SevenZip {
 
             if ($script:SevenZipCompletionCatalog.ValueHintsBySwitch.ContainsKey($switchKey)) {
                 return $script:SevenZipCompletionCatalog.ValueHintsBySwitch[$switchKey] |
-                    Where-Object { $_ -like "$currentWord*" } |
+                    Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                     ForEach-Object {
                         New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip ($expectedValueSwitch + $_)
                     }
@@ -461,14 +461,14 @@ function Complete-SevenZip {
 
         if (-not $hasOptionTerminator -and $currentWord.StartsWith('-')) {
             return $script:SevenZipCompletionCatalog.SwitchTokens |
-                Where-Object { $_ -like "$currentWord*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
                 ForEach-Object {
                     New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
                 }
         }
 
         return $script:SevenZipCompletionCatalog.Commands |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
             }
@@ -476,7 +476,7 @@ function Complete-SevenZip {
 
     if (-not $hasOptionTerminator -and ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('-'))) {
         return $script:SevenZipCompletionCatalog.SwitchTokens |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
             }

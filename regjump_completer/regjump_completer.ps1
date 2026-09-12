@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name RegJumpCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name RegJumpCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:RegJumpCompletionCatalog = @{
         RootKeys = @('HKLM', 'HKCU', 'HKCR', 'HKU', 'HKCC')
         RootLongNames = @{

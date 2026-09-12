@@ -148,7 +148,7 @@ function Get-WecutilArgumentsFromTokenState {
 }
 
 function Get-WecutilCatalog {
-    if (Get-Variable -Name WecutilCompletionCatalog -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WecutilCompletionCatalog -Scope Script -ErrorAction Ignore) {
         return $script:WecutilCompletionCatalog
     }
 
@@ -328,7 +328,7 @@ function Get-WecutilParsedOptionsForCommand {
     param([string]$CanonicalCommand)
 
     $cacheName = 'WecutilParsedOptionCache'
-    if (-not (Get-Variable -Name $cacheName -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name $cacheName -Scope Script -ErrorAction Ignore)) {
         $script:WecutilParsedOptionCache = @{}
     }
 
@@ -388,7 +388,7 @@ function Get-WecutilCommandOptionLookup {
 }
 
 function Get-WecutilSubscriptionNames {
-    if (Get-Variable -Name WecutilSubscriptionCache -Scope Script -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name WecutilSubscriptionCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WecutilSubscriptionCache
         if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 15) {
             return $cache.Values

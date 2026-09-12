@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name IcaclsCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name IcaclsCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:IcaclsCompletionCatalog = @{
         Initialized         = $false
         Commands            = @()
@@ -311,12 +311,12 @@ function Get-IcaclsPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $parent = Split-Path -Path $cleanInput -Parent
+    $parent = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { Split-Path -Path $cleanInput -Parent }
     if ([string]::IsNullOrWhiteSpace($parent)) {
         $parent = '.'
     }
 
-    $leaf = Split-Path -Path $cleanInput -Leaf
+    $leaf = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { Split-Path -Path $cleanInput -Leaf }
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
 
     $items = Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue
@@ -467,21 +467,21 @@ function Get-IcaclsInlineOptionCompletions {
     if ($WordToComplete -match '^(?i)/inheritance:([^\s]*)$') {
         $valuePrefix = $matches[1]
         return @('e', 'd', 'r') |
-            Where-Object { $_ -like "$valuePrefix*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*') } |
             ForEach-Object { "/inheritance:$_" }
     }
 
     if ($WordToComplete -match '^(?i)/remove:([^\s]*)$') {
         $valuePrefix = $matches[1]
         return @('g', 'd') |
-            Where-Object { $_ -like "$valuePrefix*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*') } |
             ForEach-Object { "/remove:$_" }
     }
 
     if ($WordToComplete -match '^(?i)/grant:([^\s]*)$') {
         $valuePrefix = $matches[1]
         return @('r') |
-            Where-Object { $_ -like "$valuePrefix*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*') } |
             ForEach-Object { "/grant:$_" }
     }
 
@@ -511,7 +511,7 @@ function Get-IcaclsIntegrityLevelCompletions {
 
     $values |
         Sort-Object -Unique |
-        Where-Object { $_ -like "$WordToComplete*" }
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') }
 }
 
 function Get-IcaclsPermissionCompletions {
@@ -540,7 +540,7 @@ function Get-IcaclsPermissionCompletions {
     } else {
         @(
             $script:IcaclsCompletionCatalog.SimplePermissions |
-                Where-Object { $_ -like "$permissionPrefix*" } |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($permissionPrefix) + '*') } |
                 ForEach-Object { "${identity}:$_" }
         )
     }
@@ -608,7 +608,7 @@ function Get-IcaclsParenthesizedPermissionCompletions {
 
         $specificPrefix = "($partial"
         foreach ($permission in $script:IcaclsCompletionCatalog.SpecificPermissions) {
-            if ($specificPrefix -eq '(' -or $permission -like "$partial*") {
+            if ($specificPrefix -eq '(' -or $permission -like ([System.Management.Automation.WildcardPattern]::Escape($partial) + '*')) {
                 $suggestions.Add("${Identity}:${inheritancePrefix}($permission)")
             }
         }
@@ -643,7 +643,7 @@ function Get-IcaclsParenthesizedPermissionCompletions {
                 continue
             }
 
-            if ($permission -like "$currentSegment*") {
+            if ($permission -like ([System.Management.Automation.WildcardPattern]::Escape($currentSegment) + '*')) {
                 $suggestions.Add("${Identity}:${inheritancePrefix}${prefixText}$permission)")
             }
         }
@@ -652,7 +652,7 @@ function Get-IcaclsParenthesizedPermissionCompletions {
     }
 
     $script:IcaclsCompletionCatalog.SimplePermissions |
-        Where-Object { $_ -like "$remaining*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($remaining) + '*') } |
         ForEach-Object { "${Identity}:${inheritancePrefix}$_" }
 }
 
@@ -675,7 +675,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     } else {
         $wordToComplete
     }
-    $hasTrailingSpace = ($line -match '\s$') -or ($cursorPosition -gt $line.Length)
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
     $tokensBeforeCurrent = @(Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace)
     $permissionIdentityPrefix = $null
     if (
@@ -793,7 +793,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
         }
 
         return @('/?') |
-            Where-Object { $_ -like "$currentWord*" } |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
                 New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
             }
@@ -824,7 +824,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
     $suggestions |
         Sort-Object -Unique |
-        Where-Object { $_ -like "$currentWord*" } |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
         ForEach-Object {
             New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
         }

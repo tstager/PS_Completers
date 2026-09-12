@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name SigcheckCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name SigcheckCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SigcheckCompletionCatalog = @{
         Switches = @(
             @{ Token = '-a'; Description = 'Show extended version information.'; TakesValue = $false }
@@ -386,8 +386,8 @@ function Complete-Sigcheck {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if ($cursorPosition -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition)
+    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
+        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
     }
     $tokenState = Get-SigcheckTokenState -Line $line -CursorPosition $CursorPosition
     $argumentsState = Get-SigcheckArgumentsFromTokenState -TokenState $tokenState

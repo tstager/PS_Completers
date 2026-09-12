@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name StringsCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name StringsCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:StringsCompletionCatalog = @{
         Switches = @(
             @{ Token = '-a'; Description = 'Ascii-only search.'; TakesValue = $false }
@@ -332,8 +332,8 @@ function Complete-Strings {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if ($cursorPosition -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition)
+    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
+        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
     }
     $tokenState = Get-StringsTokenState -Line $line -CursorPosition $CursorPosition
     $argumentsState = Get-StringsArgumentsFromTokenState -TokenState $tokenState

@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-CutCompletionOptions {
-    $cache = Get-Variable -Name 'CutCompletionOptions' -Scope Script -ErrorAction SilentlyContinue
+    $cache = Get-Variable -Name 'CutCompletionOptions' -Scope Script -ErrorAction Ignore
     if ($null -ne $cache -and $null -ne $cache.Value) {
         return $cache.Value
     }
@@ -28,6 +28,7 @@ function Get-CutCompletionOptions {
         }
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -38,12 +39,19 @@ function Get-CutCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
+                if (-not $descriptions.ContainsKey($normalized)) {
+                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                    if ($description -and $description -ne $line.Trim()) {
+                        $descriptions[$normalized] = $description
+                    }
+                }
                 }
             }
         }
 
         if ($options.Count -gt 0) {
             Set-Variable -Name 'CutCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+            Set-Variable -Name 'CutCompletionDescriptions' -Value $descriptions -Scope Script
             return (Get-Variable -Name 'CutCompletionOptions' -Scope Script).Value
         }
     }
@@ -259,6 +267,17 @@ function Get-CutOptionValueCompletions {
     )
 }
 
+function Get-CutOptionDescription {
+    param([string]$Option)
+
+    $cache = Get-Variable -Name 'CutCompletionDescriptions' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
+        return $cache.Value[$Option]
+    }
+
+    'Option for cut.'
+}
+
 function Complete-Cut {
     param(
         [string]$wordToComplete,
@@ -285,7 +304,7 @@ function Complete-Cut {
         return @(
             foreach ($option in Get-CutCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-CutCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for cut.'
+                    New-CutCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-CutOptionDescription -Option $option)
                 }
             }
         )

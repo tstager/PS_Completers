@@ -113,7 +113,7 @@ function Get-CodeInsidersUniqueStrings {
 }
 
 function Get-CodeInsidersCompletionCache {
-    if (-not (Get-Variable -Name CodeInsidersCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name CodeInsidersCompletionCache -Scope Script -ErrorAction Ignore)) {
         $rootOptions = @(
             New-CodeInsidersOptionSpec -Tokens @('-d', '--diff') -Description 'Compare two files with each other.' -ValueKinds @('FilePath', 'FilePath')
             New-CodeInsidersOptionSpec -Tokens @('-m', '--merge') -Description 'Perform a three-way merge.' -ValueKinds @('FilePath', 'FilePath', 'FilePath', 'FilePath')

@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name ScCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name ScCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:ScCompletionCatalog = @{
         Initialized          = $false
         CommandName          = $null
@@ -50,7 +50,7 @@ if (-not (Get-Variable -Name ScCompletionCatalog -Scope Script -ErrorAction Sile
     }
 }
 
-if (-not (Get-Variable -Name ScServiceCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name ScServiceCache -Scope Script -ErrorAction Ignore)) {
     $script:ScServiceCache = @{
         LastUpdated  = $null
         TtlSeconds   = 30

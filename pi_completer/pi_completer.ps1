@@ -115,7 +115,7 @@ function Get-PiUniqueStrings {
 }
 
 function Get-PiCompletionCache {
-    if (-not (Get-Variable -Name PiCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Variable -Name PiCompletionCache -Scope Script -ErrorAction Ignore)) {
         $installLikeOptions = @(
             New-PiOptionSpec -Tokens @('-l', '--local') -Description 'Use project-local .pi/settings.json.'
             New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
@@ -1495,7 +1495,7 @@ function Get-PiValueCompletions {
                 [void]$results.Add($item)
             }
 
-            if ([string]::IsNullOrEmpty($WordToComplete) -or 'output.html' -like "$WordToComplete*") {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or 'output.html' -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 & $addResult 'output.html' 'Output HTML file'
             }
         }
@@ -1805,7 +1805,7 @@ function Complete-Pi {
         $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
 
         foreach ($command in @(Get-PiRootCommands)) {
-            if ($command.Name -like "$WordToComplete*") {
+            if ($command.Name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
                 [void]$results.Add(
                     (New-PiCompletionResult -CompletionText $command.Name -ToolTip $command.Description)
                 )

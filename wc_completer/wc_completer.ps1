@@ -425,7 +425,7 @@ function Get-WcEnumValueResults {
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
     foreach ($value in @($Values)) {
-        if ($value -like "$typedValue*") {
+        if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
             New-WcCompletionResult -CompletionText ($Prefix + $value) -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
@@ -461,7 +461,7 @@ function Get-WcPathValueResults {
     $results = New-Object System.Collections.Generic.List[object]
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
-    if ($AllowStdinSentinel -and ('-' -like "$typedValue*")) {
+    if ($AllowStdinSentinel -and ('-' -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*'))) {
         [void]$results.Add((New-WcCompletionResult -CompletionText ($Prefix + '-') -ResultType 'ParameterValue' -ToolTip 'Read this value from standard input.'))
     }
 

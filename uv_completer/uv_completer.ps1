@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-if (-not (Get-Variable -Name UvCompletionCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name UvCompletionCache -Scope Script -ErrorAction Ignore)) {
     $script:UvCompletionCache = @{
         ExecutablePaths = @{}
         ProbedPaths     = @{}

@@ -175,7 +175,7 @@ function ConvertFrom-CursorAgentHelpText {
 }
 
 function Get-CursorAgentCompletionCatalog {
-    $existing = Get-Variable -Name 'CursorAgentCompletionCatalog' -Scope Script -ErrorAction SilentlyContinue
+    $existing = Get-Variable -Name 'CursorAgentCompletionCatalog' -Scope Script -ErrorAction Ignore
     if ($null -ne $existing -and $null -ne $existing.Value) {
         return $existing.Value
     }
@@ -318,7 +318,7 @@ function Complete-CursorAgent {
     if ($previousToken -and ($previousToken -match '^--') -and $previousToken -in @('--mode', '--output-format', '--sandbox')) {
         $valueHints = Get-CursorAgentValueHints
         foreach ($hint in @($valueHints[$previousToken])) {
-            if ([string]::IsNullOrWhiteSpace($prefix) -or $hint -like "$prefix*") {
+            if ([string]::IsNullOrWhiteSpace($prefix) -or $hint -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                 [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip $hint -ListItemText $hint))
             }
         }
@@ -332,7 +332,7 @@ function Complete-CursorAgent {
 
     if ($previousToken -and ($previousToken -match '^--')) {
         $placeholder = Get-CursorAgentPlaceholderValue -OptionName $previousToken
-        if ([string]::IsNullOrWhiteSpace($prefix) -or $placeholder -like "$prefix*") {
+        if ([string]::IsNullOrWhiteSpace($prefix) -or $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
             [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $placeholder -ListItemText $placeholder))
         }
 
@@ -343,7 +343,7 @@ function Complete-CursorAgent {
         $mcpCatalog = $catalog.SubcommandCatalogs['mcp']
         if ($null -ne $mcpCatalog) {
             foreach ($subcommand in @($mcpCatalog.Subcommands)) {
-                if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like "$prefix*") {
+                if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                     [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $subcommand -ResultType 'ParameterValue' -ToolTip $subcommand -ListItemText $subcommand))
                 }
             }
@@ -354,14 +354,14 @@ function Complete-CursorAgent {
 
     foreach ($option in @($catalog.RootOptions)) {
         foreach ($optionName in @($option.Names)) {
-            if ([string]::IsNullOrWhiteSpace($prefix) -or $optionName -like "$prefix*") {
+            if ([string]::IsNullOrWhiteSpace($prefix) -or $optionName -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                 [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $optionName -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $optionName))
             }
         }
     }
 
     foreach ($subcommand in @($catalog.RootSubcommands)) {
-        if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like "$prefix*") {
+        if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
             [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $subcommand -ResultType 'ParameterValue' -ToolTip $subcommand -ListItemText $subcommand))
         }
     }

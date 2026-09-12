@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsServiceCompletionCatalog = @{
         CommandName      = $null
         TopLevelCommands = @(
@@ -41,7 +41,7 @@ if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorActi
     }
 }
 
-if (-not (Get-Variable -Name PsServiceServiceCache -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name PsServiceServiceCache -Scope Script -ErrorAction Ignore)) {
     $script:PsServiceServiceCache = @{
         LastUpdated  = $null
         TtlSeconds   = 30

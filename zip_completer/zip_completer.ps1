@@ -3,7 +3,7 @@
 
 Set-StrictMode -Version 2.0
 
-if (-not (Get-Variable -Name ZipCompletionCatalog -Scope Script -ErrorAction SilentlyContinue)) {
+if (-not (Get-Variable -Name ZipCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:ZipCompletionCatalog = @{
         Initialized          = $false
         CommandName          = $null

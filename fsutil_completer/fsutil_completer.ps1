@@ -514,7 +514,7 @@ function Invoke-FsutilHelpText {
             return @(& $commandName @Arguments 2>$null)
         }
 
-        return @(& $commandName @Arguments '/?' 2>$null)
+        return @($null | & $commandName @Arguments '/?' 2>$null)
     } catch {
         @()
     }
