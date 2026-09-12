@@ -280,7 +280,7 @@ function Complete-PsKill {
     $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-PsKillCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-PsKillCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

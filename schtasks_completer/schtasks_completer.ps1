@@ -322,7 +322,7 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-SchtasksCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-SchtasksCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

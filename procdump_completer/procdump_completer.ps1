@@ -458,7 +458,7 @@ function Complete-ProcDump {
     $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-ProcDumpCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-ProcDumpCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

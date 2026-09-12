@@ -900,7 +900,7 @@ function Complete-Tar {
     $linePrefix = $line.Substring(0, $prefixLength)
     $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
     $hasTrailingSpace = ($linePrefix -match '\s$') -or ($cursorPosition -gt $line.Length)
-    $currentToken = if ($hasTrailingSpace) { '' } else { Get-TarCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete }
+    $currentToken = if ($hasTrailingSpace) { '' } else { Get-TarCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
     [object[]]$argumentTokens = if ($tokens.Count -gt 1) {
         @($tokens[1..($tokens.Count - 1)])

@@ -370,7 +370,7 @@ function Complete-Listdlls {
     $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-ListdllsCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-ListdllsCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

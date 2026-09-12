@@ -230,7 +230,7 @@ function Complete-Tskill {
     }
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-TskillCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-TskillCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

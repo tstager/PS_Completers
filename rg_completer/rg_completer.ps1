@@ -910,7 +910,7 @@ Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
     Initialize-RgCompletionCatalog
     $catalog = Get-RgCompletionCatalog
 
-    $currentToken = Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition $cursorPosition -Fallback $wordToComplete
+    $currentToken = Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     $tokensBeforeCurrent = Get-RgArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-RgCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 

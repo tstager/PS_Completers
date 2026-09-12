@@ -431,11 +431,11 @@ function Complete-PsGetsid {
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ($null -eq $wordToComplete) {
-        Get-PsGetsidCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback ''
+        Get-PsGetsidCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
     } elseif ($wordToComplete.Length -eq 0) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PsGetsidCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-PsGetsidCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

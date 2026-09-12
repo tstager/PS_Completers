@@ -612,7 +612,7 @@ function Complete-Wevtutil {
     $currentWord = if ($hasTrailingSpace) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-WevtutilCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-WevtutilCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

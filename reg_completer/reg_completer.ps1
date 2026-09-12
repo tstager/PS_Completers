@@ -700,7 +700,7 @@ function Get-RegFileCompletions {
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" }
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($AllowedExtensions -and $AllowedExtensions.Count -gt 0) {
         $items = $items | Where-Object {
@@ -1071,7 +1071,7 @@ function Complete-Reg {
     $linePrefix = $line.Substring(0, $prefixLength)
     $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-    $currentWord = if ($hasTrailingSpace) { '' } else { Get-RegCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete }
+    $currentWord = if ($hasTrailingSpace) { '' } else { Get-RegCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
     [object[]]$argumentTokens = if ($tokens.Count -gt 1) {
         @($tokens[1..($tokens.Count - 1)])

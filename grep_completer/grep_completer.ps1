@@ -743,7 +743,7 @@ Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock 
     $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-GrepCurrentToken -Line $commandAst.Extent.Text -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-GrepCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
     $tokensBeforeCurrent = Get-GrepArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-GrepCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent

@@ -156,7 +156,7 @@ function Get-JoinPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,85 @@ function Get-JoinPathCompletions {
     }
 }
 
+function Get-JoinOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-a'] = @(
+        @{ Text = '1'; Tip = 'File 1.' }
+        @{ Text = '2'; Tip = 'File 2.' }
+    )
+    $table['-v'] = @(
+        @{ Text = '1'; Tip = 'File 1.' }
+        @{ Text = '2'; Tip = 'File 2.' }
+    )
+    $table['-1'] = @(
+        @{ Text = '<field>'; Tip = 'Field number.' }
+    )
+    $table['-2'] = @(
+        @{ Text = '<field>'; Tip = 'Field number.' }
+    )
+    $table['-j'] = @(
+        @{ Text = '<field>'; Tip = 'Field number.' }
+    )
+    $table['-e'] = @(
+        @{ Text = '<empty>'; Tip = 'Replacement for missing fields.' }
+    )
+    $table['-o'] = @(
+        @{ Text = 'auto'; Tip = 'Output all fields of the first line.' }
+        @{ Text = '<format>'; Tip = 'FILENUM.FIELD list.' }
+    )
+    $table['-t'] = @(
+        @{ Text = '<char>'; Tip = 'Field separator character.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-JoinPathCompletions -InputPath $prefix) {
+                New-JoinCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-JoinCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Join {
     param(
         [string]$wordToComplete,
@@ -191,6 +270,11 @@ function Complete-Join {
         ''
     } else {
         Get-JoinCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-JoinOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

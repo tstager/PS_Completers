@@ -591,7 +591,7 @@ function Get-RobocopyPathCompletions {
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" }
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
         $items = $items | Where-Object { $_.PSIsContainer }
@@ -662,7 +662,7 @@ function Get-RobocopySourceRelativeCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $basePath -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" }
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
         $items = $items | Where-Object { $_.PSIsContainer }

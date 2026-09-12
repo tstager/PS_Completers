@@ -217,7 +217,7 @@ function Get-OdPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -241,6 +241,146 @@ function Get-OdPathCompletions {
     }
 }
 
+function Get-OdOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-A'] = @(
+        @{ Text = 'd'; Tip = 'Decimal offsets.' }
+        @{ Text = 'o'; Tip = 'Octal offsets.' }
+        @{ Text = 'x'; Tip = 'Hexadecimal offsets.' }
+        @{ Text = 'n'; Tip = 'No offsets.' }
+    )
+    $table['--address-radix'] = @(
+        @{ Text = 'd'; Tip = 'Decimal offsets.' }
+        @{ Text = 'o'; Tip = 'Octal offsets.' }
+        @{ Text = 'x'; Tip = 'Hexadecimal offsets.' }
+        @{ Text = 'n'; Tip = 'No offsets.' }
+    )
+    $table['-t'] = @(
+        @{ Text = 'a'; Tip = 'Named characters.' }
+        @{ Text = 'c'; Tip = 'Printable characters or escapes.' }
+        @{ Text = 'd1'; Tip = 'Signed decimal, 1 byte.' }
+        @{ Text = 'd2'; Tip = 'Signed decimal, 2 bytes.' }
+        @{ Text = 'd4'; Tip = 'Signed decimal, 4 bytes.' }
+        @{ Text = 'd8'; Tip = 'Signed decimal, 8 bytes.' }
+        @{ Text = 'o1'; Tip = 'Octal, 1 byte.' }
+        @{ Text = 'o2'; Tip = 'Octal, 2 bytes.' }
+        @{ Text = 'o4'; Tip = 'Octal, 4 bytes.' }
+        @{ Text = 'o8'; Tip = 'Octal, 8 bytes.' }
+        @{ Text = 'u1'; Tip = 'Unsigned decimal, 1 byte.' }
+        @{ Text = 'u2'; Tip = 'Unsigned decimal, 2 bytes.' }
+        @{ Text = 'u4'; Tip = 'Unsigned decimal, 4 bytes.' }
+        @{ Text = 'u8'; Tip = 'Unsigned decimal, 8 bytes.' }
+        @{ Text = 'x1'; Tip = 'Hexadecimal, 1 byte.' }
+        @{ Text = 'x2'; Tip = 'Hexadecimal, 2 bytes.' }
+        @{ Text = 'x4'; Tip = 'Hexadecimal, 4 bytes.' }
+        @{ Text = 'x8'; Tip = 'Hexadecimal, 8 bytes.' }
+        @{ Text = 'f4'; Tip = 'Float, 4 bytes.' }
+        @{ Text = 'f8'; Tip = 'Float, 8 bytes.' }
+    )
+    $table['--format'] = @(
+        @{ Text = 'a'; Tip = 'Named characters.' }
+        @{ Text = 'c'; Tip = 'Printable characters or escapes.' }
+        @{ Text = 'd1'; Tip = 'Signed decimal, 1 byte.' }
+        @{ Text = 'd2'; Tip = 'Signed decimal, 2 bytes.' }
+        @{ Text = 'd4'; Tip = 'Signed decimal, 4 bytes.' }
+        @{ Text = 'd8'; Tip = 'Signed decimal, 8 bytes.' }
+        @{ Text = 'o1'; Tip = 'Octal, 1 byte.' }
+        @{ Text = 'o2'; Tip = 'Octal, 2 bytes.' }
+        @{ Text = 'o4'; Tip = 'Octal, 4 bytes.' }
+        @{ Text = 'o8'; Tip = 'Octal, 8 bytes.' }
+        @{ Text = 'u1'; Tip = 'Unsigned decimal, 1 byte.' }
+        @{ Text = 'u2'; Tip = 'Unsigned decimal, 2 bytes.' }
+        @{ Text = 'u4'; Tip = 'Unsigned decimal, 4 bytes.' }
+        @{ Text = 'u8'; Tip = 'Unsigned decimal, 8 bytes.' }
+        @{ Text = 'x1'; Tip = 'Hexadecimal, 1 byte.' }
+        @{ Text = 'x2'; Tip = 'Hexadecimal, 2 bytes.' }
+        @{ Text = 'x4'; Tip = 'Hexadecimal, 4 bytes.' }
+        @{ Text = 'x8'; Tip = 'Hexadecimal, 8 bytes.' }
+        @{ Text = 'f4'; Tip = 'Float, 4 bytes.' }
+        @{ Text = 'f8'; Tip = 'Float, 8 bytes.' }
+    )
+    $table['--endian'] = @(
+        @{ Text = 'big'; Tip = 'Big-endian input.' }
+        @{ Text = 'little'; Tip = 'Little-endian input.' }
+    )
+    $table['-j'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['--skip-bytes'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['-N'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['--read-bytes'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['-S'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['--strings'] = @(
+        @{ Text = '<bytes>'; Tip = 'Byte count, suffixes like K or M allowed.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '16'; Tip = '16 bytes per line.' }
+        @{ Text = '32'; Tip = '32 bytes per line.' }
+        @{ Text = '<bytes>'; Tip = 'Bytes per output line.' }
+    )
+    $table['--width'] = @(
+        @{ Text = '16'; Tip = '16 bytes per line.' }
+        @{ Text = '32'; Tip = '32 bytes per line.' }
+        @{ Text = '<bytes>'; Tip = 'Bytes per output line.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-OdPathCompletions -InputPath $prefix) {
+                New-OdCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-OdCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Od {
     param(
         [string]$wordToComplete,
@@ -252,6 +392,11 @@ function Complete-Od {
         ''
     } else {
         Get-OdCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-OdOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

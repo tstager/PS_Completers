@@ -287,7 +287,7 @@ function Get-DuDirectoryCompletions {
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" }
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property Name)) {
         if ($inputIsRooted) {
@@ -342,7 +342,7 @@ function Complete-Du {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-DuCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-DuCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $state = Get-DuState -TokensBeforeCurrent (Get-DuArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)

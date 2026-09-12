@@ -169,7 +169,7 @@ function Complete-Where {
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-WhereCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-WhereCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

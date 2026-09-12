@@ -695,7 +695,7 @@ function Complete-PsPing {
     $currentWord = if ($null -ne $wordToComplete) {
         $wordToComplete
     } else {
-        Get-PsPingCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback ''
+        Get-PsPingCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
     }
 
     $commandTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })

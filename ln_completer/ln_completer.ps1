@@ -156,7 +156,7 @@ function Get-LnPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,78 @@ function Get-LnPathCompletions {
     }
 }
 
+function Get-LnOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--backup'] = @(
+        @{ Text = 'none'; Tip = 'Never make backups.' }
+        @{ Text = 'off'; Tip = 'Never make backups.' }
+        @{ Text = 'numbered'; Tip = 'Numbered backups.' }
+        @{ Text = 't'; Tip = 'Numbered backups.' }
+        @{ Text = 'existing'; Tip = 'Numbered if numbered backups exist, simple otherwise.' }
+        @{ Text = 'nil'; Tip = 'Numbered if numbered backups exist, simple otherwise.' }
+        @{ Text = 'simple'; Tip = 'Simple backups.' }
+        @{ Text = 'never'; Tip = 'Simple backups.' }
+    )
+    $table['-S'] = @(
+        @{ Text = '~'; Tip = 'Default backup suffix.' }
+        @{ Text = '<suffix>'; Tip = 'Backup suffix.' }
+    )
+    $table['--suffix'] = @(
+        @{ Text = '~'; Tip = 'Default backup suffix.' }
+        @{ Text = '<suffix>'; Tip = 'Backup suffix.' }
+    )
+    $table['-t'] = 'path'
+    $table['--target-directory'] = 'path'
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-LnPathCompletions -InputPath $prefix) {
+                New-LnCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-LnCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Ln {
     param(
         [string]$wordToComplete,
@@ -191,6 +263,11 @@ function Complete-Ln {
         ''
     } else {
         Get-LnCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-LnOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

@@ -155,7 +155,7 @@ function Get-PtxPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -179,6 +179,100 @@ function Get-PtxPathCompletions {
     }
 }
 
+function Get-PtxOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-F'] = @(
+        @{ Text = '<string>'; Tip = 'Literal string.' }
+    )
+    $table['--flag-truncation'] = @(
+        @{ Text = '<string>'; Tip = 'Literal string.' }
+    )
+    $table['-M'] = @(
+        @{ Text = '<string>'; Tip = 'Literal string.' }
+    )
+    $table['--macro-name'] = @(
+        @{ Text = '<string>'; Tip = 'Literal string.' }
+    )
+    $table['-S'] = @(
+        @{ Text = '<regexp>'; Tip = 'Regular expression.' }
+    )
+    $table['--sentence-regexp'] = @(
+        @{ Text = '<regexp>'; Tip = 'Regular expression.' }
+    )
+    $table['-W'] = @(
+        @{ Text = '<regexp>'; Tip = 'Regular expression.' }
+    )
+    $table['--word-regexp'] = @(
+        @{ Text = '<regexp>'; Tip = 'Regular expression.' }
+    )
+    $table['-b'] = 'path'
+    $table['--break-file'] = 'path'
+    $table['-i'] = 'path'
+    $table['--ignore-file'] = 'path'
+    $table['-o'] = 'path'
+    $table['--only-file'] = 'path'
+    $table['-g'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--gap-size'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--width'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-PtxPathCompletions -InputPath $prefix) {
+                New-PtxCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-PtxCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Ptx {
     param(
         [string]$wordToComplete,
@@ -190,6 +284,11 @@ function Complete-Ptx {
         ''
     } else {
         Get-PtxCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-PtxOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

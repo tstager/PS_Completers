@@ -156,7 +156,7 @@ function Get-UniqPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,87 @@ function Get-UniqPathCompletions {
     }
 }
 
+function Get-UniqOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--all-repeated'] = @(
+        @{ Text = 'none'; Tip = 'No group separator.' }
+        @{ Text = 'prepend'; Tip = 'Separator before each group.' }
+        @{ Text = 'separate'; Tip = 'Separator between groups.' }
+    )
+    $table['--group'] = @(
+        @{ Text = 'separate'; Tip = 'Separator between groups.' }
+        @{ Text = 'prepend'; Tip = 'Separator before each group.' }
+        @{ Text = 'append'; Tip = 'Separator after each group.' }
+        @{ Text = 'both'; Tip = 'Separator before and after each group.' }
+    )
+    $table['-f'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--skip-fields'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-s'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--skip-chars'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--check-chars'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-UniqPathCompletions -InputPath $prefix) {
+                New-UniqCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-UniqCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Uniq {
     param(
         [string]$wordToComplete,
@@ -191,6 +272,11 @@ function Complete-Uniq {
         ''
     } else {
         Get-UniqCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-UniqOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

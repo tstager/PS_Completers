@@ -156,7 +156,7 @@ function Get-SeqPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,82 @@ function Get-SeqPathCompletions {
     }
 }
 
+function Get-SeqOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-f'] = @(
+        @{ Text = '%g'; Tip = 'General floating-point format.' }
+        @{ Text = '%f'; Tip = 'Fixed-point format.' }
+        @{ Text = '%e'; Tip = 'Scientific format.' }
+        @{ Text = '%.2f'; Tip = 'Two decimal places.' }
+        @{ Text = '%05g'; Tip = 'Zero-padded to width 5.' }
+    )
+    $table['--format'] = @(
+        @{ Text = '%g'; Tip = 'General floating-point format.' }
+        @{ Text = '%f'; Tip = 'Fixed-point format.' }
+        @{ Text = '%e'; Tip = 'Scientific format.' }
+        @{ Text = '%.2f'; Tip = 'Two decimal places.' }
+        @{ Text = '%05g'; Tip = 'Zero-padded to width 5.' }
+    )
+    $table['-s'] = @(
+        @{ Text = ','; Tip = 'Comma separator.' }
+        @{ Text = ';'; Tip = 'Semicolon separator.' }
+        @{ Text = '<string>'; Tip = 'Custom separator.' }
+    )
+    $table['--separator'] = @(
+        @{ Text = ','; Tip = 'Comma separator.' }
+        @{ Text = ';'; Tip = 'Semicolon separator.' }
+        @{ Text = '<string>'; Tip = 'Custom separator.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-SeqPathCompletions -InputPath $prefix) {
+                New-SeqCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-SeqCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Seq {
     param(
         [string]$wordToComplete,
@@ -191,6 +267,11 @@ function Complete-Seq {
         ''
     } else {
         Get-SeqCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-SeqOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

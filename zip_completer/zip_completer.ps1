@@ -868,7 +868,7 @@ function Get-ZipPathCompletions {
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" }
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
         $items = $items | Where-Object { $_.PSIsContainer }
@@ -1104,7 +1104,7 @@ function Complete-Zip {
 
     $currentWord = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
     if ([string]::IsNullOrWhiteSpace($currentWord) -and $cursorPosition -le $commandAst.Extent.EndOffset) {
-        $currentWord = Get-ZipCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        $currentWord = Get-ZipCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $completedArguments = @(Get-ZipCompletedArguments -CommandAst $commandAst -CursorPosition $cursorPosition)

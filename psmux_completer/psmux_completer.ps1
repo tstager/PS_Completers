@@ -412,7 +412,7 @@ function Get-PsmuxPathCompletions {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name)) {
+    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)) {
         $pathText = if ($parent -eq '.') { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'

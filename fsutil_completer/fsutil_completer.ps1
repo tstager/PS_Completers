@@ -812,7 +812,7 @@ function Get-FsutilPathCompletions {
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = @($items | Where-Object { $_.Name -like "$leaf*" })
+    $items = @($items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') })
 
     if ($ItemMode -eq 'File') {
         $items = @($items | Where-Object { -not $_.PSIsContainer })

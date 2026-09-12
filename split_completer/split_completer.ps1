@@ -156,7 +156,7 @@ function Get-SplitPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,126 @@ function Get-SplitPathCompletions {
     }
 }
 
+function Get-SplitOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-a'] = @(
+        @{ Text = '<n>'; Tip = 'Suffix length.' }
+    )
+    $table['--suffix-length'] = @(
+        @{ Text = '<n>'; Tip = 'Suffix length.' }
+    )
+    $table['--additional-suffix'] = @(
+        @{ Text = '<suffix>'; Tip = 'Extra suffix for file names.' }
+    )
+    $table['-b'] = @(
+        @{ Text = '1K'; Tip = '1K per output file.' }
+        @{ Text = '1M'; Tip = '1M per output file.' }
+        @{ Text = '10M'; Tip = '10M per output file.' }
+        @{ Text = '100M'; Tip = '100M per output file.' }
+        @{ Text = '1G'; Tip = '1G per output file.' }
+    )
+    $table['--bytes'] = @(
+        @{ Text = '1K'; Tip = '1K per output file.' }
+        @{ Text = '1M'; Tip = '1M per output file.' }
+        @{ Text = '10M'; Tip = '10M per output file.' }
+        @{ Text = '100M'; Tip = '100M per output file.' }
+        @{ Text = '1G'; Tip = '1G per output file.' }
+    )
+    $table['-C'] = @(
+        @{ Text = '1K'; Tip = '1K per output file.' }
+        @{ Text = '1M'; Tip = '1M per output file.' }
+        @{ Text = '10M'; Tip = '10M per output file.' }
+        @{ Text = '100M'; Tip = '100M per output file.' }
+        @{ Text = '1G'; Tip = '1G per output file.' }
+    )
+    $table['--line-bytes'] = @(
+        @{ Text = '1K'; Tip = '1K per output file.' }
+        @{ Text = '1M'; Tip = '1M per output file.' }
+        @{ Text = '10M'; Tip = '10M per output file.' }
+        @{ Text = '100M'; Tip = '100M per output file.' }
+        @{ Text = '1G'; Tip = '1G per output file.' }
+    )
+    $table['--numeric-suffixes'] = @(
+        @{ Text = '<from>'; Tip = 'Starting suffix value.' }
+    )
+    $table['--hex-suffixes'] = @(
+        @{ Text = '<from>'; Tip = 'Starting suffix value.' }
+    )
+    $table['--filter'] = @(
+        @{ Text = '<command>'; Tip = 'Shell command receiving each chunk.' }
+    )
+    $table['-l'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--lines'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-n'] = @(
+        @{ Text = '<chunks>'; Tip = 'Number of chunks.' }
+        @{ Text = 'l/<n>'; Tip = 'N chunks without splitting lines.' }
+        @{ Text = 'r/<n>'; Tip = 'Round-robin distribution into N chunks.' }
+    )
+    $table['--number'] = @(
+        @{ Text = '<chunks>'; Tip = 'Number of chunks.' }
+        @{ Text = 'l/<n>'; Tip = 'N chunks without splitting lines.' }
+        @{ Text = 'r/<n>'; Tip = 'Round-robin distribution into N chunks.' }
+    )
+    $table['-t'] = @(
+        @{ Text = '<sep>'; Tip = 'Record separator.' }
+    )
+    $table['--separator'] = @(
+        @{ Text = '<sep>'; Tip = 'Record separator.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-SplitPathCompletions -InputPath $prefix) {
+                New-SplitCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-SplitCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Split {
     param(
         [string]$wordToComplete,
@@ -191,6 +311,11 @@ function Complete-Split {
         ''
     } else {
         Get-SplitCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-SplitOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

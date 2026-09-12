@@ -561,11 +561,11 @@ function Complete-Pslist {
 
     $line = $commandAst.ToString()
     $currentWord = if ($null -eq $wordToComplete) {
-        Get-PslistCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback ''
+        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
     } elseif ($wordToComplete.Length -eq 0) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PslistCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

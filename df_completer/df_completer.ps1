@@ -156,7 +156,7 @@ function Get-DfPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,126 @@ function Get-DfPathCompletions {
     }
 }
 
+function Get-DfOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-B'] = @(
+        @{ Text = 'K'; Tip = 'Scale sizes by K.' }
+        @{ Text = 'M'; Tip = 'Scale sizes by M.' }
+        @{ Text = 'G'; Tip = 'Scale sizes by G.' }
+        @{ Text = 'T'; Tip = 'Scale sizes by T.' }
+        @{ Text = 'KB'; Tip = 'Scale sizes by KB.' }
+        @{ Text = 'MB'; Tip = 'Scale sizes by MB.' }
+        @{ Text = 'GB'; Tip = 'Scale sizes by GB.' }
+        @{ Text = '1K'; Tip = 'Scale sizes by 1K.' }
+        @{ Text = '1M'; Tip = 'Scale sizes by 1M.' }
+    )
+    $table['--block-size'] = @(
+        @{ Text = 'K'; Tip = 'Scale sizes by K.' }
+        @{ Text = 'M'; Tip = 'Scale sizes by M.' }
+        @{ Text = 'G'; Tip = 'Scale sizes by G.' }
+        @{ Text = 'T'; Tip = 'Scale sizes by T.' }
+        @{ Text = 'KB'; Tip = 'Scale sizes by KB.' }
+        @{ Text = 'MB'; Tip = 'Scale sizes by MB.' }
+        @{ Text = 'GB'; Tip = 'Scale sizes by GB.' }
+        @{ Text = '1K'; Tip = 'Scale sizes by 1K.' }
+        @{ Text = '1M'; Tip = 'Scale sizes by 1M.' }
+    )
+    $table['-t'] = @(
+        @{ Text = 'ntfs'; Tip = 'ntfs file system.' }
+        @{ Text = 'fat32'; Tip = 'fat32 file system.' }
+        @{ Text = 'exfat'; Tip = 'exfat file system.' }
+        @{ Text = 'refs'; Tip = 'refs file system.' }
+        @{ Text = 'udf'; Tip = 'udf file system.' }
+        @{ Text = 'vfat'; Tip = 'vfat file system.' }
+    )
+    $table['--type'] = @(
+        @{ Text = 'ntfs'; Tip = 'ntfs file system.' }
+        @{ Text = 'fat32'; Tip = 'fat32 file system.' }
+        @{ Text = 'exfat'; Tip = 'exfat file system.' }
+        @{ Text = 'refs'; Tip = 'refs file system.' }
+        @{ Text = 'udf'; Tip = 'udf file system.' }
+        @{ Text = 'vfat'; Tip = 'vfat file system.' }
+    )
+    $table['-x'] = @(
+        @{ Text = 'ntfs'; Tip = 'ntfs file system.' }
+        @{ Text = 'fat32'; Tip = 'fat32 file system.' }
+        @{ Text = 'exfat'; Tip = 'exfat file system.' }
+        @{ Text = 'refs'; Tip = 'refs file system.' }
+        @{ Text = 'udf'; Tip = 'udf file system.' }
+        @{ Text = 'vfat'; Tip = 'vfat file system.' }
+    )
+    $table['--exclude-type'] = @(
+        @{ Text = 'ntfs'; Tip = 'ntfs file system.' }
+        @{ Text = 'fat32'; Tip = 'fat32 file system.' }
+        @{ Text = 'exfat'; Tip = 'exfat file system.' }
+        @{ Text = 'refs'; Tip = 'refs file system.' }
+        @{ Text = 'udf'; Tip = 'udf file system.' }
+        @{ Text = 'vfat'; Tip = 'vfat file system.' }
+    )
+    $table['--output'] = @(
+        @{ Text = 'source'; Tip = 'Output field source.' }
+        @{ Text = 'fstype'; Tip = 'Output field fstype.' }
+        @{ Text = 'itotal'; Tip = 'Output field itotal.' }
+        @{ Text = 'iused'; Tip = 'Output field iused.' }
+        @{ Text = 'iavail'; Tip = 'Output field iavail.' }
+        @{ Text = 'ipcent'; Tip = 'Output field ipcent.' }
+        @{ Text = 'size'; Tip = 'Output field size.' }
+        @{ Text = 'used'; Tip = 'Output field used.' }
+        @{ Text = 'avail'; Tip = 'Output field avail.' }
+        @{ Text = 'pcent'; Tip = 'Output field pcent.' }
+        @{ Text = 'file'; Tip = 'Output field file.' }
+        @{ Text = 'target'; Tip = 'Output field target.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-DfPathCompletions -InputPath $prefix) {
+                New-DfCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-DfCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Df {
     param(
         [string]$wordToComplete,
@@ -191,6 +311,11 @@ function Complete-Df {
         ''
     } else {
         Get-DfCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-DfOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

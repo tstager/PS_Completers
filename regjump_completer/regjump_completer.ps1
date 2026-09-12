@@ -219,7 +219,7 @@ function Complete-RegJump {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-RegJumpCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-RegJumpCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $arguments = @(Get-RegJumpArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)

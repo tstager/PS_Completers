@@ -156,7 +156,7 @@ function Get-EnvPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -180,6 +180,104 @@ function Get-EnvPathCompletions {
     }
 }
 
+function Get-EnvOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-u'] = { foreach ($item in (Get-ChildItem -Path Env: | Sort-Object -Property Name)) { @{ Text = $item.Name; Tip = 'Environment variable.' } } }
+    $table['--unset'] = { foreach ($item in (Get-ChildItem -Path Env: | Sort-Object -Property Name)) { @{ Text = $item.Name; Tip = 'Environment variable.' } } }
+    $table['-C'] = 'path'
+    $table['--chdir'] = 'path'
+    $table['-S'] = @(
+        @{ Text = '<string>'; Tip = 'String to split into arguments.' }
+    )
+    $table['--split-string'] = @(
+        @{ Text = '<string>'; Tip = 'String to split into arguments.' }
+    )
+    $table['--block-signal'] = @(
+        @{ Text = 'HUP'; Tip = 'Signal HUP.' }
+        @{ Text = 'INT'; Tip = 'Signal INT.' }
+        @{ Text = 'QUIT'; Tip = 'Signal QUIT.' }
+        @{ Text = 'KILL'; Tip = 'Signal KILL.' }
+        @{ Text = 'TERM'; Tip = 'Signal TERM.' }
+        @{ Text = 'USR1'; Tip = 'Signal USR1.' }
+        @{ Text = 'USR2'; Tip = 'Signal USR2.' }
+        @{ Text = 'PIPE'; Tip = 'Signal PIPE.' }
+        @{ Text = 'ALRM'; Tip = 'Signal ALRM.' }
+        @{ Text = 'CHLD'; Tip = 'Signal CHLD.' }
+    )
+    $table['--default-signal'] = @(
+        @{ Text = 'HUP'; Tip = 'Signal HUP.' }
+        @{ Text = 'INT'; Tip = 'Signal INT.' }
+        @{ Text = 'QUIT'; Tip = 'Signal QUIT.' }
+        @{ Text = 'KILL'; Tip = 'Signal KILL.' }
+        @{ Text = 'TERM'; Tip = 'Signal TERM.' }
+        @{ Text = 'USR1'; Tip = 'Signal USR1.' }
+        @{ Text = 'USR2'; Tip = 'Signal USR2.' }
+        @{ Text = 'PIPE'; Tip = 'Signal PIPE.' }
+        @{ Text = 'ALRM'; Tip = 'Signal ALRM.' }
+        @{ Text = 'CHLD'; Tip = 'Signal CHLD.' }
+    )
+    $table['--ignore-signal'] = @(
+        @{ Text = 'HUP'; Tip = 'Signal HUP.' }
+        @{ Text = 'INT'; Tip = 'Signal INT.' }
+        @{ Text = 'QUIT'; Tip = 'Signal QUIT.' }
+        @{ Text = 'KILL'; Tip = 'Signal KILL.' }
+        @{ Text = 'TERM'; Tip = 'Signal TERM.' }
+        @{ Text = 'USR1'; Tip = 'Signal USR1.' }
+        @{ Text = 'USR2'; Tip = 'Signal USR2.' }
+        @{ Text = 'PIPE'; Tip = 'Signal PIPE.' }
+        @{ Text = 'ALRM'; Tip = 'Signal ALRM.' }
+        @{ Text = 'CHLD'; Tip = 'Signal CHLD.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-EnvPathCompletions -InputPath $prefix) {
+                New-EnvCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-EnvCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Env {
     param(
         [string]$wordToComplete,
@@ -191,6 +289,11 @@ function Complete-Env {
         ''
     } else {
         Get-EnvCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-EnvOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

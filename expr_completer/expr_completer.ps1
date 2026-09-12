@@ -102,8 +102,21 @@ function Get-ExprCurrentToken {
 }
 
 function Get-ExprValueCompletions {
+    param([string]$Prefix)
+
+    $keywords = @(
+        @{ Text = 'match'; Tip = 'match STRING REGEX: anchored pattern match.' }
+        @{ Text = 'substr'; Tip = 'substr STRING POS LENGTH: substring of STRING.' }
+        @{ Text = 'index'; Tip = 'index STRING CHARS: index in STRING of any CHARS.' }
+        @{ Text = 'length'; Tip = 'length STRING: length of STRING.' }
+    )
+
     @(
-        New-ExprCompletionResult -CompletionText '<expression>' -ListItemText '<expression>' -ResultType 'ParameterValue' -ToolTip 'Expression operand for expr.'
+        foreach ($keyword in $keywords) {
+            if ($keyword.Text.StartsWith($Prefix, [System.StringComparison]::Ordinal)) {
+                New-ExprCompletionResult -CompletionText $keyword.Text -ListItemText $keyword.Text -ResultType 'ParameterValue' -ToolTip $keyword.Tip
+            }
+        }
     )
 }
 
@@ -121,7 +134,7 @@ function Complete-Expr {
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        return Get-ExprValueCompletions
+        return Get-ExprValueCompletions -Prefix ''
     }
 
     if ($currentWord.StartsWith('-')) {
@@ -134,7 +147,7 @@ function Complete-Expr {
         )
     }
 
-    Get-ExprValueCompletions
+    Get-ExprValueCompletions -Prefix $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'expr', 'expr.exe' -ScriptBlock {

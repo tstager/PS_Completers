@@ -433,7 +433,7 @@ function Complete-CargoBinstall {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-CargoBinstallCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-CargoBinstallCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $tokensBeforeCurrent = @(Get-CargoBinstallTokensBeforeCursor -CommandAst $commandAst -CursorPosition $cursorPosition)

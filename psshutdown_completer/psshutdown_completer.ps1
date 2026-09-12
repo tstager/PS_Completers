@@ -538,11 +538,11 @@ function Complete-PsShutdown {
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ($null -eq $wordToComplete) {
-        Get-PsShutdownCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback ''
+        Get-PsShutdownCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
     } elseif ($wordToComplete.Length -eq 0) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PsShutdownCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-PsShutdownCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

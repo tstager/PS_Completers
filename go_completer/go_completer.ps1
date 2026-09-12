@@ -1079,7 +1079,7 @@ function Get-GoValueCompletions {
 Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $state = Get-GoCommandState -CommandAst $commandAst -CursorPosition $cursorPosition -FallbackWordToComplete $wordToComplete
+    $state = Get-GoCommandState -CommandAst $commandAst -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -FallbackWordToComplete $wordToComplete
     $currentWord = $state.CurrentWord
     $priorTokens = $state.PriorTokens
     $context = Get-GoCommandContext -Tokens $priorTokens

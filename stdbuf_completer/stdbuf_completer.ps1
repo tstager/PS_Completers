@@ -155,7 +155,7 @@ function Get-StdbufPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -179,6 +179,88 @@ function Get-StdbufPathCompletions {
     }
 }
 
+function Get-StdbufOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-i'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    $table['-o'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    $table['-e'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    $table['--input'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    $table['--output'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    $table['--error'] = @(
+        @{ Text = 'L'; Tip = 'Line buffered.' }
+        @{ Text = '0'; Tip = 'Unbuffered.' }
+        @{ Text = '<size>'; Tip = 'Fully buffered with SIZE bytes, e.g. 4K.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-StdbufPathCompletions -InputPath $prefix) {
+                New-StdbufCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-StdbufCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Stdbuf {
     param(
         [string]$wordToComplete,
@@ -190,6 +272,11 @@ function Complete-Stdbuf {
         ''
     } else {
         Get-StdbufCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-StdbufOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

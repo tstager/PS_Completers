@@ -483,7 +483,7 @@ function Complete-CargoClippy {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-CargoClippyCurrentWord -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-CargoClippyCurrentWord -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $state = Get-CargoClippyState -TokensBeforeCurrent @(Get-CargoClippyArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)

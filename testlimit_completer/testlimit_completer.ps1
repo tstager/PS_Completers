@@ -251,7 +251,7 @@ function Complete-Testlimit {
     $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-TestlimitCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-TestlimitCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

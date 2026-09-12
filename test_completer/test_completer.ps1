@@ -9,7 +9,7 @@ function Get-TestCompletionOptions {
         return $cache.Value
     }
 
-    $fallbackOptions = @('!', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-L', '-n', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z', '=', '!=', '-eq', '-ne', '-ge', '-gt', '-le', '-lt', '-a', '-o', '(')
+    $fallbackOptions = @('!', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-L', '-n', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z', '-G', '-k', '-N', '-O', '-ef', '-nt', '-ot', '=', '!=', '-eq', '-ne', '-ge', '-gt', '-le', '-lt', '-a', '-o', '(')
     $commandCandidates = @('test.exe', 'test')
     foreach ($candidate in $commandCandidates) {
         $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
@@ -155,7 +155,7 @@ function Get-TestPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {

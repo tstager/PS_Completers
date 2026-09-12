@@ -155,7 +155,7 @@ function Get-NlPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like "$leaf*" } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -177,6 +177,140 @@ function Get-NlPathCompletions {
     }
 }
 
+function Get-NlOptionValueCompletions {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string]$CurrentWord
+    )
+
+    $option = $null
+    $prefix = $CurrentWord
+    $attached = ''
+    if ($CurrentWord -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option + '='
+    } elseif (-not $CurrentWord.StartsWith('-')) {
+        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        if ([string]::IsNullOrEmpty($CurrentWord)) {
+            if ($elements.Count -gt 1) {
+                $option = $elements[-1]
+            }
+        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+            $option = $elements[-2]
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-b'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['--body-numbering'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['-f'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['--footer-numbering'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['-h'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['--header-numbering'] = @(
+        @{ Text = 'a'; Tip = 'Number all lines.' }
+        @{ Text = 't'; Tip = 'Number only non-empty lines.' }
+        @{ Text = 'n'; Tip = 'Number no lines.' }
+        @{ Text = 'p<regex>'; Tip = 'Number only lines matching the regex.' }
+    )
+    $table['-d'] = @(
+        @{ Text = '<cc>'; Tip = 'Two-character section delimiter.' }
+    )
+    $table['--section-delimiter'] = @(
+        @{ Text = '<cc>'; Tip = 'Two-character section delimiter.' }
+    )
+    $table['-i'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--line-increment'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-l'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--join-blank-lines'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-v'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--starting-line-number'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-w'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['--number-width'] = @(
+        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    )
+    $table['-n'] = @(
+        @{ Text = 'ln'; Tip = 'Left justified, no leading zeros.' }
+        @{ Text = 'rn'; Tip = 'Right justified, no leading zeros.' }
+        @{ Text = 'rz'; Tip = 'Right justified, leading zeros.' }
+    )
+    $table['--number-format'] = @(
+        @{ Text = 'ln'; Tip = 'Left justified, no leading zeros.' }
+        @{ Text = 'rn'; Tip = 'Right justified, no leading zeros.' }
+        @{ Text = 'rz'; Tip = 'Right justified, leading zeros.' }
+    )
+    $table['-s'] = @(
+        @{ Text = '<string>'; Tip = 'Text after the line number.' }
+    )
+    $table['--number-separator'] = @(
+        @{ Text = '<string>'; Tip = 'Text after the line number.' }
+    )
+    if (-not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    $spec = $table[$option]
+    if ($spec -is [string] -and $spec -eq 'path') {
+        return @(
+            foreach ($result in Get-NlPathCompletions -InputPath $prefix) {
+                New-NlCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            }
+        )
+    }
+
+    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    @(
+        foreach ($entry in $values) {
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                New-NlCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            }
+        }
+    )
+}
+
 function Complete-Nl {
     param(
         [string]$wordToComplete,
@@ -188,6 +322,11 @@ function Complete-Nl {
         ''
     } else {
         Get-NlCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+
+    $optionValues = @(Get-NlOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($optionValues.Count -gt 0) {
+        return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

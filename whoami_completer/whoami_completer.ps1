@@ -284,11 +284,11 @@ function Complete-Whoami {
     $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ($null -eq $wordToComplete) {
-        Get-WhoamiCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback ''
+        Get-WhoamiCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
     } elseif ($wordToComplete.Length -eq 0) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-WhoamiCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-WhoamiCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

@@ -631,7 +631,7 @@ Register-ArgumentCompleter -Native -CommandName 'wc', 'wc.exe' -ScriptBlock {
     $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-WcCurrentToken -Line $commandAst.Extent.Text -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-WcCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
     $tokensBeforeCurrent = Get-WcArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-WcCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent

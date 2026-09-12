@@ -280,7 +280,7 @@ function Complete-PsSuspend {
     $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-PsSuspendCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-PsSuspendCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

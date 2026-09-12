@@ -386,7 +386,7 @@ function Complete-SevenZip {
     $currentWord = if ($hasTrailingSpace) {
         ''
     } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-SevenZipCurrentToken -Line $line -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-SevenZipCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }

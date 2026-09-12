@@ -696,7 +696,7 @@ function Complete-Cargo {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-CargoCurrentWord -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-CargoCurrentWord -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     $state = Get-CargoState -TokensBeforeCurrent @(Get-CargoArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
