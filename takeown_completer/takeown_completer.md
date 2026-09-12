@@ -24,7 +24,11 @@ The completer covers:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('takeown', 'takeown.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('takeown', 'takeown.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Takeown -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

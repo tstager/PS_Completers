@@ -22,7 +22,7 @@ The script covers:
 ```powershell
 Register-ArgumentCompleter -Native -CommandName 'ipconfig', 'ipconfig.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    ...
+    Complete-Ipconfig -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }
 ```
 

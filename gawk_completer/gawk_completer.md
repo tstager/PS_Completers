@@ -25,8 +25,10 @@ The script registers the same native completer script block for:
 Registration is done with:
 
 ```powershell
-foreach ($commandName in @('gawk', 'gawk.exe', 'awk', 'awk.exe')) {
-    Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('gawk', 'gawk.exe', 'awk', 'awk.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-GawkNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }
 ```
 

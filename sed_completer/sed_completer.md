@@ -21,7 +21,11 @@ The script registers a native completer for:
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'sed', 'sed.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('sed', 'sed.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-SedNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## How completion works

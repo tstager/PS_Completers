@@ -36,7 +36,10 @@ shellrunas [/netonly] <program> [arguments]
 ## Registration
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('shellrunas', 'shellrunas.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('shellrunas', 'shellrunas.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-ShellRunas -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Notes

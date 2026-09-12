@@ -24,8 +24,9 @@ The script registers the same native completer for:
 Registration is done with:
 
 ```powershell
-foreach ($commandName in @('groff', 'groff.exe')) {
-    Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('groff', 'groff.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-Groff -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
 }
 ```
 

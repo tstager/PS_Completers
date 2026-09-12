@@ -17,7 +17,176 @@ The script covers:
 ```powershell
 Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    ...
+
+    Initialize-IcaclsCompletionCatalog
+
+    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+    $tokens = @($allTokens | Select-Object -Skip 1)
+    $line = $commandAst.ToString()
+    $rawCurrentWord = $wordToComplete
+    $lineCurrentWord = Get-IcaclsCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $currentWord = if (
+        (-not [string]::IsNullOrEmpty($lineCurrentWord)) -and
+        (-not [string]::IsNullOrWhiteSpace($wordToComplete)) -and
+        ($lineCurrentWord.Length -gt $wordToComplete.Length)
+    ) {
+        $lineCurrentWord
+    } else {
+        $wordToComplete
+    }
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
+    $tokensBeforeCurrent = @(Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace)
+    $permissionIdentityPrefix = $null
+    if (
+        (-not [string]::IsNullOrWhiteSpace($rawCurrentWord)) -and
+        (-not $rawCurrentWord.Contains(':')) -and
+        ($currentWord.Contains(':')) -and
+        ($tokens.Count -ge 2) -and
+        $tokens[-2].EndsWith(':') -and
+        (($tokens[-2] + $tokens[-1]) -eq $currentWord)
+    ) {
+        $permissionIdentityPrefix = $tokens[-2]
+    }
+
+    $activeCommand = Get-IcaclsActiveCommand -Tokens $tokensBeforeCurrent -KnownCommands $script:IcaclsCompletionCatalog.Commands
+    $hasModifyOperation = Test-IcaclsHasModifyOperation -Tokens $tokensBeforeCurrent
+    $expectedValueOption = Get-IcaclsExpectedValueOption -TokensBeforeCurrent $tokensBeforeCurrent
+    $hasTargetPath = ($tokensBeforeCurrent.Count -gt 0) -and (-not $tokensBeforeCurrent[0].StartsWith('/'))
+
+    $inlineOptionCompletions = @(Get-IcaclsInlineOptionCompletions -WordToComplete $currentWord)
+    if ($inlineOptionCompletions.Count -gt 0) {
+        return $inlineOptionCompletions | ForEach-Object {
+            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+        }
+    }
+
+    $expandedOptionValueCompletions = @(Get-IcaclsExpandedOptionValueCompletions -WordToComplete $currentWord)
+    if ($expandedOptionValueCompletions.Count -gt 0) {
+        return $expandedOptionValueCompletions | ForEach-Object {
+            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+        }
+    }
+
+    if ($expectedValueOption) {
+        switch ($expectedValueOption) {
+            '/save' {
+                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            '/restore' {
+                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            '/grant' {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            '/grant:r' {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            '/deny' {
+                $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
+                if ($permissionIdentityPrefix) {
+                    $completionText = @(
+                        $completionText | ForEach-Object {
+                            if ($_.StartsWith($permissionIdentityPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $_.Substring($permissionIdentityPrefix.Length)
+                            } else {
+                                $_
+                            }
+                        }
+                    )
+                }
+
+                return $completionText | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            '/setintegritylevel' {
+                return Get-IcaclsIntegrityLevelCompletions -WordToComplete $currentWord | ForEach-Object {
+                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+            }
+            default {
+                return @()
+            }
+        }
+    }
+
+    if (-not $hasTargetPath) {
+        if ([string]::IsNullOrWhiteSpace($currentWord) -or -not $currentWord.StartsWith('/')) {
+            return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
+                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+            }
+        }
+
+        return @('/?') |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+            ForEach-Object {
+                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+            }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $currentWord.StartsWith('/')) {
+        return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
+            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+        }
+    }
+
+    if ($activeCommand) {
+        $optionKey = $activeCommand.ToLowerInvariant()
+        $suggestions = @($script:IcaclsCompletionCatalog.CommonOptions)
+        if ($script:IcaclsCompletionCatalog.CommandOptionsByKey.ContainsKey($optionKey)) {
+            $suggestions += $script:IcaclsCompletionCatalog.CommandOptionsByKey[$optionKey]
+        }
+    } elseif ($hasModifyOperation) {
+        $suggestions = @($script:IcaclsCompletionCatalog.ModifyOptions + $script:IcaclsCompletionCatalog.CommonOptions)
+    } else {
+        $suggestions = @(
+            $script:IcaclsCompletionCatalog.Commands +
+            $script:IcaclsCompletionCatalog.ModifyOptions +
+            $script:IcaclsCompletionCatalog.CommonOptions +
+            '/?'
+        )
+    }
+
+    $suggestions |
+        Sort-Object -Unique |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+        ForEach-Object {
+            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+        }
 }
 ```
 

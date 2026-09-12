@@ -27,8 +27,10 @@ The script registers the same completer script block for:
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName (Get-NpmCommandPathTargets) -ScriptBlock $NpmNativeCompleter
-Register-ArgumentCompleter -CommandName @('npm', 'npm.ps1') -ScriptBlock $NpmNativeCompleter
+Register-ArgumentCompleter -Native -CommandName @('npm', 'npm.ps1', 'npm.cmd', 'npm.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-NpmNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 ## How completion works

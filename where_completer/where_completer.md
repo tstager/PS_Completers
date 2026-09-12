@@ -20,7 +20,10 @@ The script registers a native completer for:
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('where.exe', 'where') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('where.exe', 'where') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-Where -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 In a default PowerShell session, the built-in read-only alias `where` still resolves to `Where-Object`, so that alias keeps its normal shell semantics and completion behavior. The native `where` registration only becomes relevant in sessions where the alias has been intentionally removed or overridden and `where` resolves to the native executable.

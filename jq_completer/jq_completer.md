@@ -4,36 +4,25 @@
 
 `jq_completer.ps1` registers a standalone native PowerShell completer for `jq` and `jq.exe`.
 
-The completer uses `jq --help` output as its source of truth when the tool is available, so it discovers options dynamically instead of relying on a hard-coded switch list. That keeps it resilient to future changes in the command's help output.
+The completer is help-driven with a static fallback: option names come from `jq --help` when the tool is available and are cached in script scope for the session. Option matching is case-sensitive, so `-r`/`-R`, `-s`/`-S` and `-c`/`-C` are all offered and matched exactly.
 
 It covers:
 
-- option-name suggestions for jq's documented short and long flags
-- path completion for file- and directory-bearing options such as `-f`, `--from-file`, `-L`, `--library-path`, `--rawfile`, and `--slurpfile`
-- placeholder values for `--arg`, `--argjson`, `--rawfile`, and `--slurpfile` name slots
-- an import-safe registration shape that can be loaded directly in PowerShell
-
-Representative options include:
-
-- `-n`
-- `--null-input`
-- `-f`
-- `--from-file`
-- `-L`
-- `--library-path`
-- `--arg`
-- `--argjson`
-- `--rawfile`
-- `--slurpfile`
-- `--args`
-- `--jsonargs`
+- option-name suggestions for jq's short and long flags
+- an arity table for options that take one or two arguments: `--arg NAME VALUE`, `--argjson NAME JSON`, `--rawfile NAME FILE`, `--slurpfile NAME FILE`, `-f`/`--from-file FILE`, `-L`/`--library-path DIR`, `--indent N`
+- a starter set for the filter operand: `.`, `.[]`, `keys`, `length`, `type`, `to_entries`, `map(`, `select(`, `sort_by(`, `group_by(`, `has(`, `del(`, `split(`, `join(`, `test(` and others
+- path completion for input-file operands after the filter
 
 ## Registration and command names
 
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'jq', 'jq.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'jq', 'jq.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Jq -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:
@@ -50,31 +39,34 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 - function definitions
 - one literal `Register-ArgumentCompleter -Native` call
 
-There are no top-level assignments, loops, helper invocations, or runtime setup work that would make the script importer-incompatible.
-
 ## How completion works
 
-- Tokens that begin with `-` return `ParameterName` suggestions discovered from `jq --help` output.
-- Options that take filesystem values such as `-f`, `--from-file`, `-L`, `--library-path`, `--rawfile`, and `--slurpfile` use path completion for the current argument slot.
-- The completer supplies simple placeholders for variable-name slots to keep the user experience predictable when a value is expected but no dynamic value domain is available.
+- `Complete-Jq` scans the completed tokens left to right. An option from the arity table reserves the next one or two slots; other `-` tokens are flags; anything else counts as an operand.
+- If a reserved slot is pending, its kind decides the answer: `path` slots use `Get-JqPathCompletions`, name and value slots offer a placeholder such as `<name>` when nothing is typed yet.
+- A word starting with `-` lists the parsed options, filtered ordinally.
+- With no operand seen yet, the word is the filter and the starter set is offered, filtered by the typed prefix (`jq to` offers `to_entries`, `tostring`, `tonumber`).
+- After the filter, operands are input files and use path completion.
 
 ## Representative validation scenarios
 
 ```powershell
+jq -r
 jq -
-jq --
-jq -f .
-jq --from-file .
-jq --arg 
+jq
+jq to
+jq --rawfile
+jq --rawfile name
+jq . 
 ```
 
 Expected behavior:
 
-- `-` and `--` style prefixes show matching option suggestions
-- file-oriented options offer filesystem completion
-- the completer remains importable through `Import-CompleterScript`
+- `-r` completes only `-r`, never `-R`
+- the bare command lists the filter starters
+- `--rawfile ` offers `<name>`; `--rawfile name ` offers files
+- `jq . ` offers files for the input operand
 
 ## Notes
 
-- The implementation purposely keeps the completion surface aligned with the installed `jq` help output rather than hard-coding a narrow option list.
 - If `jq` is not available, the script falls back to a compact built-in option catalog so the completer still loads cleanly.
+- The help invocation pipes `$null` into `jq` so it cannot wait on standard input.

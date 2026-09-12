@@ -17,7 +17,11 @@ This keeps the root command surface aligned with the locally installed `sc.exe` 
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'sc', 'sc.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'sc', 'sc.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Sc -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

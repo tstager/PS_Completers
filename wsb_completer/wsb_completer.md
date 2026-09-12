@@ -18,7 +18,11 @@ The completer covers:
 ## Registration and command names
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('wsb', 'wsb.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('wsb', 'wsb.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Wsb -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

@@ -34,8 +34,6 @@ Load it into the current session with:
 
 The file also enables `Set-StrictMode -Version 2.0`.
 
-When `pslist` resolves through the Windows app-execution alias surface, the script also creates a transparent `pslist -> pslist.exe` alias in the current session when no alias already exists. This keeps first-argument `TabExpansion2` behavior aligned with the registered native completer without overriding an existing user-defined alias or function.
-
 ## How completion works
 
 ### Static-first catalog initialization

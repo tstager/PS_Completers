@@ -18,7 +18,51 @@ It is a help-driven completer that:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    if ($wordToComplete -isnot [string]) {
+        $wordToComplete = [string]$wordToComplete
+    }
+
+    Initialize-CurlCompletionCatalog
+
+    $currentToken = Get-CurlCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $tokensBeforeCurrent = Get-CurlArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
+
+    if ($currentToken -match '^(--[^=]+)=(.*)$') {
+        $optionKey = $matches[1].ToLowerInvariant()
+        $valuePrefix = $matches[2]
+        $catalog = Get-CurlCompletionCatalog
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            $optionSpec = $catalog.OptionByToken[$optionKey]
+            if ($optionSpec.ValueKind) {
+                return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
+            }
+        }
+    }
+
+    $pendingOption = Get-CurlPendingOption -TokensBeforeCurrent $tokensBeforeCurrent
+    if ($pendingOption) {
+        return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $wordToComplete)
+    }
+
+    $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
+
+    if ([string]::IsNullOrWhiteSpace($currentToken) -or $currentToken.StartsWith('-')) {
+        foreach ($result in @(Get-CurlOptionCompletions -CurrentWord $wordToComplete)) {
+            [void]$results.Add($result)
+        }
+    }
+
+    if (-not $currentToken.StartsWith('-')) {
+        foreach ($result in @(Get-CurlPositionalCompletions -CurrentWord $wordToComplete)) {
+            [void]$results.Add($result)
+        }
+    }
+
+    @($results.ToArray())
+}
 ```
 
 Load it with:

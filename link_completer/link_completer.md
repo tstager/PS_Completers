@@ -17,7 +17,11 @@ The completer covers:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'link', 'link.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'link', 'link.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Link -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

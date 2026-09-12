@@ -29,7 +29,49 @@ Whichever `wc.exe` resolves first on `PATH` is used for help discovery, and the 
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'wc', 'wc.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'wc', 'wc.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    if ($wordToComplete -isnot [string]) {
+        $wordToComplete = [string]$wordToComplete
+    }
+
+    Initialize-WcCompletionCatalog
+    $catalog = Get-WcCompletionCatalog
+
+    # When the cursor sits past the parsed command extent the user is on a fresh
+    # token after trailing whitespace, which $commandAst.Extent.Text has trimmed
+    # away. Treat that as an empty current token so terminal/positional routing
+    # runs instead of falling through to the option-name branch.
+    $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
+        ''
+    } else {
+        Get-WcCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+    $tokensBeforeCurrent = Get-WcArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
+    $context = Get-WcCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($currentToken -match '^(--[^=]+)=(.*)$') {
+        $optionKey = Get-WcCanonicalOptionKey -Token $matches[1]
+        $valuePrefix = $matches[2]
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            $optionSpec = $catalog.OptionByToken[$optionKey]
+            if ($optionSpec.ValueKind) {
+                return @(Get-WcValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
+            }
+        }
+    }
+
+    if ($context.PendingOption) {
+        return @(Get-WcValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+    }
+
+    if ($currentToken.StartsWith('-')) {
+        return @(Get-WcOptionCompletions -CurrentWord $wordToComplete)
+    }
+
+    @(Get-WcPositionalCompletions -CurrentWord $wordToComplete)
+}
 ```
 
 Load it with:

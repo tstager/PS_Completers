@@ -16,7 +16,11 @@ The implementation is careful not to load hive files during completion.
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'ru', 'ru.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'ru', 'ru.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Ru -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

@@ -39,7 +39,10 @@ The completer covers the validated help surface:
 ## Registration
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('psinfo', 'psinfo.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('psinfo', 'psinfo.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsInfo -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Limitations / notes

@@ -16,7 +16,11 @@ It is a lightweight completer that focuses on:
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('tskill', 'tskill.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('tskill', 'tskill.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Tskill -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

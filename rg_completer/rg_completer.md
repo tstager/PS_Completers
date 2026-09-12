@@ -19,7 +19,48 @@ It is a help-driven completer that:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    if ($wordToComplete -isnot [string]) {
+        $wordToComplete = [string]$wordToComplete
+    }
+
+    Initialize-RgCompletionCatalog
+    $catalog = Get-RgCompletionCatalog
+
+    $currentToken = Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $tokensBeforeCurrent = Get-RgArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
+    $context = Get-RgCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($currentToken -match '^(--[^=]+)=(.*)$') {
+        $optionKey = Get-RgCanonicalOptionKey -Token $matches[1]
+        $valuePrefix = $matches[2]
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            $optionSpec = $catalog.OptionByToken[$optionKey]
+            if ($optionSpec.ValueKind) {
+                return @(Get-RgValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
+            }
+        }
+    }
+
+    if ($currentToken -match '^(?<flag>-[tT])(?<value>.+)$') {
+        $optionKey = Get-RgCanonicalOptionKey -Token $matches['flag']
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            return @(Get-RgValueCompletions -OptionSpec $catalog.OptionByToken[$optionKey] -CurrentValue $matches['value'] -Prefix $matches['flag'])
+        }
+    }
+
+    if ($context.PendingOption) {
+        return @(Get-RgValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+    }
+
+    if ($currentToken.StartsWith('-')) {
+        return @(Get-RgOptionCompletions -CurrentWord $wordToComplete)
+    }
+
+    @(Get-RgPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+}
 ```
 
 Load it with:

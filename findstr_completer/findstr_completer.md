@@ -26,7 +26,11 @@ The completer covers:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('findstr', 'findstr.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('findstr', 'findstr.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-FindStr -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

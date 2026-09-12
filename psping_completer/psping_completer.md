@@ -11,7 +11,10 @@ The completer follows the repository's standalone pattern: a single self-contain
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'psping', 'psping.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'psping', 'psping.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsPing -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

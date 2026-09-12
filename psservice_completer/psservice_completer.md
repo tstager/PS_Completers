@@ -17,7 +17,11 @@ This keeps completion safe and cheap while avoiding any remote probing or comman
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'psservice', 'psservice.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'psservice', 'psservice.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-PsService -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

@@ -21,7 +21,11 @@ The script registers a native completer for:
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'wevtutil', 'wevtutil.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'wevtutil', 'wevtutil.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Wevtutil -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 ## How completion works

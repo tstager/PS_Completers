@@ -25,7 +25,11 @@ The script registers one native completer for all of the following command names
 Registration is done with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'uv', 'uv.exe', 'uvx', 'uvx.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'uv', 'uv.exe', 'uvx', 'uvx.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Uv -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Internally, the completer distinguishes between `uv` and `uvx` with `Get-UvSourceName`.

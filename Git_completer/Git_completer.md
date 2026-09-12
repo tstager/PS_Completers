@@ -7,12 +7,17 @@ It covers top-level subcommands, nested subcommands, flags discovered from `git 
 
 ## Registration and command names
 - Registers with `Register-ArgumentCompleter -Native`
-- Command name: `git`
-- Entry point: `$GitNativeCompleter`
+- Command names: `git`, `git.exe`
+- Entry point: `Complete-GitNative`
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName git -ScriptBlock $GitNativeCompleter
+Register-ArgumentCompleter -Native -CommandName @('git', 'git.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-GitNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
+
+The registration call stays at script scope with literal arguments because the CompleterActions strict import grammar requires it; all logic lives in `Complete-GitNative` and its helpers.
 
 If `git` is not available in `PATH`, the completer returns without emitting suggestions.
 

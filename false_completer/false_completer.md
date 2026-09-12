@@ -4,7 +4,7 @@
 
 false_completer.ps1 registers a standalone native PowerShell completer for false and false.exe.
 
-It is a static-first completer for the no-op shell command. The script exposes the common help flags and otherwise stays quiet so it does not add unrelated fallback suggestions.
+It is a help-driven completer with a static fallback for the no-op shell command. The script exposes the common help flags and otherwise stays quiet so it does not add unrelated fallback suggestions.
 
 The completer covers:
 
@@ -16,7 +16,11 @@ The completer covers:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'false', 'false.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'false', 'false.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-False -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:
@@ -37,18 +41,21 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Tokens that begin with `-` return `ParameterName` suggestions.
-- Non-option operand slots do not emit fallback suggestions so `false` stays simple.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
+- Operand slots return nothing, so PowerShell's default filename completion applies.
+- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios
 
 ```powershell
 false -
-false 
+false --
 ```
 
 Expected behavior:
 
-- `false -` shows the supported options
-- `false ` stays empty unless the user explicitly types a flag
+- `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
+- operand slots fall back to PowerShell's default filename completion
 - the completer remains importable through `Import-CompleterScript`

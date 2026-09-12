@@ -17,7 +17,11 @@ The completer does not scan or delete anything during completion.
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'RegDelNull', 'RegDelNull.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'RegDelNull', 'RegDelNull.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-RegDelNull -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

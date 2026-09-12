@@ -17,7 +17,41 @@ The completion path does not format files or modify configuration.
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('rustfmt', 'rustfmt.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('rustfmt', 'rustfmt.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $tokenState = Get-RustfmtTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    $currentToken = if ($null -eq $tokenState.CurrentToken) { $wordToComplete } else { $tokenState.CurrentToken }
+    $tokensBeforeCurrent = @($tokenState.TokensBeforeCurrent)
+    if ([string]::IsNullOrEmpty($wordToComplete) -and -not [string]::IsNullOrEmpty($currentToken)) {
+        $tokensBeforeCurrent = @($tokensBeforeCurrent + $currentToken)
+        $currentToken = ''
+    }
+    $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -Skip 1)
+    $state = Get-RustfmtState -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($state.PendingKinds.Count -gt 0) {
+        return Get-RustfmtValueSuggestions -ValueKind $state.PendingKinds.Peek() -CurrentToken $currentToken
+    }
+
+    $cleanCurrent = Remove-RustfmtOuterQuotes -Value $currentToken
+    if ($cleanCurrent -match '^(--[A-Za-z0-9\-]+)=(.*)$') {
+        $catalog = Get-RustfmtCatalog
+        $optionName = $matches[1].ToLowerInvariant()
+        if ($catalog.AliasLookup.ContainsKey($optionName)) {
+            $spec = $catalog.AliasLookup[$optionName]
+            if ($spec.ValueKinds.Count -gt 0) {
+                return Get-RustfmtValueSuggestions -ValueKind $spec.ValueKinds[0] -CurrentToken $matches[2]
+            }
+        }
+    }
+
+    if ($cleanCurrent.StartsWith('-') -or [string]::IsNullOrEmpty($cleanCurrent)) {
+        return Get-RustfmtSwitchSuggestions -CurrentToken $currentToken
+    }
+
+    Get-RustfmtValueSuggestions -ValueKind 'InputFile' -CurrentToken $currentToken
+}
 ```
 
 Load it with:

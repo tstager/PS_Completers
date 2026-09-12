@@ -4,7 +4,7 @@
 
 date_completer.ps1 registers a standalone native PowerShell completer for date and date.exe.
 
-It is a static-first completer for the date/time formatter workflow. The script exposes the command's option catalog from the installed build, then falls back to filesystem path completion for operand slots.
+It is a help-driven completer with a static fallback for the date/time formatter workflow. The script exposes the command's option catalog from the installed build, then falls back to filesystem path completion for operand slots.
 
 The completer covers:
 
@@ -12,38 +12,40 @@ The completer covers:
 - operand completion for file or path-like arguments
 - a simple import-safe registration shape that can be loaded directly in PowerShell
 
-Representative options include:
+Representative options include (parsed from the installed build's `--help`):
 
-  - `-d`
-  - `--date`
-  - `-f`
-  - `--file`
-  - `-I`
-  - `--iso-8601`
-  - `-R`
-  - `--rfc-email`
-  - `--rfc-3339`
-  - `--debug`
-  - `-r`
-  - `--reference`
-  - `-s`
-  - `--set`
-  - `-u`
-  - `--universal`
-  - `--utc`
-  - `-1`
-  - `--resolution`
-  - `-h`
-  - `--help`
-  - `-V`
-  - `--version`
+- `-d`
+- `--date`
+- `--debug`
+- `-f`
+- `--file`
+- `-I`
+- `--iso-8601`
+- `-R`
+- `--rfc-email`
+- `-0600`
+- `--rfc-3339`
+- `-r`
+- `--reference`
+- `-s`
+- `--set`
+- `-u`
+- `--utc`
+- `--universal`
+- `--help`
+- `--version`
+- `-04`
 
 ## Registration and command names
 
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'date', 'date.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'date', 'date.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Date -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:
@@ -64,22 +66,35 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Tokens that begin with `-` return `ParameterName` suggestions from the static option catalog.
-- Non-switch operand slots use filesystem path completion so common file and directory inputs resolve naturally.
-- The completer remains intentionally simple and does not try to model deeper command semantics beyond the supported option surface.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
+- Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+
+## Option values
+
+- `-d`, `--date`: `now`, `today`, `yesterday`, `tomorrow`
+- `-f`, `--file`, `-r`, `--reference`: filesystem paths
+- `-I`, `--iso-8601`: `date`, `hours`, `minutes`, `seconds`, `ns`
+- `--rfc-3339`: `date`, `seconds`, `ns`
+- `-s`, `--set`: `<string>`
 
 ## Representative validation scenarios
 
 ```powershell
 date -
 date --
-date -d
+date --date 
+date --date=
 ```
 
 Expected behavior:
 
-- `-` and `--` style prefixes show matching option suggestions
-- the first non-option operand slot offers filesystem completion
+- `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
+- `--date` shows its documented values in both the separate and the attached form
+- operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes

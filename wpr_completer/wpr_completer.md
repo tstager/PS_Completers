@@ -19,7 +19,11 @@ The completer covers:
 ## Registration and command names
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('wpr', 'wpr.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('wpr', 'wpr.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Wpr -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

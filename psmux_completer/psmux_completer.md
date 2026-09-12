@@ -16,7 +16,11 @@ The script registers:
 with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('psmux', 'psmux.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('psmux', 'psmux.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Psmux -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Supported completion behavior

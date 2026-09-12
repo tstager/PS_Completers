@@ -11,7 +11,11 @@ The completer combines data parsed from `robocopy.exe /?` with script-defined me
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'robocopy', 'robocopy.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'robocopy', 'robocopy.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Robocopy -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

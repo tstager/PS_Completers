@@ -33,7 +33,10 @@ Instead, it focuses on the documented syntax shapes for both local-account and d
 ## Registration
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('pspasswd', 'pspasswd.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('pspasswd', 'pspasswd.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsPasswd -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Notes

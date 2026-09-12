@@ -42,7 +42,10 @@ When a remote target is present, those runtime hints are disabled and the comple
 ## Registration
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('psloglist', 'psloglist.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('psloglist', 'psloglist.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsLogList -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Notes

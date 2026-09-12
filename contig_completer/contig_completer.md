@@ -18,7 +18,11 @@ The completer is side-effect free and does not invoke Contig while completing.
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'contig', 'contig.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'contig', 'contig.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Contig -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

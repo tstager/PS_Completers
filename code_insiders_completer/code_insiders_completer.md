@@ -17,7 +17,11 @@ It uses a hybrid static-first model:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('code-insiders', 'code-insiders.cmd') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('code-insiders', 'code-insiders.cmd') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-CodeInsidersNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 Load it with:

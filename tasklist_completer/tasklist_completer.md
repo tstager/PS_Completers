@@ -11,7 +11,11 @@ It parses `tasklist.exe /?` to discover switches and filter definitions, then ad
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('tasklist', 'tasklist.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('tasklist', 'tasklist.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Tasklist -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

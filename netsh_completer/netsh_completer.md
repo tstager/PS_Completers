@@ -18,7 +18,80 @@ The script covers:
 ```powershell
 Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    ...
+
+    Initialize-NetshCompletionCatalog
+
+    $line = $commandAst.Extent.Text
+    $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { '' } else { Get-NetshCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
+    $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
+    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
+    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete) -or ($line.Substring(0, $safeCursor) -match '\s$')
+    $tokensBeforeCurrent = Get-NetshTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace:$hasTrailingSpace
+
+    $expectedOption = Get-NetshExpectedGlobalOption -TokensBeforeCurrent $tokensBeforeCurrent
+    if ($expectedOption) {
+        switch ($expectedOption.ValueKind) {
+            'Path' {
+                foreach ($path in (Get-NetshFilePathCompletions -InputPath $currentWord)) {
+                    [System.Management.Automation.CompletionResult]::new($path, $path, 'ProviderItem', $path)
+                }
+                return
+            }
+            'Context' {
+                foreach ($item in (Get-NetshContextValueCompletions -WordToComplete $currentWord)) {
+                    New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
+                }
+                return
+            }
+            'Password' {
+                if ([string]::IsNullOrWhiteSpace($currentWord) -or '*' -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
+                    New-NetshCompletionResult -CompletionText '*' -ResultType 'ParameterValue' -ToolTip 'Prompt for the password.'
+                }
+                return
+            }
+        }
+    }
+
+    $parsedState = Get-NetshParsedState -Tokens $tokensBeforeCurrent
+    Ensure-NetshPathLoaded -PathTokens $parsedState.ContextTokens
+    $resolved = Resolve-NetshCommandPath -BasePathTokens $parsedState.ContextTokens -Tokens $parsedState.CommandTokens
+    Ensure-NetshPathLoaded -PathTokens $resolved.PathTokens
+    $activeNode = Get-NetshNode -PathTokens $resolved.PathTokens
+    if (-not $activeNode) {
+        $activeNode = Get-NetshNode -PathTokens $resolved.PathTokens -Create
+    }
+
+    $resultMap = [ordered]@{}
+    $candidateItems = New-Object System.Collections.Generic.List[object]
+
+    if ($currentWord -like '-*' -or ($resolved.PathTokens.Count -eq 0 -and $resolved.Remaining.Count -eq 0)) {
+        foreach ($item in (Get-NetshGlobalOptionSuggestions -WordToComplete $currentWord)) {
+            $candidateItems.Add($item)
+        }
+    }
+
+    if (-not ($currentWord -like '-*')) {
+        foreach ($item in (Get-NetshCollectionSuggestions -Collection $activeNode.NextTokens -WordToComplete $currentWord)) {
+            $candidateItems.Add($item)
+        }
+
+        foreach ($item in (Get-NetshCollectionSuggestions -Collection $activeNode.UsageSuggestions -WordToComplete $currentWord)) {
+            $candidateItems.Add($item)
+        }
+
+        foreach ($item in (Get-NetshInlineTagValueSuggestions -ValueHintsByTag $activeNode.ValueHintsByTag -WordToComplete $currentWord)) {
+            $candidateItems.Add($item)
+        }
+    }
+
+    foreach ($item in $candidateItems) {
+        $key = $item.CompletionText.ToLowerInvariant()
+        if (-not $resultMap.Contains($key)) {
+            $resultMap[$key] = New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
+        }
+    }
+
+    $resultMap.Values
 }
 ```
 

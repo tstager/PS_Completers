@@ -18,7 +18,11 @@ It is tailored to the local Windows `bsdtar` implementation and combines:
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'tar', 'tar.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'tar', 'tar.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Tar -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

@@ -4,7 +4,7 @@
 
 uptime_completer.ps1 registers a standalone native PowerShell completer for uptime and uptime.exe.
 
-It is a static-first completer for the uptime command surface. The script exposes the supported option catalog and falls back to filesystem path completion for operand slots.
+It is a help-driven completer with a static fallback for the uptime command surface. The script exposes the supported option catalog and falls back to filesystem path completion for operand slots.
 
 The completer covers:
 
@@ -12,12 +12,12 @@ The completer covers:
 - operand completion for file or path-like arguments
 - a simple import-safe registration shape that can be loaded directly in PowerShell
 
-Representative options include:
+Representative options include (parsed from the installed build's `--help`):
 
-- `-p`
-- `--pretty`
 - `-s`
 - `--since`
+- `-p`
+- `--pretty`
 - `-h`
 - `--help`
 - `-V`
@@ -28,7 +28,11 @@ Representative options include:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'uptime', 'uptime.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'uptime', 'uptime.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Uptime -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:
@@ -49,22 +53,23 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Tokens that begin with `-` return `ParameterName` suggestions from the static option catalog.
-- Non-switch operand slots use filesystem path completion so common file and directory inputs resolve naturally.
-- The completer remains intentionally simple and does not try to model deeper command semantics beyond the supported option surface.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios
 
 ```powershell
 uptime -
 uptime --
-uptime -p
 ```
 
 Expected behavior:
 
-- `-` and `--` style prefixes show matching option suggestions
-- the first non-option operand slot offers filesystem completion
+- `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
+- operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes

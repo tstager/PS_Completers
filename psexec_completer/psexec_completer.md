@@ -16,7 +16,10 @@ The implementation is intentionally static-first and side-effect free:
 The script registers:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('psexec', 'psexec.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('psexec', 'psexec.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsExec -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 Load it into the session with:

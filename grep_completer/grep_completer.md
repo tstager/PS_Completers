@@ -20,7 +20,56 @@ It is a help-driven completer that:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    if ($wordToComplete -isnot [string]) {
+        $wordToComplete = [string]$wordToComplete
+    }
+
+    Initialize-GrepCompletionCatalog
+    $catalog = Get-GrepCompletionCatalog
+
+    # When the cursor sits past the parsed command extent the user is on a fresh
+    # token after trailing whitespace, which $commandAst.Extent.Text has trimmed
+    # away. Treat that as an empty current token so terminal/positional routing
+    # runs instead of falling through to the option-name branch.
+    $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
+        ''
+    } else {
+        Get-GrepCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
+    $tokensBeforeCurrent = Get-GrepArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
+    $context = Get-GrepCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($currentToken -match '^(--[^=]+)=(.*)$') {
+        $optionKey = Get-GrepCanonicalOptionKey -Token $matches[1]
+        $valuePrefix = $matches[2]
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            $optionSpec = $catalog.OptionByToken[$optionKey]
+            if ($optionSpec.ValueKind) {
+                return @(Get-GrepValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
+            }
+        }
+    }
+
+    if ($currentToken -match '^(?<flag>-(?:e|f|m|A|B|C|D|d))(?<value>.+)$') {
+        $optionKey = Get-GrepCanonicalOptionKey -Token $matches['flag']
+        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
+            return @(Get-GrepValueCompletions -OptionSpec $catalog.OptionByToken[$optionKey] -CurrentValue $matches['value'] -Prefix $matches['flag'])
+        }
+    }
+
+    if ($context.PendingOption) {
+        return @(Get-GrepValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+    }
+
+    if ($currentToken.StartsWith('-')) {
+        return @(Get-GrepOptionCompletions -CurrentWord $wordToComplete)
+    }
+
+    @(Get-GrepPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+}
 ```
 
 Load it with:

@@ -20,7 +20,45 @@ The completion path does not compile code or probe remote state.
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $tokenState = Get-RustcTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    $currentToken = if ($null -eq $tokenState.CurrentToken) { $wordToComplete } else { $tokenState.CurrentToken }
+    $tokensBeforeCurrent = @($tokenState.TokensBeforeCurrent)
+    if ([string]::IsNullOrEmpty($wordToComplete) -and -not [string]::IsNullOrEmpty($currentToken)) {
+        $tokensBeforeCurrent = @($tokensBeforeCurrent + $currentToken)
+        $currentToken = ''
+    }
+    $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -Skip 1)
+    $state = Get-RustcState -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($state.PendingValueKind) {
+        return Get-RustcValueKindSuggestions -ValueKind $state.PendingValueKind -CurrentToken $currentToken
+    }
+
+    $cleanCurrent = Remove-RustcOuterQuotes -Value $currentToken
+    if ($cleanCurrent -match '^(--[A-Za-z0-9\-]+)=(.*)$') {
+        $catalog = Get-RustcCatalog
+        $optionName = $matches[1]
+        if ($catalog.AliasLookup.ContainsKey($optionName)) {
+            $spec = $catalog.AliasLookup[$optionName]
+            if ($spec.ValueKind) {
+                return Get-RustcValueKindSuggestions -ValueKind $spec.ValueKind -CurrentToken $matches[2]
+            }
+        }
+    }
+
+    if ($cleanCurrent.StartsWith('-') -or [string]::IsNullOrEmpty($cleanCurrent)) {
+        return Get-RustcSwitchSuggestions -CurrentToken $currentToken
+    }
+
+    if ($state.OperandCount -eq 0) {
+        return Get-RustcValueKindSuggestions -ValueKind 'InputFile' -CurrentToken $currentToken
+    }
+
+    Get-RustcPathCompletions -CurrentToken $currentToken -FilesOnly $true
+}
 ```
 
 Load it with:

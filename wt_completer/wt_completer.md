@@ -4,194 +4,73 @@
 
 `wt_completer.ps1` registers a native PowerShell completer for Windows Terminal (`wt` / `wt.exe`).
 
-The implementation is entirely source-defined in the script. It does not call `wt --help` or query Windows Terminal profiles at runtime. Instead, it uses static tables for:
-
-- top-level options,
-- supported subcommands and aliases,
-- subcommand-specific options,
-- direction values for pane-navigation commands.
+The option and subcommand tables are defined in the script. Profile names and color scheme names are read from the Windows Terminal settings file at completion time, so `-p`/`--profile` and `--colorScheme` complete the entries that exist on the machine.
 
 ## Registration and command names
 
-The script registers a native completer for:
-
-- `wt`
-- `wt.exe`
-
-Registration is done with:
+- Registers with `Register-ArgumentCompleter -Native`
+- Command names: `wt`, `wt.exe`
+- Entry point: `Complete-WtNative`
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName wt, wt.exe -ScriptBlock $WtCompleter
+Register-ArgumentCompleter -Native -CommandName @('wt', 'wt.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-WtNative -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
-Before producing results, the script accepts either `wt.exe` or `wt` as present on `PATH`.
+The completer returns nothing when neither `wt.exe` nor `wt` is on `PATH`.
 
 ## How completion works
 
-### 1. Static option and subcommand tables
+### 1. Tables
 
-The script defines separate tables for:
+The script defines top-level options, `new-tab` options, `split-pane` extras, `focus-tab`, `move-pane` and `focus-pane` options, direction values, and the subcommand list with aliases (`nt`, `sp`, `ft`, `mf`, `mp`, `fp`). Each entry carries completion text, display text, result type and tooltip.
 
-- top-level options,
-- `new-tab` options,
-- `split-pane` options,
-- `focus-tab` options,
-- `move-pane` options,
-- `focus-pane` options,
-- direction values,
-- subcommand names and aliases.
+### 2. Tokenizing and context
 
-Each entry includes completion text, display text, result type, and tooltip text.
+The cursor is rebased to the command's start offset, so completion works when `wt` is not the first statement on the line. The completed tokens are scanned to find the active subcommand and whether the previous token expects a value. A `;` or `` `; `` token, or a token ending in `;`, resets the subcommand context, so in `wt nt `; sp -` the options offered belong to `split-pane`.
 
-### 2. Token parsing and context selection
+### 3. Output by context
 
-The completer tokenizes the command line prefix with a regular expression, then determines:
-
-- the currently typed prefix,
-- the previous token,
-- the active subcommand, if any,
-- whether the previous token expects a value,
-- whether the current completion request is for an option or a non-option value.
-
-Aliases such as `nt` and `sp` are normalized through `$subcommandMap`.
-
-### 3. Context-specific completion output
-
-The script then chooses one of these behaviors:
-
-- top-level options only,
-- top-level options plus subcommands,
-- subcommand-specific options,
-- direction values for pane-navigation commands,
-- no suggestions when the implementation knows the current position should contain a free-form value.
+- No subcommand: top-level options plus the `new-tab` options (which `wt` accepts before any subcommand) plus subcommand names.
+- `move-focus` / `swap-pane`: direction values.
+- Other subcommands: that subcommand's options.
+- A value slot after `-p`/`--profile` lists profile names; after `--colorScheme` it lists scheme names; names containing spaces are quoted. Other value slots return nothing so PowerShell's default completion applies.
 
 ## Key completion behaviors / supported values
 
-### Top-level options
+- Top-level options: `-h`/`--help`, `-v`/`--version`, `-M`/`--maximized`, `-F`/`--fullscreen`, `-f`/`--focus`, `--pos`, `--size`, `-w`/`--window`, `-s`/`--saved`
+- Subcommands: `new-tab`/`nt`, `split-pane`/`sp`, `focus-tab`/`ft`, `move-focus`/`mf`, `move-pane`/`mp`, `swap-pane`, `focus-pane`/`fp`, `x-save`
+- `new-tab` options: `-p`/`--profile`, `--sessionId`, `-d`/`--startingDirectory`, `--title`, `--tabColor`, `--suppressApplicationTitle`, `--useApplicationTitle`, `--colorScheme`, `--appendCommandLine`, `--inheritEnvironment`, `--reloadEnvironment`
+- `split-pane` adds `-H`/`--horizontal`, `-V`/`--vertical`, `-s`/`--size`, `-D`/`--duplicate`
+- `focus-tab`: `-t`/`--target`, `-n`/`--next`, `-p`/`--previous`; `move-pane`: `-t`/`--tab`; `focus-pane`: `-t`/`--target`
+- Direction values: `left`, `right`, `up`, `down`, `previous`, `nextInOrder`, `previousInOrder`, `first`
 
-The script offers these top-level options:
+## Representative validation scenarios
 
-- `-h`, `--help`
-- `-v`, `--version`
-- `-M`, `--maximized`
-- `-F`, `--fullscreen`
-- `-f`, `--focus`
-- `--pos`
-- `--size`
-- `-w`, `--window`
-- `-s`, `--saved`
+```powershell
+wt -p
+wt nt --colorScheme
+wt nt `; sp -
+Set-Location C:\; wt ft
+wt move-focus
+```
 
-### Supported subcommands and aliases
+Expected behavior:
 
-The script includes these subcommands:
-
-- `new-tab`, `nt`
-- `split-pane`, `sp`
-- `focus-tab`, `ft`
-- `move-focus`, `mf`
-- `move-pane`, `mp`
-- `swap-pane`
-- `focus-pane`, `fp`
-- `x-save`
-
-### `new-tab` option coverage
-
-For `new-tab` / `nt`, the script offers:
-
-- `-p`, `--profile`
-- `--sessionId`
-- `-d`, `--startingDirectory`
-- `--title`
-- `--tabColor`
-- `--suppressApplicationTitle`
-- `--useApplicationTitle`
-- `--colorScheme`
-- `--appendCommandLine`
-- `--inheritEnvironment`
-- `--reloadEnvironment`
-
-### `split-pane` option coverage
-
-For `split-pane` / `sp`, the script offers all `new-tab` options plus:
-
-- `-H`, `--horizontal`
-- `-V`, `--vertical`
-- `-s`, `--size`
-- `-D`, `--duplicate`
-
-### `focus-tab` option coverage
-
-For `focus-tab` / `ft`, the script offers:
-
-- `-t`, `--target`
-- `-n`, `--next`
-- `-p`, `--previous`
-
-### `move-pane` option coverage
-
-For `move-pane` / `mp`, the script offers:
-
-- `-t`, `--tab`
-
-### `focus-pane` option coverage
-
-For `focus-pane` / `fp`, the script offers:
-
-- `-t`, `--target`
-
-### Direction value completion
-
-For `move-focus` / `mf` and `swap-pane`, the script offers these direction values:
-
-- `left`
-- `right`
-- `up`
-- `down`
-- `previous`
-- `nextInOrder`
-- `previousInOrder`
-- `first`
-
-### Value-taking options without enumerated suggestions
-
-The script explicitly knows that many options take values, including:
-
-- `--pos`, `--size`, `-w`, `--window`, `-s`, `--saved`
-- `-p`, `--profile`, `--sessionId`, `-d`, `--startingDirectory`, `--title`, `--tabColor`, `--colorScheme`
-- `-t`, `--target`, `--tab`
-
-When the current argument position is one of these value slots, the completer usually returns no guesses instead of inventing values.
+- `-p ` lists the profiles from settings.json, quoting names with spaces
+- `nt --colorScheme ` lists the color schemes from settings.json
+- after `` `; `` the `split-pane` options are offered
+- `ft` completes when `wt` follows another statement on the line
+- `move-focus ` lists the direction values
 
 ## Dependencies or external command expectations
 
-This completer expects either `wt.exe` or `wt` to be available via `Get-Command`.
-
-Unlike some other completers in the repository, it does not depend on runtime help parsing or external discovery commands after the initial command-availability check.
-
-## Usage / loading example
-
-Dot-source the script:
-
-```powershell
-. .\wt_completer.ps1
-```
-
-Example completion scenarios:
-
-```powershell
-wt <TAB>
-wt --<TAB>
-wt new-tab --<TAB>
-wt split-pane --<TAB>
-wt move-focus <TAB>
-wt swap-pane <TAB>
-```
+- `wt.exe` or `wt` on `PATH`
+- `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json` and the Preview equivalent for profile and scheme names; both are read once per session and unioned
 
 ## Limitations / notes
 
-- The completer is static; it will not automatically learn new Windows Terminal options or subcommands.
-- It does not enumerate profile names, window IDs, directories, colors, titles, or numeric values.
-- For most value-taking options, the script intentionally suppresses suggestions rather than returning placeholders.
-- `move-focus` and `swap-pane` are the only subcommands in this file that return non-option argument values.
-- The script models a single active subcommand context and does not attempt richer parsing of compound Windows Terminal command lines.
-
+- The option and subcommand tables are authored, so a new Windows Terminal option must be added by hand.
+- Window ids, directories, colors, titles and sizes have no value provider.

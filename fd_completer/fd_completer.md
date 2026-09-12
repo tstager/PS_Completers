@@ -16,7 +16,11 @@ The script registers:
 with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('fd', 'fd.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('fd', 'fd.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Fd -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Supported completion behavior

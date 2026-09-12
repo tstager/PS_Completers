@@ -17,7 +17,11 @@ It uses a hybrid, static-first model:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('scoop', 'scoop.ps1', 'scoop.cmd') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('scoop', 'scoop.ps1', 'scoop.cmd') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-ScoopNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 Load it with:

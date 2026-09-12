@@ -33,7 +33,11 @@ The completer covers:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('attrib', 'attrib.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('attrib', 'attrib.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Attrib -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 That covers both the bare command name and the explicit `.exe` form.

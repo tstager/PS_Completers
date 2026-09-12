@@ -16,7 +16,11 @@ The completer covers:
 ## Registration and command names
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('wslconfig', 'wslconfig.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('wslconfig', 'wslconfig.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-WslConfig -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

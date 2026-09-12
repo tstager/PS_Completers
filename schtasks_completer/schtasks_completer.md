@@ -11,7 +11,94 @@ It is primarily help-driven: the script parses `schtasks.exe /?` and subcommand 
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Initialize-SchtasksCompletionCatalog
+
+    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+    $tokens = @($allTokens | Select-Object -Skip 1)
+    $line = $commandAst.ToString()
+    $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
+        Get-SchtasksCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    } else {
+        $wordToComplete
+    }
+    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
+
+    if ($hasTrailingSpace) {
+        $tokensBeforeCurrent = @($tokens)
+    } elseif ($tokens.Count -gt 1) {
+        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
+    } else {
+        $tokensBeforeCurrent = @()
+    }
+
+    $activeSubcommand = Get-SchtasksActiveSubcommand -Tokens $tokensBeforeCurrent -KnownSubcommands $script:SchtasksCompletionCatalog.Subcommands
+    $expectedValueOption = Get-SchtasksExpectedValueOption -TokensBeforeCurrent $tokensBeforeCurrent -KnownSubcommands $script:SchtasksCompletionCatalog.Subcommands
+
+    if ($expectedValueOption) {
+        switch ($expectedValueOption.ToLowerInvariant()) {
+            '/tn' {
+                if ($activeSubcommand -and -not $activeSubcommand.Equals('/Create', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return Get-SchtasksTaskNameCompletions -WordToComplete $currentWord |
+                        ForEach-Object {
+                            New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                        }
+                }
+            }
+        }
+
+        if (Test-SchtasksPathLikeOption -Option $expectedValueOption) {
+            $allowedExtensions = Get-SchtasksAllowedExtensionsForOption -Option $expectedValueOption
+            return Get-SchtasksPathCompletions -InputPath $currentWord -AllowedExtensions $allowedExtensions |
+                ForEach-Object {
+                    New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+        }
+
+        $optionKey = $expectedValueOption.ToLowerInvariant()
+        if ($script:SchtasksCompletionCatalog.ValueHintsByOption.ContainsKey($optionKey)) {
+            return $script:SchtasksCompletionCatalog.ValueHintsByOption[$optionKey] |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+                ForEach-Object {
+                    New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+                }
+        }
+    }
+
+    if (-not $activeSubcommand) {
+        $topSuggestions = @($script:SchtasksCompletionCatalog.Subcommands + '/?')
+        if ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('/')) {
+            return $topSuggestions |
+                Sort-Object -Unique |
+                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+                ForEach-Object {
+                    New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+                }
+        }
+
+        return @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('/')) {
+        $optionKey = $activeSubcommand.ToLowerInvariant()
+        $suggestions = @()
+
+        if ($script:SchtasksCompletionCatalog.OptionTokensByKey.ContainsKey($optionKey)) {
+            $suggestions = @($script:SchtasksCompletionCatalog.OptionTokensByKey[$optionKey])
+        }
+
+        return $suggestions |
+            Sort-Object -Unique |
+            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+            ForEach-Object {
+                New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+            }
+    }
+
+    @()
+}
 ```
 
 Load it into the current session with:

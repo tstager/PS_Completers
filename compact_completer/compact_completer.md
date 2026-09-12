@@ -16,7 +16,11 @@ The completer covers:
 ## Registration and command names
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('compact', 'compact.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('compact', 'compact.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Compact -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

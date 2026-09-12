@@ -30,7 +30,11 @@ The completer covers:
 The script ends with one importer-safe native registration:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('apm', 'apm.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('apm', 'apm.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Apm -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 Load it with:

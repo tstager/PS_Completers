@@ -18,7 +18,11 @@ The completer covers:
 ## Registration and command names
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('wecutil', 'wecutil.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('wecutil', 'wecutil.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Wecutil -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

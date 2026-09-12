@@ -29,7 +29,10 @@ Instead, it completes the documented PsFile syntax with remote placeholders, rem
 ## Registration
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName @('psfile', 'psfile.exe') -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName @('psfile', 'psfile.exe') -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsFile -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+}
 ```
 
 ## Notes

@@ -15,7 +15,11 @@ The implementation is intentionally tiny:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'regjump', 'regjump.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'regjump', 'regjump.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-RegJump -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

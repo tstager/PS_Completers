@@ -4,7 +4,7 @@
 
 test_completer.ps1 registers a standalone native PowerShell completer for test and test.exe.
 
-It is a static-first completer for file and string tests. The script exposes the command's option catalog and falls back to filesystem path completion for operand slots.
+It is a help-driven completer with a static fallback for file and string tests. The script exposes the command's option catalog and falls back to filesystem path completion for operand slots.
 
 The completer covers:
 
@@ -51,7 +51,11 @@ Representative options include:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'test', 'test.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'test', 'test.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Test -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:
@@ -72,22 +76,24 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Tokens that begin with `-` return `ParameterName` suggestions from the static option catalog.
-- Non-switch operand slots use filesystem path completion so common file and directory inputs resolve naturally.
-- The completer remains intentionally simple and does not try to model deeper command semantics beyond the supported option surface.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The static catalog includes the GNU operators `-G`, `-k`, `-N`, `-O`, `-ef`, `-nt` and `-ot`.
 
 ## Representative validation scenarios
 
 ```powershell
 test -
 test --
-test -e
 ```
 
 Expected behavior:
 
-- `-` and `--` style prefixes show matching option suggestions
-- the first non-option operand slot offers filesystem completion
+- `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
+- operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes

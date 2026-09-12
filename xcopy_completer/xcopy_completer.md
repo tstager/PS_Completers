@@ -16,7 +16,11 @@ It also completes positional source and destination paths with Windows-style quo
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'xcopy', 'xcopy.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'xcopy', 'xcopy.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-Xcopy -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:

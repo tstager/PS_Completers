@@ -17,7 +17,11 @@ The implementation is intentionally risk-bounded:
 The script ends with:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'sdelete', 'sdelete.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'sdelete', 'sdelete.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    Complete-SDelete -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it with:

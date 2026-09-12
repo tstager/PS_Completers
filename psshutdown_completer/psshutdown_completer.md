@@ -11,7 +11,10 @@ The completer is intentionally static and non-destructive. It does not probe rem
 The script ends by calling:
 
 ```powershell
-Register-ArgumentCompleter -Native -CommandName 'psshutdown', 'psshutdown.exe' -ScriptBlock { ... }
+Register-ArgumentCompleter -Native -CommandName 'psshutdown', 'psshutdown.exe' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-PsShutdown -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+}
 ```
 
 Load it into the current session with:
