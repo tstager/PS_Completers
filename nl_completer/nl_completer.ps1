@@ -27,9 +27,9 @@ function Get-NlCompletionOptions {
             continue
         }
 
-        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
-            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|$))')) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
                 if ($normalized.StartsWith('--')) {
@@ -187,7 +187,7 @@ function Complete-Nl {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-NlCurrentToken -Line $commandAst.ToString() -CursorPosition $cursorPosition -Fallback $wordToComplete
+        Get-NlCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
@@ -197,7 +197,7 @@ function Complete-Nl {
     if ($currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-NlCompletionOptions) {
-                if ($option.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-NlCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip 'Option for nl.'
                 }
             }
