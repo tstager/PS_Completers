@@ -249,3 +249,7 @@ GitHub Actions on every push and pull request.
 
 - Each completer is intended to work independently; there is no module manifest or build step in this repository.
 - Some completers are static, while others depend on the installed native tool or its help output at completion time. The companion `.md` file for each script describes those details.
+
+## License
+
+This repository is licensed under the [MIT License](LICENSE).
