@@ -18,6 +18,14 @@
             )
         }
         @{
+            Path    = 'agy_completer/agy_completer.ps1'
+            Trusted = $false
+            Targets = @(
+                @{ CommandName = 'agy'; Native = $true }
+                @{ CommandName = 'agy.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'apm_completer/apm_completer.ps1'
             Trusted = $false
             Targets = @(
