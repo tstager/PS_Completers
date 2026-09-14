@@ -12,8 +12,11 @@ The implementation is help-driven and stays within the repo's importer-safe top-
 - `cargo-clippy --help` supplies Clippy-specific switches
 - `cargo check --help` supplies the Cargo option surface that `cargo clippy` inherits
 - `cargo -Z help` supplies local unstable flag values for `-Z`
+- `clippy-driver -W help` supplies lint and lint-group names
+- `rustup target list --installed`, falling back to `rustc --print target-list`, supplies target triples
+- the nearest `Cargo.toml`, found by walking up from the current directory, supplies profile, feature, package, and target names
 
-It does not probe the current workspace for package names, target names, or lints. Those slots use placeholders to avoid noisy filesystem fallback.
+Option tokens are keyed ordinally, so `-V` (`--version`) and `-v` (`--verbose`) stay distinct and `-F` keeps its `--features` meaning before `--`. A value slot with no known source echoes what has been typed rather than collapsing to nothing.
 
 ## Completion behavior
 
@@ -35,10 +38,14 @@ Representative value behavior:
 - `--color` -> `auto`, `always`, `never`
 - `--message-format` -> documented Cargo formats
 - `-Z` -> locally discovered unstable Cargo flags
-- `--manifest-path`, `--target-dir` -> filesystem completion
+- `-m`, `--manifest-path`, `--target-dir` -> filesystem completion
 - `--config` -> filesystem completion plus `<KEY=VALUE>`
-- `--package`, `--bin`, `--example`, `--test`, `--bench`, `--features`, `--profile`, `--target`, `--explain` -> placeholders
-- lint flags after `--` -> `<lint>` and `clippy::<lint>`
+- `--profile` -> the built-in profiles plus every `[profile.<name>]` in the manifest
+- `--features`, `-F` -> `[features]` keys from the manifest
+- `--package`, `-p`, `--exclude` -> package names from the manifest
+- `--bin`, `--example`, `--test`, `--bench` -> the matching `[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]` names
+- `--target` -> installed target triples
+- `--explain` and the lint flags after `--` -> lint and lint-group names from `clippy-driver -W help`
 
 ## Import-CompleterScript safety
 

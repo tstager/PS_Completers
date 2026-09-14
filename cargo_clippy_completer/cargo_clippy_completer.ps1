@@ -17,11 +17,17 @@ function Get-CargoClippyCompletionCache {
         CommandOptions       = @()
         CommandDescriptions  = @{}
         CommandValueMap      = @{}
-        PathOptions          = @('--manifest-path', '--target-dir')
+        PathOptions          = @('-m', '--manifest-path', '--target-dir')
         LintOptions          = @('-W', '--warn', '-A', '--allow', '-D', '--deny', '-F', '--forbid')
         LintDescriptions     = @{}
         LintValueMap         = @{}
         UnstableFlags        = @()
+        LintNames            = @()
+        LintNamesLoaded      = $false
+        TargetTriples        = @()
+        TargetTriplesLoaded  = $false
+        ManifestFacts        = $null
+        ManifestLoadedFor    = $null
     }
 
     Set-Variable -Name CargoClippyCompletionCache -Scope Script -Value $newCache
@@ -195,7 +201,8 @@ function Get-CargoClippyArgumentTokens {
 function Get-CargoClippyOptionMetadataFromLines {
     param([string[]]$Lines)
 
-    $result = @{}
+    # -F/--forbid and -F/--features are different options, so the table has to be case-exact.
+    $result = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
 
     foreach ($line in $Lines) {
         $trimmedLine = $line.TrimStart()
@@ -210,7 +217,8 @@ function Get-CargoClippyOptionMetadataFromLines {
             continue
         }
 
-        $tokens = @([regex]::Matches($spec, '(?:^|,\s*)(-[A-Za-z]|--[A-Za-z0-9][A-Za-z0-9\-]*)') | ForEach-Object { $_.Groups[1].Value })
+        # clippy writes its lint-level pairs as '-W / --warn [LINT]', cargo writes '-W, --warn'.
+        $tokens = @([regex]::Matches($spec, '(?:^|,\s*|\s*/\s*)(-[A-Za-z]|--[A-Za-z0-9][A-Za-z0-9\-]*)') | ForEach-Object { $_.Groups[1].Value })
         if ($tokens.Count -eq 0) {
             continue
         }
@@ -243,6 +251,7 @@ function Get-CargoClippyCommandValueMap {
         '--profile'        = @('<profile-name>')
         '--target'         = @('<target-triple>')
         '--manifest-path'  = @('<path>')
+        '-m'               = @('<path>')
         '--target-dir'     = @('<path>')
         '--jobs'           = @('<jobs>')
         '-j'               = @('<jobs>')
@@ -276,8 +285,218 @@ function Get-CargoClippyUnstableFlags {
         }
     }
 
-    $cache.UnstableFlags = @($flags | Sort-Object -Unique)
+    $cache.UnstableFlags = @($flags | Sort-Object -Unique -CaseSensitive)
     $cache.UnstableFlags
+}
+
+function Get-CargoClippyLintCatalog {
+    $cache = Get-CargoClippyCompletionCache
+    if ($cache.LintNamesLoaded) {
+        return $cache.LintNames
+    }
+
+    $cache.LintNamesLoaded = $true
+
+    $driver = Get-Command -Name clippy-driver.exe, clippy-driver -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $driver) {
+        return $cache.LintNames
+    }
+
+    $raw = try {
+        $null | & $driver.Source '-W' 'help' 2>&1 | ForEach-Object { $_.ToString() }
+    } catch {
+        @()
+    }
+
+    $lines = @($raw)
+
+    $names = New-Object System.Collections.Generic.List[object]
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    [void]$seen.Add('warnings')
+    [void]$names.Add([pscustomobject]@{ Name = 'warnings'; ToolTip = 'The group of every lint that is set to warn.' })
+
+    $inGroups = $false
+    foreach ($line in $lines) {
+        if ($line -match '^Lint groups ') {
+            $inGroups = $true
+            continue
+        }
+
+        if ($line -match '^Lint checks ') {
+            $inGroups = $false
+            continue
+        }
+
+        if ($line -notmatch '^\s+((?:clippy::)?[a-z][a-z0-9_-]*)\s{2,}(\S.*)$') {
+            continue
+        }
+
+        $name = $matches[1]
+        $detail = $matches[2].Trim()
+        if ($name -eq 'name' -or -not $seen.Add($name)) {
+            continue
+        }
+
+        $toolTip = if ($inGroups) { "Lint group: $detail" } else { $detail }
+        [void]$names.Add([pscustomobject]@{ Name = $name; ToolTip = $toolTip })
+    }
+
+    $cache.LintNames = @($names.ToArray())
+    $cache.LintNames
+}
+
+function Get-CargoClippyTargetTripleList {
+    $cache = Get-CargoClippyCompletionCache
+    if ($cache.TargetTriplesLoaded) {
+        return $cache.TargetTriples
+    }
+
+    $cache.TargetTriplesLoaded = $true
+
+    $rustup = Get-Command -Name rustup.exe, rustup -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($rustup) {
+        $raw = try {
+            $null | & $rustup.Source 'target' 'list' '--installed' 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        } catch {
+            @()
+        }
+
+        $cache.TargetTriples = @($raw)
+    }
+
+    if (@($cache.TargetTriples).Count -eq 0) {
+        $rustc = Get-Command -Name rustc.exe, rustc -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($rustc) {
+            $raw = try {
+                $null | & $rustc.Source '--print' 'target-list' 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            } catch {
+                @()
+            }
+
+            $cache.TargetTriples = @($raw)
+        }
+    }
+
+    $cache.TargetTriples
+}
+
+function Get-CargoClippyManifestInfo {
+    $cache = Get-CargoClippyCompletionCache
+
+    $manifestPath = $null
+    $directory = $PWD.ProviderPath
+    while (-not [string]::IsNullOrWhiteSpace($directory)) {
+        $candidate = Join-Path -Path $directory -ChildPath 'Cargo.toml'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $manifestPath = $candidate
+            break
+        }
+
+        $directory = Split-Path -Path $directory -Parent
+    }
+
+    if ($cache.ManifestLoadedFor -eq $manifestPath -and $null -ne $cache.ManifestFacts) {
+        return $cache.ManifestFacts
+    }
+
+    $profiles = New-Object System.Collections.Generic.List[string]
+    foreach ($builtIn in @('dev', 'release', 'test', 'bench')) {
+        [void]$profiles.Add($builtIn)
+    }
+
+    $features = New-Object System.Collections.Generic.List[string]
+    $packages = New-Object System.Collections.Generic.List[string]
+    $targets = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    foreach ($kind in @('bin', 'example', 'test', 'bench')) {
+        $targets[$kind] = New-Object System.Collections.Generic.List[string]
+    }
+
+    $raw = if ($manifestPath) {
+        try {
+            Get-Content -LiteralPath $manifestPath -ErrorAction Stop
+        } catch {
+            @()
+        }
+    } else {
+        @()
+    }
+
+    $lines = @($raw)
+
+    $section = ''
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[\[?([^\]]+)\]\]?$') {
+            $section = $matches[1].Trim()
+            if ($section -match '^profile\.([^.]+)') {
+                [void]$profiles.Add($matches[1].Trim('"', "'"))
+            }
+            continue
+        }
+
+        if ($trimmed -match '^([A-Za-z0-9_"''.-]+)\s*=') {
+            $key = $matches[1].Trim('"', "'")
+            switch -Regex ($section) {
+                '^features$' { [void]$features.Add($key) }
+                '^(package|bin|example|test|bench)$' {
+                    if ($key -eq 'name' -and $trimmed -match '=\s*["'']([^"'']+)["'']') {
+                        if ($section -eq 'package') {
+                            [void]$packages.Add($matches[1])
+                        } else {
+                            [void]$targets[$section].Add($matches[1])
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    $facts = [pscustomobject]@{
+        Profiles = @($profiles | Sort-Object -Unique -CaseSensitive)
+        Features = @($features | Sort-Object -Unique -CaseSensitive)
+        Packages = @($packages | Sort-Object -Unique -CaseSensitive)
+        Targets  = $targets
+    }
+
+    $cache.ManifestFacts = $facts
+    $cache.ManifestLoadedFor = $manifestPath
+    $facts
+}
+
+function Get-CargoClippyDynamicValueList {
+    param(
+        [string]$OptionName,
+        [bool]$AfterDoubleDash
+    )
+
+    if ($AfterDoubleDash) {
+        return @(Get-CargoClippyLintCatalog)
+    }
+
+    if ($OptionName -eq '--explain') {
+        return @(Get-CargoClippyLintCatalog)
+    }
+
+    if ($OptionName -eq '--target') {
+        return @(Get-CargoClippyTargetTripleList | ForEach-Object { [pscustomobject]@{ Name = $_; ToolTip = 'Rust target triple.' } })
+    }
+
+    $facts = Get-CargoClippyManifestInfo
+    $values = switch ($OptionName) {
+        '--profile' { @($facts.Profiles); break }
+        '--features' { @($facts.Features); break }
+        '-F' { @($facts.Features); break }
+        '--package' { @($facts.Packages); break }
+        '-p' { @($facts.Packages); break }
+        '--exclude' { @($facts.Packages); break }
+        '--bin' { @($facts.Targets['bin']); break }
+        '--example' { @($facts.Targets['example']); break }
+        '--test' { @($facts.Targets['test']); break }
+        '--bench' { @($facts.Targets['bench']); break }
+        default { @() }
+    }
+
+    @($values | ForEach-Object { [pscustomobject]@{ Name = $_; ToolTip = "$OptionName value from the local Cargo.toml." } })
 }
 
 function Initialize-CargoClippyCompletionCache {
@@ -289,16 +508,22 @@ function Initialize-CargoClippyCompletionCache {
     $clippyLines = Invoke-CargoClippyText -Arguments @('--help')
     $checkLines = Invoke-CargoText -Arguments @('check', '--help')
 
-    $descriptions = @{}
+    $descriptions = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
     foreach ($entry in (Get-CargoClippyOptionMetadataFromLines -Lines $checkLines).GetEnumerator()) {
         $descriptions[$entry.Key] = $entry.Value
     }
     foreach ($entry in (Get-CargoClippyOptionMetadataFromLines -Lines $clippyLines).GetEnumerator()) {
+        # The lint-level flags clippy documents are only accepted after '--'; keeping them out here
+        # also stops clippy's '-F / --forbid' text from overwriting cargo's '-F, --features'.
+        if ($cache.LintOptions -ccontains $entry.Key) {
+            continue
+        }
+
         $descriptions[$entry.Key] = $entry.Value
     }
 
     $cache.CommandDescriptions = $descriptions
-    $cache.CommandOptions = @($descriptions.Keys + '--') | Sort-Object -Unique
+    $cache.CommandOptions = @($descriptions.Keys + '--') | Sort-Object -Unique -CaseSensitive
     $cache.CommandValueMap = Get-CargoClippyCommandValueMap
     $cache.LintDescriptions = @{
         '-W'       = 'Set lint warnings.'
@@ -443,7 +668,17 @@ function Get-CargoClippyValueCompletions {
         return @()
     }
 
-    @(
+    $dynamic = @(Get-CargoClippyDynamicValueList -OptionName $OptionName -AfterDoubleDash $AfterDoubleDash |
+            Where-Object { $_.Name.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase) })
+    if ($dynamic.Count -gt 0) {
+        return @(
+            $dynamic | ForEach-Object {
+                New-CargoClippyCompletionResult -CompletionText ($PrefixText + $_.Name) -ListItemText $_.Name -ResultType 'ParameterValue' -ToolTip $_.ToolTip
+            }
+        )
+    }
+
+    $literal = @(
         $valueMap[$OptionName] |
             Where-Object { $_.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object {
@@ -451,18 +686,39 @@ function Get-CargoClippyValueCompletions {
                 New-CargoClippyCompletionResult -CompletionText ($PrefixText + $_) -ListItemText $_ -ResultType 'ParameterValue' -ToolTip $toolTip
             }
     )
+    if ($literal.Count -gt 0) {
+        return $literal
+    }
+
+    # A free-form value slot must keep what the user typed rather than collapse to nothing, which
+    # would hand the slot to PowerShell's filename fallback.
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        $toolTip = if ($AfterDoubleDash) { 'Clippy lint name.' } else { "$OptionName value" }
+        return @(New-CargoClippyCompletionResult -CompletionText ($PrefixText + $current) -ListItemText $current -ResultType 'ParameterValue' -ToolTip $toolTip)
+    }
+
+    @()
 }
 
 function Get-CargoClippyOptionCompletions {
     param(
         [string[]]$Options,
-        [hashtable]$Descriptions,
+        [object]$Descriptions,
         [string]$CurrentWord
     )
 
     $current = Remove-CargoClippyOuterQuotes -Value $CurrentWord
-    foreach ($option in $Options | Sort-Object -Unique) {
-        if ($option.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase)) {
+
+    # -V (--version) and -v (--verbose) are different options, so a single-dash word must be
+    # matched ordinally or tab would silently rewrite one into the other.
+    $comparison = if ($current -match '^-[^-]') {
+        [System.StringComparison]::Ordinal
+    } else {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+
+    foreach ($option in $Options | Sort-Object -Unique -CaseSensitive) {
+        if ($option.StartsWith($current, $comparison)) {
             $resultType = if ($option -eq '--') { 'ParameterValue' } else { 'ParameterName' }
             $toolTip = if ($Descriptions.ContainsKey($option)) { $Descriptions[$option] } else { 'Pass remaining arguments to Clippy/rustc.' }
             New-CargoClippyCompletionResult -CompletionText $option -ListItemText $option -ResultType $resultType -ToolTip $toolTip
