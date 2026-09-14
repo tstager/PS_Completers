@@ -10,14 +10,10 @@ function Get-GoCompletionCache {
         ExecutableResolved = $false
         ExecutablePath     = $null
         TextByKey          = @{}
-        RootCommands       = $null
-        HelpTopics         = $null
-        NestedCommands     = @{}
-        BuildFlags         = $null
-        EnvFlags           = $null
-        TestFlags          = $null
+        HelpModels         = @{}
         ToolNames          = $null
-        BuildModes         = $null
+        EnvNames           = $null
+        WorkingDirectory   = $null
     }
 
     Set-Variable -Name GoCompletionCache -Scope Script -Value $cache
@@ -97,76 +93,11 @@ function Get-GoHelpTopicMetadata {
     }
 }
 
-function Get-GoNestedCommandMetadata {
-    param([string]$CommandName)
-
-    switch ($CommandName) {
-        'mod' {
-            return [ordered]@{
-                'download' = 'download modules to local cache'
-                'edit'     = 'edit go.mod from tools or scripts'
-                'graph'    = 'print module requirement graph'
-                'init'     = 'initialize new module in current directory'
-                'tidy'     = 'add missing and remove unused modules'
-                'vendor'   = 'make vendored copy of dependencies'
-                'verify'   = 'verify dependencies have expected content'
-                'why'      = 'explain why packages or modules are needed'
-            }
-        }
-        'work' {
-            return [ordered]@{
-                'edit'   = 'edit go.work from tools or scripts'
-                'init'   = 'initialize workspace file'
-                'sync'   = 'sync workspace build list to modules'
-                'use'    = 'add modules to workspace file'
-                'vendor' = 'make vendored copy of dependencies'
-            }
-        }
-        'telemetry' {
-            return [ordered]@{
-                'off'   = 'disable telemetry collection and upload'
-                'local' = 'keep telemetry locally without uploading'
-                'on'    = 'enable telemetry collection and upload'
-            }
-        }
-    }
-
-    [ordered]@{}
-}
-
 function Get-GoFallbackToolNames {
     @(
         'asm', 'cgo', 'compile', 'covdata', 'cover', 'doc', 'fix', 'link',
         'nm', 'objdump', 'pack', 'pprof', 'preprofile', 'test2json', 'trace', 'vet'
     )
-}
-
-function Get-GoKnownItemsFromText {
-    param(
-        [string]$Text,
-        [string[]]$KnownItems
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Text)) {
-        Write-Output -NoEnumerate ([string[]]@())
-        return
-    }
-
-    $results = New-Object System.Collections.Generic.List[string]
-    foreach ($item in $KnownItems) {
-        $escaped = [regex]::Escape($item)
-        $pattern = if ($item.StartsWith('-', [System.StringComparison]::Ordinal)) {
-            "(?<![A-Za-z0-9_.-])$escaped(?![A-Za-z0-9_.-])"
-        } else {
-            "(?<![A-Za-z0-9_.-])$escaped(?![A-Za-z0-9_.-])"
-        }
-
-        if ([regex]::IsMatch($Text, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-            [void]$results.Add($item)
-        }
-    }
-
-    Write-Output -NoEnumerate ($results.ToArray())
 }
 
 function Resolve-GoExecutablePath {
@@ -201,6 +132,20 @@ function Resolve-GoExecutablePath {
     $cache.ExecutablePath
 }
 
+function Reset-GoCacheForLocation {
+    # go tool output is module-scoped, so a cache built in one module must not be
+    # reused in another.
+    $cache = Get-GoCompletionCache
+    $location = (Get-Location).Path
+    if ($cache.WorkingDirectory -ne $location) {
+        $cache.WorkingDirectory = $location
+        $cache.TextByKey = @{}
+        $cache.HelpModels = @{}
+        $cache.ToolNames = $null
+        $cache.EnvNames = $null
+    }
+}
+
 function Get-GoText {
     param(
         [string]$CacheKey,
@@ -219,7 +164,8 @@ function Get-GoText {
     }
 
     try {
-        $text = (& $goPath @Arguments 2>&1 | Out-String -Width 4096)
+        # Standard input is closed so a tool that reads it cannot hang the prompt.
+        $text = ($null | & $goPath @Arguments 2>&1 | Out-String -Width 4096)
     } catch {
         $text = ''
     }
@@ -232,139 +178,322 @@ function Get-GoText {
     $text
 }
 
-function Get-GoRootCommands {
+function Get-GoBuildModeValues {
+    $known = @('archive', 'c-archive', 'c-shared', 'default', 'shared', 'exe', 'pie', 'plugin')
+    $text = Get-GoText -CacheKey 'help:buildmode' -Arguments @('help', 'buildmode')
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $known
+    }
+
+    $found = @($known | Where-Object { [regex]::IsMatch($text, "(?<![A-Za-z0-9_.-])$([regex]::Escape($_))(?![A-Za-z0-9_.-])") })
+    if ($found.Count -eq 0) {
+        return $known
+    }
+
+    $found
+}
+
+function Get-GoEnumValues {
+    param([string]$OptionName)
+
+    # go documents these value sets in prose rather than in a machine-readable
+    # shape, so they stay explicit; the audit confirmed each one matches go1.27.
+    switch ($OptionName) {
+        '-buildmode' { return Get-GoBuildModeValues }
+        '-buildvcs'  { return @('auto', 'true', 'false') }
+        '-compiler'  { return @('gc', 'gccgo') }
+        '-covermode' { return @('set', 'count', 'atomic') }
+        '-mod'       { return @('readonly', 'vendor', 'mod') }
+    }
+
+    return ,@()
+}
+
+function Add-GoHelpFlag {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$Flags,
+        [string]$Name,
+        [string]$ValueName,
+        [bool]$Authoritative
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+
+    # A value spec that is not a plain identifier (a quoted list, a bracketed
+    # pattern) is still a value, but its name is not worth showing.
+    if (-not [string]::IsNullOrWhiteSpace($ValueName) -and $ValueName -notmatch '^[A-Za-z][A-Za-z0-9_.,-]*$') {
+        $ValueName = 'value'
+    }
+
+    $values = @(Get-GoEnumValues -OptionName $Name)
+
+    if ($Flags.Contains($Name)) {
+        if (-not $Authoritative) {
+            return
+        }
+
+        $existing = $Flags[$Name]
+        if ([string]::IsNullOrWhiteSpace($existing.ValueName) -and -not [string]::IsNullOrWhiteSpace($ValueName)) {
+            $existing.ValueName = $ValueName
+            $existing.TakesValue = $true
+        }
+
+        if (@($existing.Values).Count -eq 0 -and $values.Count -gt 0) {
+            $existing.Values = $values
+        }
+
+        return
+    }
+
+    $Flags[$Name] = [pscustomobject]@{
+        Name       = $Name
+        TakesValue = (-not [string]::IsNullOrWhiteSpace($ValueName))
+        ValueName  = $ValueName
+        Values     = $values
+    }
+}
+
+function ConvertFrom-GoHelpText {
+    param(
+        [string]$Text,
+        [int]$CommandDepth = 0
+    )
+
+    $flags = [ordered]@{}
+    $commands = [ordered]@{}
+    $topics = [ordered]@{}
+    $operands = New-Object System.Collections.Generic.List[string]
+    $choices = New-Object System.Collections.Generic.List[string]
+    $usage = ''
+    $includesBuildFlags = $false
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return [pscustomobject]@{
+            Usage              = $usage
+            IncludesBuildFlags = $includesBuildFlags
+            Flags              = $flags
+            Commands           = $commands
+            Topics             = $topics
+            Operands           = @()
+            Choices            = @()
+        }
+    }
+
+    $lines = @([regex]::Split($Text, '\r?\n'))
+    $section = ''
+
+    foreach ($line in $lines) {
+        if ($line -match '^usage:\s+go\s+(?<rest>.*)$' -and [string]::IsNullOrEmpty($usage)) {
+            $usage = $Matches.rest
+            continue
+        }
+
+        if ($line -match '^The commands are:\s*$' -or $line -match '^The subcommands are:\s*$') {
+            $section = 'Commands'
+            continue
+        }
+
+        if ($line -match '^Additional help topics:\s*$') {
+            $section = 'Topics'
+            continue
+        }
+
+        if ($line -match '^\S' -and $line -notmatch '^usage:') {
+            $section = ''
+        }
+
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            continue
+        }
+
+        if ($section -eq 'Commands' -or $section -eq 'Topics') {
+            # The gap collapses to a single space when the name is the longest in
+            # the table, as "buildconstraint" is under Additional help topics.
+            if ($line -match '^\s+(?<name>[a-z][a-z0-9._-]*)\s+(?<description>\S.*)$') {
+                if ($section -eq 'Commands') {
+                    $commands[$Matches.name] = $Matches.description.Trim()
+                } else {
+                    $topics[$Matches.name] = $Matches.description.Trim()
+                }
+            }
+
+            continue
+        }
+
+        # An indented flag definition ("\t-a", "\t-p n", "\t-ldflags '[pattern=]arg
+        # list'"). go indents these by one tab or two spaces and indents their
+        # description lines further, which is what separates them from prose.
+        if ($line -match '^[ \t]{1,3}-{1,2}(?<name>[A-Za-z][A-Za-z0-9_-]*)(?<rest>([ =].*)?)$') {
+            $flagName = '-' + $Matches.name
+            $flagValue = $Matches.rest.Trim().TrimStart('=').Trim()
+            if ($flagValue -match '^(?<first>\S+)') {
+                $flagValue = $Matches.first
+            }
+
+            Add-GoHelpFlag -Flags $flags -Name $flagName -ValueName $flagValue -Authoritative $true
+        }
+    }
+
+    if (-not [string]::IsNullOrEmpty($usage)) {
+        $includesBuildFlags = $usage -match '\[build(?:/test)? flags'
+
+        foreach ($group in [regex]::Matches($usage, '\[(?<body>[^\]]+)\]')) {
+            $body = $group.Groups['body'].Value
+            if ($body -notmatch '(?<!\S)-') {
+                if ($body -match '^\s*flags?\s*$' -or $body -match 'flags\s*$') {
+                    continue
+                }
+
+                $alternatives = @($body -split '\s*\|\s*' | ForEach-Object { $_.Trim() })
+                if ($alternatives.Count -gt 1 -and @($alternatives | Where-Object { $_ -match '^[a-z][a-z0-9._-]*$' }).Count -eq $alternatives.Count) {
+                    # A literal alternation such as "go telemetry [off|local|on]".
+                    foreach ($choice in $alternatives) {
+                        [void]$choices.Add($choice)
+                    }
+
+                    continue
+                }
+
+                foreach ($operand in $alternatives) {
+                    [void]$operands.Add($operand)
+                }
+
+                continue
+            }
+
+            foreach ($alternative in ($body -split '\s*\|\s*')) {
+                if ($alternative -notmatch '^\s*-{1,2}(?<name>[A-Za-z][A-Za-z0-9_-]*)(?<rest>.*)$') {
+                    continue
+                }
+
+                $flagName = '-' + $Matches.name
+                $rest = $Matches.rest.Trim().TrimStart('=').Trim()
+                $valueName = ''
+                if ($rest -match '^(?<value>\S+)') {
+                    $valueName = $Matches.value
+                }
+
+                Add-GoHelpFlag -Flags $flags -Name $flagName -ValueName $valueName -Authoritative $false
+            }
+        }
+
+        # Bare operands outside brackets, minus the command path itself:
+        # "go run [build flags] [-exec xprog] package [arguments...]".
+        $bare = @([regex]::Replace($usage, '\[[^\]]*\]', ' ') -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        foreach ($token in ($bare | Select-Object -Skip $CommandDepth)) {
+            if ($token -notmatch '^-') {
+                [void]$operands.Add($token)
+            }
+        }
+    }
+
+    # Prose: "The -n flag prints commands that would be executed."
+    foreach ($group in [regex]::Matches($Text, '(?<!\S)-{1,2}(?<name>[a-z][a-z0-9_-]*)(?:=(?<value>\S+?))?\s+flag')) {
+        $valueName = if ($group.Groups['value'].Success) { $group.Groups['value'].Value } else { '' }
+        Add-GoHelpFlag -Flags $flags -Name ('-' + $group.Groups['name'].Value) -ValueName $valueName -Authoritative $false
+    }
+
+    [pscustomobject]@{
+        Usage              = $usage
+        IncludesBuildFlags = $includesBuildFlags
+        Flags              = $flags
+        Commands           = $commands
+        Topics             = $topics
+        Operands           = @($operands.ToArray())
+        Choices            = @($choices.ToArray())
+    }
+}
+
+function Get-GoHelpModel {
+    param([string[]]$Path)
+
     $cache = Get-GoCompletionCache
-    if ($null -ne $cache.RootCommands) {
-        return $cache.RootCommands
+    $segments = @(@($Path) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $key = if ($segments.Count -gt 0) { $segments -join ' ' } else { '<root>' }
+
+    if ($cache.HelpModels.ContainsKey($key)) {
+        return $cache.HelpModels[$key]
     }
 
-    $metadata = Get-GoRootCommandMetadata
-    $text = Get-GoText -CacheKey 'help' -Arguments @('help')
-    $commands = Get-GoKnownItemsFromText -Text $text -KnownItems @($metadata.Keys)
-    if ($commands.Count -eq 0) {
-        $commands = @($metadata.Keys)
+    $text = Get-GoText -CacheKey "help:$key" -Arguments (@('help') + $segments)
+    if ($segments.Count -eq 1 -and $segments[0] -eq 'test') {
+        # go test's own flags live in 'go help testflag', not in 'go help test'.
+        $text += "`n" + (Get-GoText -CacheKey 'help:testflag' -Arguments @('help', 'testflag'))
     }
 
-    $cache.RootCommands = $commands
-    $commands
+    $model = ConvertFrom-GoHelpText -Text $text -CommandDepth $segments.Count
+    $cache.HelpModels[$key] = $model
+    $model
+}
+
+function Get-GoRootCommands {
+    $model = Get-GoHelpModel -Path @()
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @($model.Commands.Keys)) {
+        [void]$names.Add($name)
+    }
+
+    # 'go help' does not list 'help' itself.
+    foreach ($name in @((Get-GoRootCommandMetadata).Keys)) {
+        if (-not $names.Contains($name)) {
+            [void]$names.Add($name)
+        }
+    }
+
+    @($names.ToArray())
 }
 
 function Get-GoHelpTopics {
-    $cache = Get-GoCompletionCache
-    if ($null -ne $cache.HelpTopics) {
-        return $cache.HelpTopics
+    $model = Get-GoHelpModel -Path @()
+    $names = @($model.Topics.Keys)
+    if ($names.Count -gt 0) {
+        return $names
     }
 
-    $metadata = Get-GoHelpTopicMetadata
-    $text = Get-GoText -CacheKey 'help' -Arguments @('help')
-    $topics = Get-GoKnownItemsFromText -Text $text -KnownItems @($metadata.Keys)
-    if ($topics.Count -eq 0) {
-        $topics = @($metadata.Keys)
+    @((Get-GoHelpTopicMetadata).Keys)
+}
+
+function Get-GoCommandDescription {
+    param([string]$Name)
+
+    $model = Get-GoHelpModel -Path @()
+    if ($model.Commands.Contains($Name)) {
+        return $model.Commands[$Name]
     }
 
-    $cache.HelpTopics = $topics
-    $topics
+    $metadata = Get-GoRootCommandMetadata
+    if ($metadata.Contains($Name)) {
+        return $metadata[$Name]
+    }
+
+    "go $Name"
 }
 
 function Get-GoNestedCommands {
     param([string]$CommandName)
 
-    $cache = Get-GoCompletionCache
-    if ($cache.NestedCommands.ContainsKey($CommandName)) {
-        return $cache.NestedCommands[$CommandName]
-    }
-
-    $metadata = Get-GoNestedCommandMetadata -CommandName $CommandName
-    $text = Get-GoText -CacheKey "help:$CommandName" -Arguments @('help', $CommandName)
-    $nested = Get-GoKnownItemsFromText -Text $text -KnownItems @($metadata.Keys)
-    if ($nested.Count -eq 0) {
-        $nested = @($metadata.Keys)
-    }
-
-    $cache.NestedCommands[$CommandName] = $nested
-    $nested
+    @((Get-GoHelpModel -Path @($CommandName)).Commands.Keys)
 }
 
-function Get-GoBuildFlags {
-    $cache = Get-GoCompletionCache
-    if ($null -ne $cache.BuildFlags) {
-        return $cache.BuildFlags
-    }
-
-    $knownFlags = @(
-        '-C', '-a', '-n', '-p', '-race', '-msan', '-asan', '-cover', '-v', '-work', '-x',
-        '-asmflags', '-buildmode', '-buildvcs', '-compiler', '-gccgoflags', '-gcflags',
-        '-installsuffix', '-json', '-ldflags', '-linkshared', '-mod', '-modcacherw',
-        '-modfile', '-overlay', '-pgo', '-pkgdir', '-tags', '-trimpath', '-toolexec',
-        '-covermode', '-coverpkg'
+function Get-GoNestedCommandDescription {
+    param(
+        [string]$CommandName,
+        [string]$Name
     )
 
-    $text = Get-GoText -CacheKey 'help:build' -Arguments @('help', 'build')
-    $flags = Get-GoKnownItemsFromText -Text $text -KnownItems $knownFlags
-    if ($flags.Count -eq 0) {
-        $flags = $knownFlags
+    $model = Get-GoHelpModel -Path @($CommandName)
+    if ($model.Commands.Contains($Name)) {
+        return $model.Commands[$Name]
     }
 
-    $cache.BuildFlags = $flags
-    $flags
+    "go $CommandName $Name"
 }
 
-function Get-GoEnvFlags {
-    $cache = Get-GoCompletionCache
-    if ($null -ne $cache.EnvFlags) {
-        return $cache.EnvFlags
-    }
-
-    $knownFlags = @('-json', '-changed', '-u', '-w')
-    $text = Get-GoText -CacheKey 'help:env' -Arguments @('help', 'env')
-    $flags = Get-GoKnownItemsFromText -Text $text -KnownItems $knownFlags
-    if ($flags.Count -eq 0) {
-        $flags = $knownFlags
-    }
-
-    $cache.EnvFlags = $flags
-    $flags
-}
-
-function Get-GoTestFlags {
-    $cache = Get-GoCompletionCache
-    if ($null -ne $cache.TestFlags) {
-        return $cache.TestFlags
-    }
-
-    $knownFlags = @(
-        '-args', '-c', '-exec', '-json', '-o', '-bench', '-benchtime', '-count',
-        '-coverprofile', '-cpu', '-failfast', '-fullpath', '-list', '-outputdir',
-        '-parallel', '-run', '-short', '-skip', '-timeout', '-v', '-vet'
-    )
-
-    $text = (Get-GoText -CacheKey 'help:test' -Arguments @('help', 'test')) +
-        (Get-GoText -CacheKey 'help:testflag' -Arguments @('help', 'testflag'))
-
-    $flags = Get-GoKnownItemsFromText -Text $text -KnownItems $knownFlags
-    if ($flags.Count -eq 0) {
-        $flags = $knownFlags
-    }
-
-    $cache.TestFlags = $flags
-    $flags
-}
-
-function Get-GoBuildModeValues {
-    $cache = Get-GoCompletionCache
-    if ($null -ne $cache.BuildModes) {
-        return $cache.BuildModes
-    }
-
-    $knownValues = @('archive', 'c-archive', 'c-shared', 'default', 'shared', 'exe', 'pie', 'plugin')
-    $text = Get-GoText -CacheKey 'help:buildmode' -Arguments @('help', 'buildmode')
-    $values = Get-GoKnownItemsFromText -Text $text -KnownItems $knownValues
-    if ($values.Count -eq 0) {
-        $values = $knownValues
-    }
-
-    $cache.BuildModes = $values
-    $values
+function Get-GoBuildFlagModel {
+    (Get-GoHelpModel -Path @('build')).Flags
 }
 
 function Get-GoToolNames {
@@ -373,50 +502,74 @@ function Get-GoToolNames {
         return $cache.ToolNames
     }
 
-    $knownNames = Get-GoFallbackToolNames
-    $text = Get-GoText -CacheKey 'tool' -Arguments @('tool')
-    $names = Get-GoKnownItemsFromText -Text $text -KnownItems $knownNames
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ([regex]::Split((Get-GoText -CacheKey 'tool' -Arguments @('tool')), '\r?\n'))) {
+        $candidate = $line.Trim()
+        if ($candidate -match '^[a-z][a-z0-9./_-]*$') {
+            [void]$names.Add($candidate)
+        }
+    }
+
     if ($names.Count -eq 0) {
-        $names = $knownNames
+        $cache.ToolNames = Get-GoFallbackToolNames
+    } else {
+        $cache.ToolNames = @($names.ToArray())
     }
 
-    $cache.ToolNames = $names
-    $names
+    $cache.ToolNames
 }
 
-function Test-GoBuildFamilyCommand {
-    param([string]$CommandName)
+function Get-GoEnvNames {
+    $cache = Get-GoCompletionCache
+    if ($null -ne $cache.EnvNames) {
+        return $cache.EnvNames
+    }
 
-    @('build', 'clean', 'get', 'install', 'list', 'run', 'test') -contains $CommandName
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ([regex]::Split((Get-GoText -CacheKey 'env' -Arguments @('env')), '\r?\n'))) {
+        if ($line -match '^\s*(?:set\s+)?(?<name>[A-Z][A-Z0-9_]*)=') {
+            [void]$names.Add($Matches.name)
+        }
+    }
+
+    if ($names.Count -eq 0) {
+        $cache.EnvNames = @(
+            'CGO_ENABLED', 'GO111MODULE', 'GOARCH', 'GOAUTH', 'GOBIN', 'GOCACHE', 'GOCOVERDIR',
+            'GOENV', 'GOEXE', 'GOFLAGS', 'GOHOSTARCH', 'GOHOSTOS', 'GOINSECURE', 'GOMOD',
+            'GOMODCACHE', 'GONOPROXY', 'GONOSUMDB', 'GOOS', 'GOPATH', 'GOPRIVATE', 'GOPROXY',
+            'GOROOT', 'GOSUMDB', 'GOTELEMETRY', 'GOTELEMETRYDIR', 'GOTOOLCHAIN', 'GOWORK'
+        )
+    } else {
+        $cache.EnvNames = @($names.ToArray() | Sort-Object -Unique)
+    }
+
+    $cache.EnvNames
 }
 
-function Get-GoCommandFlags {
-    param([string]$CommandName)
+function Get-GoResolvedFlagModel {
+    param([string[]]$Path)
 
-    switch ($CommandName) {
-        'env' {
-            return Get-GoEnvFlags
-        }
-        'test' {
-            return @(
-                @(Get-GoBuildFlags | Where-Object { $_ -ne '-C' }) +
-                @(Get-GoTestFlags)
-            ) | Select-Object -Unique
-        }
-        'build' {
-            return @(
-                @(Get-GoBuildFlags | Where-Object { $_ -ne '-C' }) +
-                @('-o')
-            ) | Select-Object -Unique
-        }
-        default {
-            if (Test-GoBuildFamilyCommand -CommandName $CommandName) {
-                return @(Get-GoBuildFlags | Where-Object { $_ -ne '-C' })
+    $model = Get-GoHelpModel -Path $Path
+    $merged = [ordered]@{}
+
+    foreach ($name in @($model.Flags.Keys)) {
+        $merged[$name] = $model.Flags[$name]
+    }
+
+    if ($model.IncludesBuildFlags) {
+        $buildFlags = Get-GoBuildFlagModel
+        foreach ($name in @($buildFlags.Keys)) {
+            # -C must be the first argument on the command line, so it belongs to
+            # the root position rather than to a command's own flag set.
+            if ($name -eq '-C' -or $merged.Contains($name)) {
+                continue
             }
+
+            $merged[$name] = $buildFlags[$name]
         }
     }
 
-    return ,@()
+    $merged
 }
 
 function Get-GoOptionBaseName {
@@ -426,98 +579,31 @@ function Get-GoOptionBaseName {
         return $null
     }
 
-    if ($Token -match '^(?<name>-[^=]+)=') {
-        return $matches['name']
+    # go's flag package accepts -flag and --flag interchangeably.
+    $normalized = if ($Token -match '^--[^-]') { $Token.Substring(1) } else { $Token }
+
+    if ($normalized -match '^(?<name>-[^=]+)=') {
+        return $Matches['name']
     }
 
-    $Token
-}
-
-function Get-GoEnumValues {
-    param([string]$OptionName)
-
-    switch ($OptionName) {
-        '-buildmode' {
-            return Get-GoBuildModeValues
-        }
-        '-buildvcs' {
-            return @('auto', 'true', 'false')
-        }
-        '-compiler' {
-            return @('gc', 'gccgo')
-        }
-        '-covermode' {
-            return @('set', 'count', 'atomic')
-        }
-        '-mod' {
-            return @('readonly', 'vendor', 'mod')
-        }
-    }
-
-    return ,@()
+    $normalized
 }
 
 function Get-GoValuePlaceholder {
-    param([string]$OptionName)
-
-    switch ($OptionName) {
-        '-asmflags'      { return '<pattern=arg list>' }
-        '-coverpkg'      { return '<pattern[,pattern]>' }
-        '-exec'          { return '<command>' }
-        '-gccgoflags'    { return '<pattern=arg list>' }
-        '-gcflags'       { return '<pattern=arg list>' }
-        '-installsuffix' { return '<suffix>' }
-        '-ldflags'       { return '<pattern=arg list>' }
-        '-outputdir'     { return '<directory>' }
-        '-p'             { return '<n>' }
-        '-parallel'      { return '<n>' }
-        '-tags'          { return '<tag,list>' }
-        '-timeout'       { return '<duration>' }
-        '-toolexec'      { return '<cmd args>' }
-        '-vet'           { return '<list|off>' }
-        default          { return '<value>' }
-    }
-}
-
-function Test-GoOptionRequiresValue {
     param(
-        [string]$CommandName,
-        [string]$OptionName
+        [string]$OptionName,
+        [object]$FlagSpec
     )
 
-    if ([string]::IsNullOrWhiteSpace($OptionName)) {
-        return $false
+    if ($null -ne $FlagSpec -and -not [string]::IsNullOrWhiteSpace($FlagSpec.ValueName)) {
+        return '<' + $FlagSpec.ValueName + '>'
     }
 
-    switch ($CommandName) {
-        $null {
-            return $OptionName -eq '-C'
-        }
-        'env' {
-            return @('-u', '-w') -contains $OptionName
-        }
-        'test' {
-            return @(
-                '-p', '-asmflags', '-buildmode', '-buildvcs', '-compiler', '-gccgoflags',
-                '-gcflags', '-installsuffix', '-ldflags', '-mod', '-modfile', '-overlay',
-                '-pgo', '-pkgdir', '-tags', '-toolexec', '-covermode', '-coverpkg',
-                '-o', '-exec', '-bench', '-benchtime', '-count', '-coverprofile',
-                '-cpu', '-list', '-outputdir', '-parallel', '-run', '-skip', '-timeout',
-                '-vet'
-            ) -contains $OptionName
-        }
-        default {
-            if (Test-GoBuildFamilyCommand -CommandName $CommandName) {
-                return @(
-                    '-p', '-asmflags', '-buildmode', '-buildvcs', '-compiler', '-gccgoflags',
-                    '-gcflags', '-installsuffix', '-ldflags', '-mod', '-modfile', '-overlay',
-                    '-pgo', '-pkgdir', '-tags', '-toolexec', '-covermode', '-coverpkg', '-o'
-                ) -contains $OptionName
-            }
-        }
+    switch ($OptionName) {
+        '-exec'    { return '<command>' }
+        '-timeout' { return '<duration>' }
+        default    { return '<value>' }
     }
-
-    $false
 }
 
 function Get-GoQuoteCharacter {
@@ -608,7 +694,9 @@ function Get-GoPathCompletions {
             $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
         } |
         ForEach-Object {
-            $completionText = ConvertTo-GoQuotedValue -Value $_.CompletionText -QuoteCharacter $quoteCharacter
+            # CompleteFilename applies its own quoting; strip it before applying
+            # the quoting style the user actually typed.
+            $completionText = ConvertTo-GoQuotedValue -Value (Remove-GoOuterQuotes -InputText $_.CompletionText) -QuoteCharacter $quoteCharacter
             if ($InlinePrefix) {
                 $completionText = $InlinePrefix + $completionText
             }
@@ -619,60 +707,59 @@ function Get-GoPathCompletions {
     Write-Output -NoEnumerate @($completions)
 }
 
-function Get-GoCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback = ''
-    )
+function Split-GoCommandLine {
+    param([string]$Text)
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # A quote-aware splitter. An unterminated quote runs to the end of the input,
+    # which is exactly what happens while the user is still typing a quoted path
+    # that contains a space.
+    $tokens = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrEmpty($Text)) {
+        return @()
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
+    $builder = New-Object System.Text.StringBuilder
+    $started = $false
+    $quote = [char]0
 
-    $tokenStart = 0
-    $inSingleQuote = $false
-    $inDoubleQuote = $false
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $character = $Text[$index]
 
-    for ($index = 0; $index -lt $prefix.Length; $index++) {
-        $character = $prefix[$index]
-
-        if (($character -eq '`') -and $inDoubleQuote -and (($index + 1) -lt $prefix.Length)) {
-            $index++
-            continue
-        }
-
-        if (($character -eq "'") -and -not $inDoubleQuote) {
-            if ($inSingleQuote -and (($index + 1) -lt $prefix.Length) -and ($prefix[$index + 1] -eq "'")) {
-                $index++
-                continue
+        if ($quote -ne [char]0) {
+            [void]$builder.Append($character)
+            if ($character -eq $quote) {
+                $quote = [char]0
             }
 
-            $inSingleQuote = -not $inSingleQuote
             continue
         }
 
-        if (($character -eq '"') -and -not $inSingleQuote) {
-            $inDoubleQuote = -not $inDoubleQuote
+        if ($character -eq '"' -or $character -eq "'") {
+            $quote = $character
+            $started = $true
+            [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and -not $inSingleQuote -and -not $inDoubleQuote) {
-            $tokenStart = $index + 1
+        if ([char]::IsWhiteSpace($character)) {
+            if ($started) {
+                [void]$tokens.Add($builder.ToString())
+                [void]$builder.Clear()
+                $started = $false
+            }
+
+            continue
         }
+
+        $started = $true
+        [void]$builder.Append($character)
     }
 
-    if ($tokenStart -lt $prefix.Length) {
-        return $prefix.Substring($tokenStart)
+    if ($started) {
+        [void]$tokens.Add($builder.ToString())
     }
 
-    $Fallback
+    @($tokens.ToArray())
 }
 
 function Get-GoCommandState {
@@ -688,34 +775,27 @@ function Get-GoCommandState {
         ''
     }
 
-    $relativeCursor = if ($CommandAst.Extent) {
-        $CursorPosition - $CommandAst.Extent.StartOffset
-    } else {
-        $CursorPosition
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($relativeCursor, 0), $line.Length)
+    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $line.Length)
     $prefix = $line.Substring(0, $safeCursor)
-    $hasTrailingSpace = ($prefix -match '\s$') -or ($CommandAst.Extent -and $CursorPosition -gt $CommandAst.Extent.EndOffset)
-    $tokenMatches = [regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+')
-    $allTokens = @($tokenMatches | ForEach-Object { $_.Value })
+    $hasTrailingSpace = ($prefix -match '\s$') -or ($CommandAst.Extent -and $CursorPosition -gt $line.Length)
+    $allTokens = @(Split-GoCommandLine -Text $prefix)
 
     if ($hasTrailingSpace) {
         $currentWord = ''
         $priorTokens = if ($allTokens.Count -gt 1) {
-            @($allTokens[1..($allTokens.Count - 1)])
+            @($allTokens | Select-Object -Skip 1)
         } else {
             @()
         }
     } else {
         $currentWord = if ($allTokens.Count -gt 0) {
-            $allTokens[-1]
+            $allTokens[$allTokens.Count - 1]
         } else {
-            Get-GoCurrentToken -Line $line -CursorPosition $safeCursor -Fallback $FallbackWordToComplete
+            $FallbackWordToComplete
         }
 
         $priorTokens = if ($allTokens.Count -gt 2) {
-            @($allTokens[1..($allTokens.Count - 2)])
+            @($allTokens | Select-Object -Skip 1 -First ($allTokens.Count - 2))
         } else {
             @()
         }
@@ -727,6 +807,23 @@ function Get-GoCommandState {
     }
 }
 
+function Test-GoOptionRequiresValue {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$FlagModel,
+        [string]$OptionName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OptionName) -or $null -eq $FlagModel) {
+        return $false
+    }
+
+    if (-not $FlagModel.Contains($OptionName)) {
+        return $false
+    }
+
+    [bool]$FlagModel[$OptionName].TakesValue
+}
+
 function Get-GoCommandContext {
     param([string[]]$Tokens)
 
@@ -736,6 +833,8 @@ function Get-GoCommandContext {
     $subcommandName = $null
     $envMode = $null
     $testArgsSeen = $false
+    $operandCount = 0
+    $flagModel = $null
 
     foreach ($token in $Tokens) {
         if ($pendingOption) {
@@ -760,106 +859,53 @@ function Get-GoCommandContext {
 
             if ($rootCommands -contains $token) {
                 $commandName = $token
+                $flagModel = Get-GoResolvedFlagModel -Path @($commandName)
             }
 
             continue
         }
 
-        switch ($commandName) {
-            'env' {
-                if ($baseName -eq '-w') {
-                    $envMode = 'w'
-                    if ($token -notlike '*=*') {
-                        $pendingOption = '-w'
-                    }
-
-                    continue
-                }
-
-                if ($baseName -eq '-u') {
-                    $envMode = 'u'
-                    if ($token -notlike '*=*') {
-                        $pendingOption = '-u'
-                    }
-
-                    continue
-                }
-
-                if ($token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    continue
-                }
-
-                continue
-            }
-            'help' {
-                if (-not $subcommandName -and -not $token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    $subcommandName = $token
-                }
-
-                continue
-            }
-            'mod' {
-                if (-not $subcommandName -and -not $token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    $subcommandName = $token
-                }
-
-                continue
-            }
-            'telemetry' {
-                if (-not $subcommandName -and -not $token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    $subcommandName = $token
-                }
-
-                continue
-            }
-            'tool' {
-                if (-not $subcommandName -and -not $token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    $subcommandName = $token
-                }
-
-                continue
-            }
-            'work' {
-                if (-not $subcommandName -and -not $token.StartsWith('-', [System.StringComparison]::Ordinal)) {
-                    $subcommandName = $token
-                }
-
-                continue
-            }
-            'test' {
-                if ($testArgsSeen) {
-                    continue
-                }
-
-                if ($baseName -eq '-args') {
-                    $testArgsSeen = $true
-                    continue
-                }
-
-                if (Test-GoOptionRequiresValue -CommandName $commandName -OptionName $baseName) {
-                    if ($token -notlike '*=*') {
-                        $pendingOption = $baseName
-                    }
-
-                    continue
-                }
-
-                continue
-            }
-            default {
-                if (Test-GoBuildFamilyCommand -CommandName $commandName) {
-                    if (Test-GoOptionRequiresValue -CommandName $commandName -OptionName $baseName) {
-                        if ($token -notlike '*=*') {
-                            $pendingOption = $baseName
-                        }
-
-                        continue
-                    }
-
-                    continue
-                }
-            }
+        if ($commandName -eq 'test' -and $testArgsSeen) {
+            continue
         }
+
+        if ($commandName -eq 'test' -and $baseName -eq '-args') {
+            $testArgsSeen = $true
+            continue
+        }
+
+        if ($token.StartsWith('-', [System.StringComparison]::Ordinal)) {
+            if ($commandName -eq 'env') {
+                if ($baseName -eq '-w') { $envMode = 'w' }
+                if ($baseName -eq '-u') { $envMode = 'u' }
+            }
+
+            if (($token -notlike '*=*') -and (Test-GoOptionRequiresValue -FlagModel $flagModel -OptionName $baseName)) {
+                $pendingOption = $baseName
+            }
+
+            continue
+        }
+
+        if (-not $subcommandName -and @((Get-GoHelpModel -Path @($commandName)).Commands.Keys).Count -gt 0) {
+            $subcommandName = $token
+            if ($commandName -ne 'help' -and $commandName -ne 'tool') {
+                $flagModel = Get-GoResolvedFlagModel -Path @($commandName, $subcommandName)
+            }
+
+            continue
+        }
+
+        if (-not $subcommandName -and ($commandName -eq 'help' -or $commandName -eq 'tool')) {
+            $subcommandName = $token
+            continue
+        }
+
+        $operandCount++
+    }
+
+    if ($null -eq $flagModel) {
+        $flagModel = [ordered]@{}
     }
 
     [pscustomobject]@{
@@ -868,6 +914,8 @@ function Get-GoCommandContext {
         PendingOption = $pendingOption
         EnvMode       = $envMode
         TestArgsSeen  = $testArgsSeen
+        OperandCount  = $operandCount
+        FlagModel     = $flagModel
     }
 }
 
@@ -900,14 +948,21 @@ function Get-GoUniqueCompletions {
 
 function Get-GoOptionCompletions {
     param(
-        [string[]]$Options,
+        [System.Collections.Specialized.OrderedDictionary]$FlagModel,
         [string]$WordToComplete
     )
 
+    # go accepts --flag as well as -flag, so a typed -- keeps the -- spelling.
+    $doubleDash = $WordToComplete -match '^--[^-]|^--$'
+    $needle = if ($WordToComplete -match '^--[^-]') { $WordToComplete.Substring(1) } elseif ($WordToComplete -eq '--') { '-' } else { $WordToComplete }
+
     return ,@(
-        foreach ($option in $Options) {
-            if ([string]::IsNullOrEmpty($WordToComplete) -or $option -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-                New-GoCompletionResult -CompletionText $option -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -ToolTip "Go option $option"
+        foreach ($name in @($FlagModel.Keys)) {
+            if ([string]::IsNullOrEmpty($needle) -or $name -clike ([System.Management.Automation.WildcardPattern]::Escape($needle) + '*')) {
+                $text = if ($doubleDash) { '-' + $name } else { $name }
+                $spec = $FlagModel[$name]
+                $toolTip = if ($spec.TakesValue) { "go option $name <$($spec.ValueName)>" } else { "go option $name" }
+                New-GoCompletionResult -CompletionText $text -ListItemText $text -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -ToolTip $toolTip
             }
         }
     )
@@ -919,11 +974,10 @@ function Get-GoCommandCompletions {
         [string]$WordToComplete
     )
 
-    $metadata = Get-GoRootCommandMetadata
     return ,@(
         foreach ($command in $Commands) {
             if ([string]::IsNullOrEmpty($WordToComplete) -or $command -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-                New-GoCompletionResult -CompletionText $command -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$command]
+                New-GoCompletionResult -CompletionText $command -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip (Get-GoCommandDescription -Name $command)
             }
         }
     )
@@ -936,10 +990,19 @@ function Get-GoTopicCompletions {
     )
 
     $metadata = Get-GoHelpTopicMetadata
+    $model = Get-GoHelpModel -Path @()
     return ,@(
         foreach ($topic in $Topics) {
             if ([string]::IsNullOrEmpty($WordToComplete) -or $topic -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-                New-GoCompletionResult -CompletionText $topic -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$topic]
+                $toolTip = if ($model.Topics.Contains($topic)) {
+                    $model.Topics[$topic]
+                } elseif ($metadata.Contains($topic)) {
+                    $metadata[$topic]
+                } else {
+                    "go help $topic"
+                }
+
+                New-GoCompletionResult -CompletionText $topic -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $toolTip
             }
         }
     )
@@ -952,29 +1015,17 @@ function Get-GoNestedCommandCompletions {
         [string]$WordToComplete
     )
 
-    $metadata = Get-GoNestedCommandMetadata -CommandName $CommandName
     return ,@(
         foreach ($name in $NestedCommands) {
             if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-                New-GoCompletionResult -CompletionText $name -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip $metadata[$name]
+                New-GoCompletionResult -CompletionText $name -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -ToolTip (Get-GoNestedCommandDescription -CommandName $CommandName -Name $name)
             }
         }
     )
 }
 
-function Get-GoEnvNames {
-    @(
-        'CGO_ENABLED', 'GO111MODULE', 'GOARCH', 'GOAUTH', 'GOBIN', 'GOCACHE', 'GOCOVERDIR',
-        'GOENV', 'GOEXE', 'GOFLAGS', 'GOHOSTARCH', 'GOHOSTOS', 'GOINSECURE', 'GOMOD',
-        'GOMODCACHE', 'GONOPROXY', 'GONOSUMDB', 'GOOS', 'GOPATH', 'GOPRIVATE', 'GOPROXY',
-        'GOROOT', 'GOSUMDB', 'GOTELEMETRY', 'GOTELEMETRYDIR', 'GOTOOLCHAIN', 'GOWORK'
-    )
-}
-
 function Get-GoEnvWriteCompletions {
     param([string]$WordToComplete)
-
-    $envNames = Get-GoEnvNames
 
     if ($WordToComplete -like '*=*') {
         $equalsIndex = $WordToComplete.IndexOf('=')
@@ -986,9 +1037,9 @@ function Get-GoEnvWriteCompletions {
         return New-GoCompletionResult -CompletionText "$namePart=<value>" -ToolTip "Set $namePart with go env -w"
     }
 
-    $results = foreach ($name in $envNames) {
+    $results = foreach ($name in (Get-GoEnvNames)) {
         if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-            New-GoCompletionResult -CompletionText "$name=<value>" -ToolTip "Set $name with go env -w"
+            New-GoCompletionResult -CompletionText "$name=<value>" -ListItemText $name -ToolTip "Set $name with go env -w"
         }
     }
 
@@ -999,12 +1050,15 @@ function Get-GoEnvWriteCompletions {
     New-GoCompletionResult -CompletionText '<NAME=VALUE>' -ToolTip 'Environment assignment for go env -w'
 }
 
-function Get-GoEnvUnsetCompletions {
-    param([string]$WordToComplete)
+function Get-GoEnvNameCompletions {
+    param(
+        [string]$WordToComplete,
+        [string]$ToolTipVerb = 'Read'
+    )
 
     $results = foreach ($name in (Get-GoEnvNames)) {
         if ([string]::IsNullOrEmpty($WordToComplete) -or $name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-            New-GoCompletionResult -CompletionText $name -ToolTip "Unset $name with go env -u"
+            New-GoCompletionResult -CompletionText $name -ToolTip "$ToolTipVerb $name"
         }
     }
 
@@ -1012,18 +1066,67 @@ function Get-GoEnvUnsetCompletions {
         return $results
     }
 
-    New-GoCompletionResult -CompletionText '<NAME>' -ToolTip 'Environment name for go env -u'
+    New-GoCompletionResult -CompletionText '<NAME>' -ToolTip 'Go environment variable name'
+}
+
+function Get-GoPackagePatternCompletions {
+    param([string]$WordToComplete)
+
+    # 'go help packages' documents these reserved patterns; everything else is an
+    # import path, for which the directory tree is the useful local source.
+    $patterns = [ordered]@{
+        './...' = 'the package in the current directory and all subdirectories'
+        '.'     = 'the package in the current directory'
+        'all'   = 'all packages in the main module and their dependencies'
+        'std'   = 'the packages in the Go standard library'
+        'cmd'   = 'the Go command and its internal packages'
+        'tool'  = 'the tool dependencies of the main module'
+    }
+
+    return ,@(
+        foreach ($pattern in @($patterns.Keys)) {
+            if ([string]::IsNullOrEmpty($WordToComplete) -or $pattern -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+                New-GoCompletionResult -CompletionText $pattern -ToolTip $patterns[$pattern]
+            }
+        }
+    )
+}
+
+function Get-GoModuleVersionCompletions {
+    param([string]$WordToComplete)
+
+    $atIndex = $WordToComplete.LastIndexOf('@')
+    if ($atIndex -lt 0) {
+        return ,@()
+    }
+
+    $prefix = $WordToComplete.Substring(0, $atIndex + 1)
+    $typed = $WordToComplete.Substring($atIndex + 1)
+    $queries = [ordered]@{
+        'latest'  = 'the latest release version'
+        'upgrade' = 'the latest version, or the current one if it is newer'
+        'patch'   = 'the latest patch release of the current major.minor'
+        'none'    = 'remove the dependency'
+    }
+
+    return ,@(
+        foreach ($query in @($queries.Keys)) {
+            if ([string]::IsNullOrEmpty($typed) -or $query -like ([System.Management.Automation.WildcardPattern]::Escape($typed) + '*')) {
+                New-GoCompletionResult -CompletionText ($prefix + $query) -ListItemText $query -ToolTip $queries[$query]
+            }
+        }
+    )
 }
 
 function Get-GoValueCompletions {
     param(
-        [string]$CommandName,
+        [object]$FlagSpec,
         [string]$OptionName,
         [string]$WordToComplete,
         [string]$InlinePrefix = ''
     )
 
-    $enumValues = Get-GoEnumValues -OptionName $OptionName
+    $enumValues = if ($null -eq $FlagSpec) { @() } else { @($FlagSpec.Values) }
     if ($enumValues.Count -gt 0) {
         return ,@(
             foreach ($value in $enumValues) {
@@ -1036,21 +1139,16 @@ function Get-GoValueCompletions {
     }
 
     switch ($OptionName) {
-        '-C' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix -DirectoryOnly $true)
-        }
-        '-exec' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix)
-        }
-        '-modfile' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix)
-        }
-        '-o' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix)
-        }
-        '-overlay' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix)
-        }
+        '-C'       { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix -DirectoryOnly $true) }
+        '-exec'    { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-modfile' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-o'       { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-overlay' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-outputdir' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix -DirectoryOnly $true) }
+        '-pkgdir'  { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix -DirectoryOnly $true) }
+        '-coverprofile' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-vettool' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
+        '-fixtool' { return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix) }
         '-pgo' {
             return ,@(
                 foreach ($special in @('auto', 'off')) {
@@ -1063,12 +1161,14 @@ function Get-GoValueCompletions {
                 Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix
             )
         }
-        '-pkgdir' {
-            return ,@(Get-GoPathCompletions -InputText $WordToComplete -InlinePrefix $InlinePrefix -DirectoryOnly $true)
-        }
+        '-coverpkg' { return ,@(Get-GoPackagePatternCompletions -WordToComplete $WordToComplete) }
     }
 
-    $placeholder = Get-GoValuePlaceholder -OptionName $OptionName
+    if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+        return ,@()
+    }
+
+    $placeholder = Get-GoValuePlaceholder -OptionName $OptionName -FlagSpec $FlagSpec
     if ($InlinePrefix) {
         return ,@(New-GoCompletionResult -CompletionText ($InlinePrefix + $placeholder) -ListItemText $placeholder -ToolTip "Value for $OptionName")
     }
@@ -1076,13 +1176,74 @@ function Get-GoValueCompletions {
     return ,@(New-GoCompletionResult -CompletionText $placeholder -ToolTip "Value for $OptionName")
 }
 
+function Get-GoOperandCompletions {
+    param(
+        [object]$Context,
+        [string]$WordToComplete
+    )
+
+    $path = @($Context.Command)
+    if ($Context.Subcommand -and $Context.Command -ne 'help' -and $Context.Command -ne 'tool') {
+        $path = @($Context.Command, $Context.Subcommand)
+    }
+
+    $model = Get-GoHelpModel -Path $path
+    $operands = @($model.Operands)
+    $operandText = $operands -join ' '
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    foreach ($choice in @($model.Choices)) {
+        if ([string]::IsNullOrEmpty($WordToComplete) -or $choice -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+            [void]$results.Add((New-GoCompletionResult -CompletionText $choice -ToolTip "go $($path -join ' ') $choice"))
+        }
+    }
+
+    if (@($model.Choices).Count -gt 0) {
+        return $results.ToArray()
+    }
+
+    if ($WordToComplete.Contains('@') -and $operandText -match 'package') {
+        foreach ($item in @(Get-GoModuleVersionCompletions -WordToComplete $WordToComplete)) {
+            [void]$results.Add($item)
+        }
+
+        return $results.ToArray()
+    }
+
+    if ($operandText -match 'package') {
+        foreach ($item in @(Get-GoPackagePatternCompletions -WordToComplete $WordToComplete)) {
+            [void]$results.Add($item)
+        }
+    }
+
+    if ($operandText -match 'var\b') {
+        foreach ($item in @(Get-GoEnvNameCompletions -WordToComplete $WordToComplete)) {
+            [void]$results.Add($item)
+        }
+
+        return $results.ToArray()
+    }
+
+    if ($operandText -match 'package|file|dir|moddirs|\.go') {
+        foreach ($item in @(Get-GoPathCompletions -InputText $WordToComplete -DirectoryOnly ($operandText -match 'moddirs|dir\b'))) {
+            [void]$results.Add($item)
+        }
+    }
+
+    $results.ToArray()
+}
+
 Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
+    Reset-GoCacheForLocation
+
+    # $cursorPosition is an offset into the whole input line; the extent text is
+    # command-relative.
     $state = Get-GoCommandState -CommandAst $commandAst -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -FallbackWordToComplete $wordToComplete
     $currentWord = $state.CurrentWord
-    $priorTokens = $state.PriorTokens
-    $context = Get-GoCommandContext -Tokens $priorTokens
+    $context = Get-GoCommandContext -Tokens $state.PriorTokens
 
     if ($context.Command -eq 'test' -and $context.TestArgsSeen) {
         New-GoCompletionResult -CompletionText '<test-binary-arg>' -ToolTip 'Argument passed through after go test -args'
@@ -1091,15 +1252,17 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
 
     if ($currentWord -like '-*=*') {
         $equalsIndex = $currentWord.IndexOf('=')
-        $flagPart = $currentWord.Substring(0, $equalsIndex)
+        $flagPart = Get-GoOptionBaseName -Token $currentWord.Substring(0, $equalsIndex)
         $valuePart = $currentWord.Substring($equalsIndex + 1)
+        $typedFlag = $currentWord.Substring(0, $equalsIndex)
 
         if (-not $context.Command -and $flagPart -eq '-C') {
-            Get-GoPathCompletions -InputText $valuePart -InlinePrefix '-C=' -DirectoryOnly $true | Get-GoUniqueCompletions
+            Get-GoPathCompletions -InputText $valuePart -InlinePrefix ($typedFlag + '=') -DirectoryOnly $true | Get-GoUniqueCompletions
             return
         }
 
-        Get-GoValueCompletions -CommandName $context.Command -OptionName $flagPart -WordToComplete $valuePart -InlinePrefix ($flagPart + '=') |
+        $spec = if ($context.FlagModel.Contains($flagPart)) { $context.FlagModel[$flagPart] } else { $null }
+        Get-GoValueCompletions -FlagSpec $spec -OptionName $flagPart -WordToComplete $valuePart -InlinePrefix ($typedFlag + '=') |
             Get-GoUniqueCompletions
         return
     }
@@ -1112,7 +1275,15 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
 
         $rootResults = New-Object System.Collections.Generic.List[object]
         if ([string]::IsNullOrEmpty($currentWord) -or $currentWord -like '-*') {
-            foreach ($item in @(Get-GoOptionCompletions -Options @('-C') -WordToComplete $currentWord)) {
+            $rootFlags = [ordered]@{}
+            $buildFlags = Get-GoBuildFlagModel
+            if ($buildFlags.Contains('-C')) {
+                $rootFlags['-C'] = $buildFlags['-C']
+            } else {
+                $rootFlags['-C'] = [pscustomobject]@{ Name = '-C'; TakesValue = $true; ValueName = 'dir'; Values = @() }
+            }
+
+            foreach ($item in @(Get-GoOptionCompletions -FlagModel $rootFlags -WordToComplete $currentWord)) {
                 [void]$rootResults.Add($item)
             }
         }
@@ -1128,94 +1299,86 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
         return
     }
 
-    switch ($context.Command) {
-        'env' {
-            if ($context.EnvMode -eq 'w' -or $context.PendingOption -eq '-w') {
-                Get-GoEnvWriteCompletions -WordToComplete $currentWord | Get-GoUniqueCompletions
-                return
-            }
-
-            if ($context.EnvMode -eq 'u' -or $context.PendingOption -eq '-u') {
-                Get-GoEnvUnsetCompletions -WordToComplete $currentWord | Get-GoUniqueCompletions
-                return
-            }
-
-            if ([string]::IsNullOrEmpty($currentWord) -or $currentWord -like '-*') {
-                Get-GoOptionCompletions -Options (Get-GoCommandFlags -CommandName 'env') -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-            }
-
+    if ($context.PendingOption) {
+        if ($context.Command -eq 'env' -and $context.EnvMode -eq 'w') {
+            Get-GoEnvWriteCompletions -WordToComplete $currentWord | Get-GoUniqueCompletions
             return
         }
-        'help' {
-            if (-not $context.Subcommand) {
-                $helpResults = New-Object System.Collections.Generic.List[object]
-                foreach ($item in @(Get-GoCommandCompletions -Commands (Get-GoRootCommands) -WordToComplete $currentWord)) {
-                    [void]$helpResults.Add($item)
-                }
 
-                foreach ($item in @(Get-GoTopicCompletions -Topics (Get-GoHelpTopics) -WordToComplete $currentWord)) {
-                    [void]$helpResults.Add($item)
-                }
-
-                $helpResults | Get-GoUniqueCompletions
-            }
-
+        if ($context.Command -eq 'env' -and $context.EnvMode -eq 'u') {
+            Get-GoEnvNameCompletions -WordToComplete $currentWord -ToolTipVerb 'Unset' | Get-GoUniqueCompletions
             return
         }
-        'mod' {
-            if (-not $context.Subcommand) {
-                Get-GoNestedCommandCompletions -CommandName 'mod' -NestedCommands (Get-GoNestedCommands -CommandName 'mod') -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-            }
 
-            return
+        $spec = if ($context.FlagModel.Contains($context.PendingOption)) { $context.FlagModel[$context.PendingOption] } else { $null }
+        Get-GoValueCompletions -FlagSpec $spec -OptionName $context.PendingOption -WordToComplete $currentWord |
+            Get-GoUniqueCompletions
+        return
+    }
+
+    if ($context.Command -eq 'env' -and $context.EnvMode -eq 'w' -and -not ($currentWord -like '-*')) {
+        Get-GoEnvWriteCompletions -WordToComplete $currentWord | Get-GoUniqueCompletions
+        return
+    }
+
+    if ($context.Command -eq 'env' -and $context.EnvMode -eq 'u' -and -not ($currentWord -like '-*')) {
+        Get-GoEnvNameCompletions -WordToComplete $currentWord -ToolTipVerb 'Unset' | Get-GoUniqueCompletions
+        return
+    }
+
+    if ($currentWord -like '-*') {
+        Get-GoOptionCompletions -FlagModel $context.FlagModel -WordToComplete $currentWord | Get-GoUniqueCompletions
+        return
+    }
+
+    if ($context.Command -eq 'help' -and -not $context.Subcommand) {
+        $helpResults = New-Object System.Collections.Generic.List[object]
+        foreach ($item in @(Get-GoCommandCompletions -Commands (Get-GoRootCommands) -WordToComplete $currentWord)) {
+            [void]$helpResults.Add($item)
         }
-        'telemetry' {
-            if (-not $context.Subcommand) {
-                Get-GoNestedCommandCompletions -CommandName 'telemetry' -NestedCommands (Get-GoNestedCommands -CommandName 'telemetry') -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-            }
 
-            return
+        foreach ($item in @(Get-GoTopicCompletions -Topics (Get-GoHelpTopics) -WordToComplete $currentWord)) {
+            [void]$helpResults.Add($item)
         }
-        'tool' {
-            if (-not $context.Subcommand) {
-                $tools = Get-GoToolNames
-                if ($tools.Count -gt 0) {
-                    foreach ($toolName in $tools) {
-                        if ([string]::IsNullOrEmpty($currentWord) -or $toolName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
-                            New-GoCompletionResult -CompletionText $toolName -ToolTip 'Installed go tool'
-                        }
-                    }
-                } else {
-                    New-GoCompletionResult -CompletionText '<tool-name>' -ToolTip 'go tool name'
-                }
-            }
 
-            return
+        $helpResults | Get-GoUniqueCompletions
+        return
+    }
+
+    if ($context.Command -eq 'tool' -and -not $context.Subcommand) {
+        $tools = @(Get-GoToolNames)
+        $toolResults = foreach ($toolName in $tools) {
+            if ([string]::IsNullOrEmpty($currentWord) -or $toolName -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
+                New-GoCompletionResult -CompletionText $toolName -ToolTip 'Installed go tool'
+            }
         }
-        'work' {
-            if (-not $context.Subcommand) {
-                Get-GoNestedCommandCompletions -CommandName 'work' -NestedCommands (Get-GoNestedCommands -CommandName 'work') -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-            }
 
-            return
+        if ($toolResults) {
+            $toolResults | Get-GoUniqueCompletions
+        } else {
+            New-GoCompletionResult -CompletionText '<tool-name>' -ToolTip 'go tool name'
         }
-        default {
-            if ($context.PendingOption) {
-                Get-GoValueCompletions -CommandName $context.Command -OptionName $context.PendingOption -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-                return
-            }
 
-            if ([string]::IsNullOrEmpty($currentWord) -or $currentWord -like '-*') {
-                Get-GoOptionCompletions -Options (Get-GoCommandFlags -CommandName $context.Command) -WordToComplete $currentWord |
-                    Get-GoUniqueCompletions
-            }
+        return
+    }
 
-            return
+    $nested = @(Get-GoNestedCommands -CommandName $context.Command)
+    if ($nested.Count -gt 0 -and -not $context.Subcommand) {
+        Get-GoNestedCommandCompletions -CommandName $context.Command -NestedCommands $nested -WordToComplete $currentWord |
+            Get-GoUniqueCompletions
+        return
+    }
+
+    $tailResults = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @(Get-GoOperandCompletions -Context $context -WordToComplete $currentWord)) {
+        [void]$tailResults.Add($item)
+    }
+
+    if ([string]::IsNullOrEmpty($currentWord)) {
+        foreach ($item in @(Get-GoOptionCompletions -FlagModel $context.FlagModel -WordToComplete $currentWord)) {
+            [void]$tailResults.Add($item)
         }
     }
+
+    $tailResults | Get-GoUniqueCompletions
 }
