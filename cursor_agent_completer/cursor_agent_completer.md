@@ -33,8 +33,8 @@ which claims `agent` for that binary.
 It uses:
 
 - `cursor-agent --help` for the root command surface,
-- `cursor-agent mcp --help` for `mcp` subcommand completion,
-- and a small built-in value map for enum-style flags such as `--mode`, `--output-format`, and `--sandbox`.
+- `cursor-agent <path> --help`, fetched lazily the first time a validated subcommand path (`mcp`, `worker`, `plugin marketplace`, `bedrock`, ...) is completed and cached for the session (misses are cached too),
+- and a small built-in value map for enum-style flags such as `--mode`, `--output-format`, `--sandbox`, and `status --format`.
 
 ### 2. Root-level suggestions
 
@@ -45,11 +45,11 @@ At the top level, the completer suggests:
 
 ### 3. Subcommand-aware completion
 
-When the user selects `mcp`, the completer adds `mcp` subcommands such as `login`, `list`, `list-tools`, `enable`, and `disable`.
+The completer walks the committed tokens to the deepest validated subcommand path and offers only that node's own options and subcommands (commander does not inherit root options into subcommands). For example `cursor-agent mcp <TAB>` offers `login`, `list`, `list-tools`, `enable`, and `disable`; `cursor-agent mcp list <TAB>` offers just `-h`/`--help`; `cursor-agent worker --<TAB>` offers the worker options.
 
 ### 4. Value-aware option completion
 
-For value-taking options, the completer offers inline completions for enum values when the option is known to support them. For path-bearing flags such as `--workspace`, `--add-dir`, and `--plugin-dir`, it offers local path suggestions.
+A value slot is only opened for options whose help line shows a `<value>` or `[value]` placeholder, so boolean switches such as `--plan` or `--continue` fall through to normal option completion. Short spellings (`-e`, `-H`, `-w`) resolve to the same value slot as their long form. For value-taking options, the completer offers inline completions for enum values when the option is known to support them. For path-bearing flags such as `--workspace`, `--add-dir`, and `--plugin-dir`, it offers local path suggestions; other value slots get a placeholder.
 
 ## Dependencies or external command expectations
 

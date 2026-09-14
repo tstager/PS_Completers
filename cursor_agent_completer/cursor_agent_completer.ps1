@@ -64,15 +64,15 @@ function Get-CursorAgentRootHelpOutput {
 }
 
 function Get-CursorAgentSubcommandHelpOutput {
-    param([string]$SubcommandName)
+    param([string[]]$CommandPath)
 
-    $commandPath = Get-CursorAgentCommandPath
-    if ([string]::IsNullOrWhiteSpace($commandPath) -or [string]::IsNullOrWhiteSpace($SubcommandName)) {
+    $launcherPath = Get-CursorAgentCommandPath
+    if ([string]::IsNullOrWhiteSpace($launcherPath) -or @($CommandPath).Count -eq 0) {
         return ''
     }
 
     try {
-        return ($null | & $commandPath $SubcommandName --help 2>&1 | Out-String)
+        return ($null | & $launcherPath @CommandPath --help 2>&1 | Out-String)
     } catch {
         return ''
     }
@@ -205,21 +205,79 @@ function Initialize-CursorAgentCompletionCatalog {
     $catalog.RootOptions = @($rootHelp.Options)
     $catalog.RootSubcommands = @($rootHelp.Subcommands)
 
-    $mcpHelp = Get-CursorAgentSubcommandHelpOutput -SubcommandName 'mcp'
-    if (-not [string]::IsNullOrWhiteSpace($mcpHelp)) {
-        $catalog.SubcommandCatalogs['mcp'] = ConvertFrom-CursorAgentHelpText -HelpText $mcpHelp
-    }
-
     $catalog.Initialized = $true
     Set-Variable -Name 'CursorAgentCompletionCatalog' -Value $catalog -Scope Script
     return (Get-Variable -Name 'CursorAgentCompletionCatalog' -Scope Script).Value
 }
 
+function Get-CursorAgentNodeCatalog {
+    <#
+    .SYNOPSIS
+    Returns the parsed help (Options + Subcommands) for a validated subcommand
+    path, fetching '<path> --help' once per session and caching misses too.
+    #>
+    param([string[]]$CommandPath)
+
+    $catalog = Initialize-CursorAgentCompletionCatalog
+    if (@($CommandPath).Count -eq 0) {
+        return [pscustomobject]@{
+            Options     = @($catalog.RootOptions)
+            Subcommands = @($catalog.RootSubcommands)
+        }
+    }
+
+    $key = $CommandPath -join ' '
+    if (-not $catalog.SubcommandCatalogs.ContainsKey($key)) {
+        $helpText = Get-CursorAgentSubcommandHelpOutput -CommandPath $CommandPath
+        $catalog.SubcommandCatalogs[$key] = if ([string]::IsNullOrWhiteSpace($helpText)) {
+            $null
+        } else {
+            ConvertFrom-CursorAgentHelpText -HelpText $helpText
+        }
+    }
+
+    $catalog.SubcommandCatalogs[$key]
+}
+
+function Find-CursorAgentOption {
+    param(
+        $Node,
+        [string]$Token
+    )
+
+    if ($null -eq $Node) {
+        return $null
+    }
+
+    foreach ($option in @($Node.Options)) {
+        foreach ($name in @($option.Names)) {
+            if ([string]::Equals($name, $Token, [System.StringComparison]::Ordinal)) {
+                return $option
+            }
+        }
+    }
+
+    $null
+}
+
+function Get-CursorAgentCanonicalOptionName {
+    param($Option)
+
+    foreach ($name in @($Option.Names)) {
+        if ($name.StartsWith('--')) {
+            return $name
+        }
+    }
+
+    @($Option.Names)[0]
+}
+
 function Get-CursorAgentValueHints {
-    @{ 
+    @{
         '--mode' = @('plan', 'ask')
         '--output-format' = @('text', 'json', 'stream-json')
         '--sandbox' = @('enabled', 'disabled')
+        '--format' = @('text', 'json')
     }
 }
 
@@ -232,6 +290,7 @@ function Get-CursorAgentPlaceholderValue {
 
     switch ($OptionName) {
         '--api-key' { return '<key>' }
+        '--endpoint' { return '<url>' }
         '--header' { return '<header>' }
         '--model' { return '<model>' }
         '--resume' { return '<chatId>' }
@@ -298,7 +357,7 @@ function Complete-CursorAgent {
         [int]$cursorPosition
     )
 
-    $catalog = Initialize-CursorAgentCompletionCatalog
+    $null = Initialize-CursorAgentCompletionCatalog
     $results = New-Object System.Collections.Generic.List[object]
 
     $tokens = @()
@@ -312,47 +371,70 @@ function Complete-CursorAgent {
         }
     }
 
-    $previousToken = if ($tokens.Count -gt 0) { $tokens[-1] } else { $null }
     $prefix = $wordToComplete
 
-    if ($previousToken -and ($previousToken -match '^--') -and $previousToken -in @('--mode', '--output-format', '--sandbox')) {
-        $valueHints = Get-CursorAgentValueHints
-        foreach ($hint in @($valueHints[$previousToken])) {
-            if ([string]::IsNullOrWhiteSpace($prefix) -or $hint -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-                [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip $hint -ListItemText $hint))
+    # Walk the committed tokens to the deepest validated subcommand node. Each
+    # node's options and subcommands come from its own '--help' (commander does
+    # not inherit root options into subcommands).
+    $commandPath = @()
+    $node = Get-CursorAgentNodeCatalog -CommandPath @()
+    $index = 0
+    while ($index -lt $tokens.Count) {
+        $token = $tokens[$index]
+        $index++
+
+        if ($token.StartsWith('-')) {
+            $option = Find-CursorAgentOption -Node $node -Token $token
+            if ($option -and $option.TakesValue -and -not $token.Contains('=') -and
+                $index -lt $tokens.Count -and -not $tokens[$index].StartsWith('-')) {
+                $index++
             }
+
+            continue
         }
 
-        return @($results.ToArray())
-    }
-
-    if ($previousToken -and ($previousToken -match '^--') -and ($previousToken -in (Get-CursorAgentPathOptions))) {
-        return Get-CursorAgentPathCompletions -WordToComplete $prefix
-    }
-
-    if ($previousToken -and ($previousToken -match '^--')) {
-        $placeholder = Get-CursorAgentPlaceholderValue -OptionName $previousToken
-        if ([string]::IsNullOrWhiteSpace($prefix) -or $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-            [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $placeholder -ListItemText $placeholder))
+        if ($null -ne $node -and (@($node.Subcommands) -ccontains $token)) {
+            $commandPath = @($commandPath + $token)
+            $node = Get-CursorAgentNodeCatalog -CommandPath $commandPath
         }
-
-        return @($results.ToArray())
     }
 
-    if ($tokens.Count -gt 0 -and $tokens[0] -eq 'mcp') {
-        $mcpCatalog = $catalog.SubcommandCatalogs['mcp']
-        if ($null -ne $mcpCatalog) {
-            foreach ($subcommand in @($mcpCatalog.Subcommands)) {
-                if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-                    [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $subcommand -ResultType 'ParameterValue' -ToolTip $subcommand -ListItemText $subcommand))
+    if ($null -eq $node) {
+        $node = [pscustomobject]@{ Options = @(); Subcommands = @() }
+    }
+
+    $previousToken = if ($tokens.Count -gt 0) { $tokens[-1] } else { $null }
+
+    if ($previousToken -and $previousToken.StartsWith('-') -and -not $previousToken.Contains('=')) {
+        $option = Find-CursorAgentOption -Node $node -Token $previousToken
+        if ($option -and $option.TakesValue) {
+            $canonicalName = Get-CursorAgentCanonicalOptionName -Option $option
+            $valueHints = Get-CursorAgentValueHints
+
+            if ($valueHints.ContainsKey($canonicalName)) {
+                foreach ($hint in @($valueHints[$canonicalName])) {
+                    if ([string]::IsNullOrWhiteSpace($prefix) -or $hint -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
+                        [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip $option.Description -ListItemText $hint))
+                    }
                 }
-            }
-        }
 
-        return @($results.ToArray())
+                return @($results.ToArray())
+            }
+
+            if ($canonicalName -in (Get-CursorAgentPathOptions)) {
+                return @(Get-CursorAgentPathCompletions -WordToComplete $prefix)
+            }
+
+            $placeholder = Get-CursorAgentPlaceholderValue -OptionName $canonicalName
+            if ([string]::IsNullOrWhiteSpace($prefix) -or $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
+                [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $option.Description -ListItemText $placeholder))
+            }
+
+            return @($results.ToArray())
+        }
     }
 
-    foreach ($option in @($catalog.RootOptions)) {
+    foreach ($option in @($node.Options)) {
         foreach ($optionName in @($option.Names)) {
             if ([string]::IsNullOrWhiteSpace($prefix) -or $optionName -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
                 [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $optionName -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $optionName))
@@ -360,7 +442,7 @@ function Complete-CursorAgent {
         }
     }
 
-    foreach ($subcommand in @($catalog.RootSubcommands)) {
+    foreach ($subcommand in @($node.Subcommands)) {
         if ([string]::IsNullOrWhiteSpace($prefix) -or $subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
             [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $subcommand -ResultType 'ParameterValue' -ToolTip $subcommand -ListItemText $subcommand))
         }
