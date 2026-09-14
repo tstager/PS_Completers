@@ -282,6 +282,7 @@ function Invoke-NpmCommandCapture {
     $processStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $processStartInfo.UseShellExecute = $false
     $processStartInfo.RedirectStandardOutput = $true
+    $processStartInfo.RedirectStandardInput = $true
     $processStartInfo.RedirectStandardError = $true
     $processStartInfo.CreateNoWindow = $true
 
@@ -309,9 +310,16 @@ function Invoke-NpmCommandCapture {
             return @()
         }
 
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
+        $process.StandardInput.Close()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+            return @()
+        }
+
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
     } finally {
         $process.Dispose()
     }

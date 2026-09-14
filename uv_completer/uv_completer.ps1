@@ -389,7 +389,36 @@ function Invoke-UvHelp {
     $arguments += '--help'
 
     try {
-        @(& $uvPath @arguments 2>$null)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $uvPath
+        foreach ($argument in $arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+                return @()
+            }
+
+            $text = $outputTask.Result
+            if ([string]::IsNullOrEmpty($text)) {
+                return @()
+            }
+
+            @($text -split '\r?\n')
+        } finally {
+            $process.Dispose()
+        }
     } catch {
         @()
     }

@@ -38,17 +38,50 @@ function Get-GrokCommandPath {
     }
 }
 
+function Invoke-GrokHelpCapture {
+    param(
+        [string]$CommandPath,
+        [string[]]$Arguments
+    )
+
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $CommandPath
+        foreach ($argument in $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+                return ''
+            }
+
+            return $outputTask.Result + $errorTask.Result
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        return ''
+    }
+}
+
 function Get-GrokRootHelpOutput {
     $commandPath = Get-GrokCommandPath
     if ([string]::IsNullOrWhiteSpace($commandPath)) {
         return ''
     }
 
-    try {
-        return ($null | & $commandPath --help 2>&1 | Out-String)
-    } catch {
-        return ''
-    }
+    return Invoke-GrokHelpCapture -CommandPath $commandPath -Arguments @('--help')
 }
 
 function Get-GrokSubcommandHelpOutput {
@@ -59,11 +92,7 @@ function Get-GrokSubcommandHelpOutput {
         return ''
     }
 
-    try {
-        return ($null | & $commandPath help @SubcommandPath 2>&1 | Out-String)
-    } catch {
-        return ''
-    }
+    return Invoke-GrokHelpCapture -CommandPath $commandPath -Arguments (@('help') + @($SubcommandPath))
 }
 
 function Get-GrokValueKind {
