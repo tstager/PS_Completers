@@ -86,18 +86,24 @@ function Initialize-ClaudeCompleterData {
 
     # Global enum flags with fixed choice sets.
     $script:ClaudeEnumFlags = @{
-        '--effort'             = @('low', 'medium', 'high', 'xhigh', 'max')
-        '--permission-mode'    = @('acceptEdits', 'auto', 'bypassPermissions',
-                                    'default', 'dontAsk', 'plan')
-        '--output-format'      = @('text', 'json', 'stream-json')
-        '--input-format'       = @('text', 'stream-json')
-        '--prompt-suggestions' = @('true', 'false', '1', '0', 'yes', 'no', 'on', 'off')
+        '--effort'                 = @('low', 'medium', 'high', 'xhigh', 'max')
+        '--permission-mode'        = @('acceptEdits', 'auto', 'bypassPermissions',
+                                        'manual', 'dontAsk', 'plan')
+        '--output-format'          = @('text', 'json', 'stream-json')
+        '--input-format'           = @('text', 'stream-json')
+        '--prompt-suggestions'     = @('true', 'false', '1', '0', 'yes', 'no', 'on', 'off')
+        '--autocompact'            = @('auto')
+        '--permission-prompts'     = @('host', 'none')
+        '--system-prompt-snapshot' = @('on', 'off')
     }
 
     # Boolean / switch flags (accept no value).
     $script:ClaudeBoolFlags = @(
         '--allow-dangerously-skip-permissions'
+        '--ax-screen-reader'
+        '--background'
         '--bare'
+        '--bg'
         '--brief'
         '--chrome'
         '--continue'
@@ -105,15 +111,17 @@ function Initialize-ClaudeCompleterData {
         '--disable-slash-commands'
         '--exclude-dynamic-system-prompt-sections'
         '--fork-session'
+        '--forward-subagent-text'
         '--help'
         '--ide'
         '--include-hook-events'
         '--include-partial-messages'
-        '--mcp-debug'
         '--no-chrome'
         '--no-session-persistence'
         '--print'
         '--replay-user-messages'
+        '--restricted'
+        '--safe-mode'
         '--strict-mcp-config'
         '--tmux'
         '--verbose'
@@ -124,8 +132,10 @@ function Initialize-ClaudeCompleterData {
     # (do NOT consume the next token as a value), but still offer enum/value
     # completion when the user explicitly types --flag=.
     $script:ClaudeOptionalValueFlags = @(
+        '--cloud'
         '--debug'
         '--resume'
+        '--teleport'
         '--worktree'
         '--remote-control'
         '--from-pr'
@@ -137,7 +147,7 @@ function Initialize-ClaudeCompleterData {
         '--agent'
         '--agents'
         '--append-system-prompt'
-        '--fallback-model'
+        '--environment'
         '--json-schema'
         '--name'
         '--remote-control-session-name-prefix'
@@ -167,11 +177,12 @@ function Initialize-ClaudeCompleterData {
         '--tools'
     )
 
-    # Flags whose value is a model name (free-form, but with hints).
-    $script:ClaudeModelFlags = @('--model')
+    # Flags whose value is a model name (free-form, but with hints). The aliases and the
+    # full-name example come from 'claude --help' ('fable', 'opus', 'sonnet', 'claude-fable-5').
+    $script:ClaudeModelFlags = @('--model', '--fallback-model')
     $script:ClaudeModelHints = @(
-        'opus', 'sonnet', 'haiku',
-        'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'
+        'fable', 'opus', 'sonnet', 'haiku',
+        'claude-fable-5'
     )
 
     # Flags whose value has comma-separated hints (free-form).
@@ -438,6 +449,9 @@ function Initialize-ClaudeCompleterData {
     $script:ClaudeFlagDesc = @{
         # Global boolean flags
         '--allow-dangerously-skip-permissions'      = '[boolean] Allow bypassing all permission checks'
+        '--ax-screen-reader'                         = '[boolean] Render screen-reader friendly output'
+        '--background'                               = '[boolean] Start the session in the background and print its id (--bg)'
+        '--bg'                                       = '[boolean] Start the session in the background and print its id (--background)'
         '--bare'                                     = '[boolean] Minimal output mode'
         '--brief'                                    = '[boolean] Brief output mode'
         '--chrome'                                   = '[boolean] Use Chrome integration'
@@ -446,36 +460,43 @@ function Initialize-ClaudeCompleterData {
         '--disable-slash-commands'                  = '[boolean] Disable slash commands'
         '--exclude-dynamic-system-prompt-sections'  = '[boolean] Exclude dynamic system prompt sections'
         '--fork-session'                            = '[boolean] Fork into a new session'
+        '--forward-subagent-text'                   = '[boolean] Forward subagent text and thinking blocks (stream-json only)'
         '--help'                                     = '[boolean] Show help'
         '--ide'                                      = '[boolean] Connect to an IDE'
         '--include-hook-events'                     = '[boolean] Include hook events in output'
         '--include-partial-messages'                = '[boolean] Include partial assistant messages'
-        '--mcp-debug'                                = '[boolean] Enable MCP debug logging (deprecated)'
         '--no-chrome'                                = '[boolean] Disable Chrome integration'
         '--no-session-persistence'                  = '[boolean] Do not persist the session'
         '--print'                                    = '[boolean] Print response and exit (-p)'
         '--replay-user-messages'                    = '[boolean] Replay user messages'
+        '--safe-mode'                                = '[boolean] Start with all customizations disabled'
         '--strict-mcp-config'                       = '[boolean] Use only the specified MCP config'
         '--tmux'                                     = '[boolean] Use tmux integration'
         '--verbose'                                  = '[boolean] Verbose output'
         '--version'                                  = '[boolean] Show version'
         # Optional-value flags
+        '--cloud'                                    = '[optional] Create a cloud session (description) or attach to one (session id or URL)'
         '--debug'                                    = '[optional] Enable debug mode (optional filter)'
         '--resume'                                   = '[optional] Resume a session (optional id)'
+        '--teleport'                                 = '[optional] Resume a teleport session (optional session id)'
         '--worktree'                                 = '[optional] Use a git worktree (optional name)'
         '--remote-control'                          = '[optional] Enable remote control (optional name)'
         '--from-pr'                                  = '[optional] Start from a PR (optional value)'
         '--prompt-suggestions'                      = '[optional] Prompt suggestions: true|false|...'
         # Global enum flags
+        '--autocompact'                              = '[string]  Auto-compact window size: auto, or 100k-1M tokens'
         '--effort'                                   = '[string]  Reasoning effort: low|medium|high|xhigh|max'
-        '--permission-mode'                          = '[string]  Permission mode'
+        '--permission-mode'                          = '[string]  Permission mode: acceptEdits|auto|bypassPermissions|manual|dontAsk|plan'
+        '--permission-prompts'                       = '[string]  Who answers permission prompts with --print: host|none'
         '--output-format'                            = '[string]  Output format: text|json|stream-json'
         '--input-format'                             = '[string]  Input format: text|stream-json'
+        '--system-prompt-snapshot'                   = '[string]  Record the system prompt once per conversation: on|off'
         # Global string flags
         '--agent'                                    = '[string]  Agent to run'
         '--agents'                                   = '[string]  Agents definition (json)'
         '--append-system-prompt'                    = '[string]  Append text to the system prompt'
-        '--fallback-model'                           = '[string]  Fallback model name'
+        '--environment'                              = '[string]  Self-hosted cloud environment id (ccpool_...)'
+        '--fallback-model'                           = '[string]  Fallback model(s), comma-separated, tried in order'
         '--json-schema'                              = '[string]  JSON schema for structured output'
         '--name'                                     = '[string]  Session or run name (-n)'
         '--remote-control-session-name-prefix'      = '[string]  Remote-control session name prefix'
@@ -528,7 +549,7 @@ function Initialize-ClaudeCompleterData {
         '--no-browser'                               = '[boolean] Print the authorization URL instead of opening a browser'
         '--post'                                     = '[boolean] Post the findings to the PR'
         '--no-post'                                  = '[boolean] Do not post the findings to the PR'
-        '--restricted'                               = '[boolean] Start dispatched sessions in restricted mode'
+        '--restricted'                               = '[boolean] Restricted mode: remove the command/code-running tools and WebFetch (agents: start dispatched sessions restricted)'
         '--discard-unpushed'                         = '[string]  <commit>@<worktree-id> to discard unpushed commits'
         '--force-remove-worktree'                    = '[string]  <worktree-id> to delete even if removal failed'
         '--ablation'                                 = '[string]  Baseline arm: none|with-without'
@@ -738,7 +759,7 @@ function Write-ClaudeLongFlagResults {
     )
     $flagSet = Get-ClaudeFlagSet -Sub $Sub -SubSub $SubSub
     foreach ($flag in $flagSet) {
-        if ($flag -notlike "$WordToComplete*") { continue }
+        if ($flag -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) { continue }
         $desc = $script:ClaudeFlagDesc[$flag] ?? ''
         $short = Get-ClaudeShortAlias -FlagName $flag -Sub $Sub -SubSub $SubSub
         $tip = if ($short) { "$flag (alias: $short): $desc" } else { "${flag}: $desc" }
@@ -793,9 +814,16 @@ function Write-ClaudeFlagValue {
         return
     }
 
-    # Path / dir completion.
+    # Path / dir completion. --add-dir takes directories only; --plugin-dir a directory or a .zip.
     if ($script:ClaudePathFlags -contains $Flag -or $script:ClaudeDirFlags -contains $Flag) {
+        $directoriesOnly = $script:ClaudeDirFlags -contains $Flag
+        $allowZip = $Flag -eq '--plugin-dir'
         [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
+            Where-Object {
+                (-not $directoriesOnly) -or
+                ($_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer) -or
+                ($allowZip -and $_.CompletionText -like '*.zip*')
+            } |
             ForEach-Object {
                 if ($InlinePrefix) {
                     New-ClaudeCompletion "$InlinePrefix$($_.CompletionText)" `
@@ -860,6 +888,9 @@ function Complete-ClaudeNative {
 
     # Line-absolute cursor offset (native convention only); $null otherwise.
     $cursorCol = $null
+    # True when the cursor sits inside (or at the end of) the last element left of it: that
+    # element is the word being completed, never an already-committed argument.
+    $cursorInsideWord = $false
 
     if ($isNativeConvention) {
         $nativePartialWord = $CommandName
@@ -892,6 +923,8 @@ function Complete-ClaudeNative {
             $hasTrailingSpace = ($relCursor -le 0) -or
                                 ($relCursor -gt $line.Length) -or
                                 [char]::IsWhiteSpace($line[$relCursor - 1])
+
+            $cursorInsideWord = -not $hasTrailingSpace
 
             if ($hasTrailingSpace) {
                 $WordToComplete = ''
@@ -930,17 +963,21 @@ function Complete-ClaudeNative {
         Get-ClaudeTokenText -el $el
     })
 
-    # Exclude the word being completed from committed args (for positionals),
-    # but keep it for flags so Test-ClaudeFlagTakesValue can set expectingValue.
-    if ($allArgs.Count -gt 0 -and $allArgs[-1] -eq $WordToComplete) {
-        if ($WordToComplete -like '-*') {
-            $committedArgs = $allArgs
+    # The word being completed is never a committed argument, flag or not: keeping a
+    # value-taking flag such as '--effort' in the list made the walk expect its value
+    # and the flag name itself could no longer be completed. Once the user types the
+    # space after it, the flag is left of the cursor and becomes committed normally.
+    $committedArgs = $allArgs
+    if ($allArgs.Count -gt 0) {
+        $lastIsCurrentWord = if ($null -ne $cursorCol) {
+            $cursorInsideWord
         } else {
-            $cnt = $allArgs.Count - 2
-            $committedArgs = if ($cnt -lt 0) { @() } else { $allArgs[0..$cnt] }
+            $allArgs[-1] -eq $WordToComplete
         }
-    } else {
-        $committedArgs = $allArgs
+
+        if ($lastIsCurrentWord) {
+            $committedArgs = @($allArgs | Select-Object -First ($allArgs.Count - 1))
+        }
     }
 
     # -------------------------------------------------------------------------
@@ -1036,12 +1073,12 @@ function Complete-ClaudeNative {
 
             if ($isShort) {
                 if (-not $short) { continue }
-                if ($short -notlike "$WordToComplete*") { continue }
+                if ($short -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) { continue }
                 New-ClaudeCompletion $short `
                     -ResultType ParameterName `
                     -Tooltip    "$short -> ${flag}: $desc"
             } else {
-                if ($flag -notlike "$WordToComplete*") { continue }
+                if ($flag -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) { continue }
                 $tip = if ($short) { "$flag (alias: $short): $desc" } else { "${flag}: $desc" }
                 New-ClaudeCompletion $flag -ResultType ParameterName -Tooltip $tip
             }

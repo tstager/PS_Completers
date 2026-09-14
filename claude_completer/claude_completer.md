@@ -70,10 +70,10 @@ All global flags from the CLI surface are offered at the root command only. Comm
 
 | Type | Flags |
 | --- | --- |
-| Enum | `--effort` (low\|medium\|high\|xhigh\|max) · `--permission-mode` (acceptEdits\|auto\|bypassPermissions\|default\|dontAsk\|plan) · `--output-format` (text\|json\|stream-json) · `--input-format` (text\|stream-json) · `--prompt-suggestions` (true\|false\|1\|0\|yes\|no\|on\|off) |
-| Boolean | `--allow-dangerously-skip-permissions` · `--bare` · `--brief` · `--chrome` · `--continue` (`-c`) · `--dangerously-skip-permissions` · `--disable-slash-commands` · `--exclude-dynamic-system-prompt-sections` · `--fork-session` · `--help` (`-h`) · `--ide` · `--include-hook-events` · `--include-partial-messages` · `--mcp-debug` · `--no-chrome` · `--no-session-persistence` · `--print` (`-p`) · `--replay-user-messages` · `--strict-mcp-config` · `--tmux` · `--verbose` · `--version` (`-v`) |
-| Optional-value | `--debug` (`-d`) · `--resume` (`-r`) · `--worktree` (`-w`) · `--remote-control` · `--from-pr` · `--prompt-suggestions` |
-| String | `--agent` · `--agents` · `--append-system-prompt` · `--fallback-model` · `--json-schema` · `--name` (`-n`) · `--remote-control-session-name-prefix` · `--session-id` · `--system-prompt` · `--model` |
+| Enum | `--effort` (low\|medium\|high\|xhigh\|max) · `--permission-mode` (acceptEdits\|auto\|bypassPermissions\|manual\|dontAsk\|plan) · `--output-format` (text\|json\|stream-json) · `--input-format` (text\|stream-json) · `--prompt-suggestions` (true\|false\|1\|0\|yes\|no\|on\|off) · `--autocompact` (auto, or a token count) · `--permission-prompts` (host\|none) · `--system-prompt-snapshot` (on\|off) |
+| Boolean | `--allow-dangerously-skip-permissions` · `--ax-screen-reader` · `--background` / `--bg` · `--bare` · `--brief` · `--chrome` · `--continue` (`-c`) · `--dangerously-skip-permissions` · `--disable-slash-commands` · `--exclude-dynamic-system-prompt-sections` · `--fork-session` · `--forward-subagent-text` · `--help` (`-h`) · `--ide` · `--include-hook-events` · `--include-partial-messages` · `--no-chrome` · `--no-session-persistence` · `--print` (`-p`) · `--replay-user-messages` · `--restricted` · `--safe-mode` · `--strict-mcp-config` · `--tmux` · `--verbose` · `--version` (`-v`) |
+| Optional-value | `--cloud` · `--debug` (`-d`) · `--resume` (`-r`) · `--teleport` · `--worktree` (`-w`) · `--remote-control` · `--from-pr` · `--prompt-suggestions` |
+| String | `--agent` · `--agents` · `--append-system-prompt` · `--environment` · `--json-schema` · `--name` (`-n`) · `--remote-control-session-name-prefix` · `--session-id` · `--system-prompt` · `--model` · `--fallback-model` |
 | Number | `--max-budget-usd` |
 | Array | `--add-dir` · `--allowedTools` / `--allowed-tools` · `--betas` · `--disallowedTools` / `--disallowed-tools` · `--file` · `--mcp-config` · `--plugin-dir` · `--plugin-url` · `--setting-sources` · `--settings` · `--tools` |
 | Path/dir | `--add-dir` (dir) · `--plugin-dir` (dir) · `--debug-file` (file) · `--mcp-config` (file) · `--settings` (file) |
@@ -118,10 +118,10 @@ All global flags from the CLI surface are offered at the root command only. Comm
 | Slot type | Behaviour |
 | --- | --- |
 | Enum flags | Offers the known choices |
-| `--model` | Offers model hints (`opus`, `sonnet`, `haiku`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`); free-form otherwise |
+| `--model` / `--fallback-model` | Offers the aliases and full-name example from `claude --help` (`fable`, `opus`, `sonnet`, `haiku`, `claude-fable-5`); free-form otherwise |
 | `--setting-sources` | Offers `user`, `project`, `local`; comma-separated, free-form |
 | Path flags (`--debug-file` · `--mcp-config` · `--settings`) | `CompleteFilename` |
-| Dir flags (`--add-dir` · `--plugin-dir`) | `CompleteFilename` |
+| Dir flags (`--add-dir` · `--plugin-dir`) | `CompleteFilename` filtered to directories (`--plugin-dir` also accepts `.zip` files) |
 | Number flags (`--max-budget-usd` · `--callback-port` · `--timeout`) | `<n>` placeholder to suppress filesystem fallback |
 | String / array flags | `<value>` placeholder to suppress filesystem fallback |
 
