@@ -1,37 +1,52 @@
 # where.exe tab completion for PowerShell
-# Builds completion data from where.exe built-in help.
+# Static switch catalog seeded from the documented where.exe /? surface, enriched from live help.
 # Usage: . .\where_completer.ps1
+# Note: PowerShell's built-in "where" alias resolves to Where-Object, so completion needs the where.exe spelling.
 
 Set-StrictMode -Version 2.0
 
 if (-not (Get-Variable -Name WhereCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:WhereCompletionCatalog = @{
-        Initialized       = $false
-        GlobalSwitches    = @()
-        PathOptions       = @()
+        Initialized     = $false
+        Switches        = @()
+        PathOptions     = @('/R')
+        ExecutablePath  = $null
+        Executables     = @()
     }
 }
 
-function Invoke-WhereHelpText {
-    param([string[]]$Arguments)
+function Get-WhereStaticSwitchTable {
+    @(
+        [pscustomobject]@{ Token = '/R'; Description = 'Recursively searches and displays the files that match the given pattern starting from the specified directory.' }
+        [pscustomobject]@{ Token = '/Q'; Description = 'Returns only the exit code, without displaying the list of matched files. (Quiet mode)' }
+        [pscustomobject]@{ Token = '/F'; Description = 'Displays the matched filename in double quotes.' }
+        [pscustomobject]@{ Token = '/T'; Description = 'Displays the file size, last modified date and time for all matched files.' }
+        [pscustomobject]@{ Token = '/?'; Description = 'Displays this help message.' }
+    )
+}
 
-    if (-not (Get-Command -Name where.exe -ErrorAction SilentlyContinue)) {
+function Invoke-WhereHelpText {
+    if (-not (Get-Command -Name where.exe -CommandType Application -ErrorAction SilentlyContinue)) {
         return @()
     }
 
-    & where.exe @Arguments '/?' 2>$null
+    try {
+        @($null | & where.exe '/?' 2>$null)
+    } catch {
+        @()
+    }
 }
 
 function Get-WhereSwitchTokensFromLines {
     param([string[]]$Lines)
 
-    $tokens = foreach ($line in $Lines) {
-        foreach ($match in [regex]::Matches($line, '(?<!\w)(/[A-Za-z][A-Za-z0-9]*:?)(?=[\s\]\}\|,]|$|<)')) {
+    $tokens = foreach ($line in @($Lines)) {
+        foreach ($match in [regex]::Matches($line, '(?<!\w)(/(?:\?|[A-Za-z][A-Za-z0-9]*):?)(?=[\s\]\}\|,]|$|<)')) {
             $match.Groups[1].Value
         }
     }
 
-    $tokens | Sort-Object -Unique
+    @($tokens | Sort-Object -Unique)
 }
 
 function New-WhereCompletionResult {
@@ -74,7 +89,7 @@ function Get-WhereCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -97,43 +112,125 @@ function Get-WhereExpectedValueOption {
     $null
 }
 
+function ConvertTo-WhereQuotedText {
+    param(
+        [string]$Text,
+        [bool]$AlwaysQuote
+    )
+
+    if (($AlwaysQuote -or $Text -match '\s') -and -not ($Text.StartsWith('"') -and $Text.EndsWith('"'))) {
+        return '"' + $Text + '"'
+    }
+
+    $Text
+}
+
 function Get-WherePathCompletions {
     param([string]$InputPath)
 
+    # /R takes a directory; keep whatever prefix the user typed (relative stays relative, C:\ stays C:\).
+    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $parentText = $cleanInput.Substring(0, $separatorIndex + 1)
+        $leaf = $cleanInput.Substring($separatorIndex + 1)
+    } else {
+        $parentText = ''
+        $leaf = $cleanInput
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    $parent = if ([string]::IsNullOrEmpty($parentText)) { '.' } else { $parentText }
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
 
-    Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput) -and $parent -ne '.') {
-                Join-Path -Path $parent -ChildPath $_.Name
-            } else {
-                $_.FullName
-            }
+    $directories = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like $pattern } |
+        Sort-Object -Property Name)
 
-            if ($_.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-                $completionText += [System.IO.Path]::DirectorySeparatorChar
-            }
+    if ($directories.Count -eq 0) {
+        return @(New-WhereCompletionResult -CompletionText '<directory>' -ResultType 'ParameterValue' -ToolTip 'Directory to start the recursive search from.')
+    }
 
-            if (($alwaysQuote -or $completionText -match '\s') -and -not ($completionText.StartsWith('"') -and $completionText.EndsWith('"'))) {
-                $completionText = '"' + $completionText + '"'
-            }
+    foreach ($directory in $directories) {
+        $completionText = $parentText + $directory.Name + [System.IO.Path]::DirectorySeparatorChar
+        New-WhereCompletionResult -CompletionText (ConvertTo-WhereQuotedText -Text $completionText -AlwaysQuote $alwaysQuote) -ResultType 'ParameterValue' -ToolTip $directory.FullName
+    }
+}
 
-            New-WhereCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $_.FullName
+function Get-WherePathExtensionList {
+    $extensions = @(([string]$env:PATHEXT).Split(';') |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { $_ -match '^\.[a-z0-9]+$' })
+
+    if ($extensions.Count -eq 0) {
+        $extensions = @('.com', '.exe', '.bat', '.cmd')
+    }
+
+    $extensions
+}
+
+function Get-WhereExecutableNameList {
+    # Names where.exe can resolve: files on %PATH% whose extension is in %PATHEXT%, cached per PATH value.
+    $pathValue = [string]$env:PATH
+    if ($script:WhereCompletionCatalog.ExecutablePath -eq $pathValue -and $script:WhereCompletionCatalog.Executables.Count -gt 0) {
+        return $script:WhereCompletionCatalog.Executables
+    }
+
+    $extensions = Get-WherePathExtensionList
+    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($pathValue.Split(';'))) {
+        $directory = [System.Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+        if ([string]::IsNullOrWhiteSpace($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+            continue
         }
+
+        try {
+            foreach ($file in [System.IO.Directory]::EnumerateFiles($directory)) {
+                $extension = [System.IO.Path]::GetExtension($file).ToLowerInvariant()
+                if ($extensions -contains $extension) {
+                    [void]$names.Add([System.IO.Path]::GetFileName($file))
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    $script:WhereCompletionCatalog.Executables = @($names | Sort-Object)
+    $script:WhereCompletionCatalog.ExecutablePath = $pathValue
+    $script:WhereCompletionCatalog.Executables
+}
+
+function Get-WhereOperandCompletion {
+    param([string]$CurrentWord)
+
+    $cleanWord = if ([string]::IsNullOrEmpty($CurrentWord)) { '' } else { $CurrentWord.Trim('"') }
+
+    # "$env:pattern", "path:pattern" and explicit paths are left to PowerShell's own completion.
+    if ($cleanWord -match '[\\/:$]') {
+        return @()
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    # PATHEXT patterns plus *.dll, the pattern where.exe's own help uses as its example.
+    foreach ($extension in @(Get-WherePathExtensionList) + @('.dll')) {
+        $wildcard = '*' + $extension
+        if ([string]::IsNullOrEmpty($cleanWord) -or $wildcard.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [void]$results.Add((New-WhereCompletionResult -CompletionText $wildcard -ResultType 'ParameterValue' -ToolTip "Every $extension file on the search path."))
+        }
+    }
+
+    if (-not [string]::IsNullOrEmpty($cleanWord) -and -not $cleanWord.StartsWith('*')) {
+        foreach ($name in Get-WhereExecutableNameList) {
+            if ($name.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [void]$results.Add((New-WhereCompletionResult -CompletionText $name -ResultType 'ParameterValue' -ToolTip 'Executable found on %PATH%.'))
+            }
+        }
+    }
+
+    @($results.ToArray())
 }
 
 function Initialize-WhereCompletion {
@@ -141,19 +238,40 @@ function Initialize-WhereCompletion {
         return
     }
 
-    try {
-        $helpLines = Invoke-WhereHelpText
-        if ($helpLines) {
-            $script:WhereCompletionCatalog.GlobalSwitches = Get-WhereSwitchTokensFromLines $helpLines
-            $script:WhereCompletionCatalog.PathOptions = @('/R')
-        }
-    } catch {
-        # If we can't get help, use known values from documentation
-        $script:WhereCompletionCatalog.GlobalSwitches = @('/R', '/Q', '/F', '/T', '/?')
-        $script:WhereCompletionCatalog.PathOptions = @('/R')
+    # The documented surface is always available; live help can only add to it.
+    $switches = New-Object System.Collections.Generic.List[object]
+    foreach ($switch in Get-WhereStaticSwitchTable) {
+        [void]$switches.Add($switch)
     }
 
+    foreach ($token in Get-WhereSwitchTokensFromLines -Lines (Invoke-WhereHelpText)) {
+        $known = $false
+        foreach ($switch in $switches) {
+            if ($switch.Token.Equals($token, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $known = $true
+                break
+            }
+        }
+
+        if (-not $known) {
+            [void]$switches.Add([pscustomobject]@{ Token = $token; Description = "where.exe switch $token" })
+        }
+    }
+
+    $script:WhereCompletionCatalog.Switches = @($switches.ToArray())
     $script:WhereCompletionCatalog.Initialized = $true
+}
+
+function Get-WhereSwitchCompletion {
+    param([string]$CurrentWord)
+
+    $pattern = if ([string]::IsNullOrEmpty($CurrentWord)) { '*' } else { [System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*' }
+
+    foreach ($switch in @($script:WhereCompletionCatalog.Switches)) {
+        if ($switch.Token -like $pattern) {
+            New-WhereCompletionResult -CompletionText $switch.Token -ResultType 'ParameterName' -ToolTip $switch.Description
+        }
+    }
 }
 
 function Complete-Where {
@@ -185,26 +303,18 @@ function Complete-Where {
 
     $expectedValueOption = Get-WhereExpectedValueOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($expectedValueOption -and ($script:WhereCompletionCatalog.PathOptions -contains $expectedValueOption)) {
-        $pathCompletions = @(Get-WherePathCompletions -InputPath $currentWord)
-        return $pathCompletions
+        return @(Get-WherePathCompletions -InputPath $currentWord)
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('/')) {
-        return $script:WhereCompletionCatalog.GlobalSwitches |
-            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
-            ForEach-Object {
-                New-WhereCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
-            }
+        return @(Get-WhereSwitchCompletion -CurrentWord $currentWord)
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {
-        return $script:WhereCompletionCatalog.GlobalSwitches |
-            ForEach-Object {
-                New-WhereCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
-            }
+        return @(Get-WhereSwitchCompletion -CurrentWord '') + @(Get-WhereOperandCompletion -CurrentWord '')
     }
 
-    return @()
+    @(Get-WhereOperandCompletion -CurrentWord $currentWord)
 }
 
 # Register the completer for both where.exe and bare where.

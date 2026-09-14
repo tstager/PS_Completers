@@ -26,7 +26,7 @@ Register-ArgumentCompleter -Native -CommandName @('where.exe', 'where') -ScriptB
 }
 ```
 
-In a default PowerShell session, the built-in read-only alias `where` still resolves to `Where-Object`, so that alias keeps its normal shell semantics and completion behavior. The native `where` registration only becomes relevant in sessions where the alias has been intentionally removed or overridden and `where` resolves to the native executable.
+In a default PowerShell session, the built-in read-only alias `where` still resolves to `Where-Object`, so that alias keeps its normal shell semantics and completion behavior. Completion therefore requires the `where.exe` spelling; the native `where` registration only becomes relevant in sessions where the alias has been intentionally removed or overridden and `where` resolves to the native executable.
 
 ## How completion works
 
@@ -34,10 +34,10 @@ In a default PowerShell session, the built-in read-only alias `where` still reso
 
 `Initialize-WhereCompletion` populates `$script:WhereCompletionCatalog` with:
 
-- `GlobalSwitches`
+- `Switches` (token plus description, used as the tooltip)
 - `PathOptions`
 
-The initialization runs only once per session.
+The documented switch set (`/R`, `/Q`, `/F`, `/T`, `/?`) is always seeded first; live help can only add to it, so a missing or unreadable `where.exe` never empties the catalog. The initialization runs only once per session.
 
 ### 2. Help-text parsing
 
@@ -55,13 +55,7 @@ where.exe /?
 - `/T`
 - `/?`
 
-If help parsing fails, the script falls back to a hard-coded switch list:
-
-- `/R`
-- `/Q`
-- `/F`
-- `/T`
-- `/?`
+Any token the parser finds that is not already in the seeded list is added on top of it.
 
 ### 3. Token and context detection
 
@@ -73,14 +67,25 @@ If help parsing fails, the script falls back to a hard-coded switch list:
 
 ### 4. Path completion for `/R`
 
-When the previous token is `/R`, `Get-WherePathCompletions` uses `Get-ChildItem` to complete filesystem paths.
+When the previous token is `/R`, `Get-WherePathCompletions` uses `Get-ChildItem -Directory` to complete directories, since `/R` names the directory the recursive search starts from.
 
 The implementation:
 
 - trims existing quotes,
-- preserves relative input where possible,
-- appends a directory separator to directory completions,
-- re-adds quotes when the input was already quoted or the completed path contains spaces.
+- splits the typed text on its last directory separator instead of using `Split-Path`, so `.\`, `C:\` and a trailing separator all list that directory's children,
+- keeps exactly the prefix the user typed (relative input stays relative),
+- appends a directory separator to every completion,
+- re-adds quotes when the input was already quoted or the completed path contains spaces,
+- offers a `<directory>` placeholder when nothing matches, so PowerShell's file fallback does not offer a file in a directory-only slot.
+
+### 5. Pattern operand completion
+
+Any other word is the `pattern` operand. The completer offers, prefix-filtered:
+
+- `*.<ext>` wildcard patterns derived from `%PATHEXT%` (plus `*.dll`, the example from the tool's own help),
+- once at least one character is typed, executable names found on `%PATH%` whose extension is in `%PATHEXT%` (cached per `PATH` value, enumerated once per session).
+
+Words containing `\`, `/`, `:` or `$` (explicit paths, `path:pattern`, `$env:pattern`) are left to PowerShell's own completion.
 
 ## Key completion behaviors / supported values
 
@@ -96,7 +101,7 @@ where.exe /<TAB>
 
 ### Blank-argument completion
 
-If the current token is empty, the completer offers all known global switches.
+If the current token is empty, the completer offers all known switches followed by the `*.<ext>` patterns.
 
 ### `/R` path completion
 
@@ -106,6 +111,13 @@ Example:
 
 ```powershell
 where.exe /R C:\Win<TAB>
+```
+
+### Pattern completion
+
+```powershell
+where.exe not<TAB>      # notepad.exe and other %PATH% executables starting with "not"
+where.exe /R C:\Windows *.<TAB>
 ```
 
 ## Dependencies or external command expectations
@@ -133,8 +145,7 @@ where.exe /R "C:\Program Files\"<TAB>
 
 ## Limitations / notes
 
-- The script only completes switches and the `/R` path argument.
-- It does not attempt to complete filename patterns or other non-switch arguments to `where.exe`.
 - Only `/R` is treated as a value-taking option in the current implementation.
-- In default PowerShell, bare `where` still resolves to the `Where-Object` alias rather than the native executable.
+- Executable-name completion covers `%PATH%`; the current directory (which `where.exe` also searches) is not enumerated.
+- In default PowerShell, bare `where` still resolves to the `Where-Object` alias rather than the native executable, so type `where.exe` to get completion.
 
