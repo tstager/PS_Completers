@@ -16,6 +16,28 @@ function New-PsFileCompletionResult {
     [System.Management.Automation.CompletionResult]::new($CompletionText, $ListItemText, $ResultType, $ToolTip)
 }
 
+function Get-PsFileSwitchCatalog {
+    @(
+        @{ Token = '-u'; Description = 'Specifies optional user name for login to the remote computer.'; NeedsRemote = $true; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '-p'; Description = 'Specifies password for the user name given with -u.'; NeedsRemote = $true; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '-c'; Description = 'Closes the file identified by the preceding file Id. Destructive; completion never runs it.'; NeedsRemote = $false; NeedsIdentifier = $true; SlashOnly = $false }
+        @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '-accepteula'; Description = 'Suppress the first-run EULA dialog; required for unattended use.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '-?'; Description = 'Display PsFile help.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '/?'; Description = 'Display PsFile help.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $false }
+        @{ Token = '/nobanner'; Description = 'Slash form of -nobanner.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $true }
+        @{ Token = '/accepteula'; Description = 'Slash form of -accepteula.'; NeedsRemote = $false; NeedsIdentifier = $false; SlashOnly = $true }
+    )
+}
+
+function Get-PsFileSwitchKey {
+    param([string]$Token)
+
+    if ([string]::IsNullOrEmpty($Token)) { return '' }
+    if (-not ($Token.StartsWith('-') -or $Token.StartsWith('/'))) { return '' }
+    $Token.Substring(1).ToLowerInvariant()
+}
+
 function Get-PsFileCurrentToken {
     param([string]$Line, [int]$CursorPosition, [string]$Fallback)
     if ([string]::IsNullOrWhiteSpace($Line)) { return $Fallback }
@@ -29,25 +51,40 @@ function Get-PsFileCurrentToken {
 
 function Get-PsFileArgumentState {
     param([System.Management.Automation.Language.CommandAst]$CommandAst, [string]$WordToComplete, [int]$CursorPosition)
+    $relativeCursor = $CursorPosition - $CommandAst.Extent.StartOffset
     $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
     } else {
-        Get-PsFileCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-PsFileCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $relativeCursor -Fallback $WordToComplete
     }
     $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
     $tokensBeforeCurrent = @($tokens)
     if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
-        if ($tokensBeforeCurrent.Count -gt 1) {
-            $tokensBeforeCurrent = @($tokensBeforeCurrent[0..($tokensBeforeCurrent.Count - 2)])
-        } else {
-            $tokensBeforeCurrent = @()
-        }
+        $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -First ($tokensBeforeCurrent.Count - 1))
     }
 
     [pscustomobject]@{
         CurrentWord         = $currentWord
         TokensBeforeCurrent = $tokensBeforeCurrent
     }
+}
+
+function Add-PsFileResult {
+    param(
+        [System.Collections.Generic.List[object]]$Results,
+        [System.Collections.Generic.HashSet[string]]$Seen,
+        [string]$CurrentWord,
+        [string]$CompletionText,
+        [string]$ResultType,
+        [string]$ToolTip
+    )
+
+    if (-not [string]::IsNullOrEmpty($CurrentWord) -and
+        -not $CompletionText.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+    if (-not $Seen.Add($CompletionText)) { return }
+    [void]$Results.Add((New-PsFileCompletionResult -CompletionText $CompletionText -ResultType $ResultType -ToolTip $ToolTip))
 }
 
 function Complete-PsFile {
@@ -68,27 +105,29 @@ function Complete-PsFile {
 
     for ($i = 0; $i -lt $tokensBeforeCurrent.Count; $i++) {
         $token = $tokensBeforeCurrent[$i]
-        $lowerToken = $token.ToLowerInvariant()
-        if ($lowerToken -eq '-u') {
-            $used['-u'] = $true
+        $key = Get-PsFileSwitchKey -Token $token
+        if ($key -eq 'u') {
+            $used['u'] = $true
             if ($i -eq ($tokensBeforeCurrent.Count - 1)) { $valueContext = 'User'; break }
             $i++
             continue
         }
-        if ($lowerToken -eq '-p') {
-            $used['-p'] = $true
+        if ($key -eq 'p') {
+            $used['p'] = $true
             if ($i -eq ($tokensBeforeCurrent.Count - 1)) { $valueContext = 'Password'; break }
             $i++
             continue
         }
-        if ($lowerToken -eq '-c') {
-            $used['-c'] = $true
+        if ($key -eq 'c') {
+            $used['c'] = $true
             $closeMode = $true
             continue
         }
-        if ($lowerToken -eq '-nobanner') { $used['-nobanner'] = $true; continue }
-        if ($lowerToken -eq '-?') { $used['-?'] = $true; continue }
-        if ($lowerToken -eq '/?') { $used['/?'] = $true; continue }
+        if ($key) {
+            # Any other dash- or slash-prefixed token is a switch, never the file identifier.
+            $used[$key] = $true
+            continue
+        }
 
         if (-not $remoteTarget -and $token.StartsWith('\\')) {
             $remoteTarget = $token
@@ -113,40 +152,29 @@ function Complete-PsFile {
         }
     }
 
-    $results = New-Object System.Collections.Generic.List[object]
-    if (-not $remoteTarget) {
+    $results = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    # Usage: psfile [\\RemoteComputer [-u Username [-p Password]]] [[Id | path] [-c]]
+    # The remote target is only legal before the file identifier.
+    if (-not $remoteTarget -and -not $identifier -and -not $closeMode) {
         foreach ($target in @('\\<RemoteComputer>', '\\localhost', '\\*')) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $target.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-                [void]$results.Add((New-PsFileCompletionResult -CompletionText $target -ResultType 'ParameterValue' -ToolTip 'Remote computer placeholder for PsFile.'))
-            }
+            Add-PsFileResult -Results $results -Seen $seen -CurrentWord $currentWord -CompletionText $target -ResultType 'ParameterValue' -ToolTip 'Remote computer placeholder for PsFile.'
         }
     }
 
-    foreach ($switchSpec in @(
-            @{ Token = '-u'; Description = 'Optional user name for remote login.'; NeedsRemote = $true }
-            @{ Token = '-p'; Description = 'Optional password for remote login.'; NeedsRemote = $true }
-            @{ Token = '-c'; Description = 'Close the file identified by the specified file ID.' }
-            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.' }
-            @{ Token = '-?'; Description = 'Display PsFile help.' }
-            @{ Token = '/?'; Description = 'Display PsFile help.' }
-        )) {
-        if ($used.ContainsKey($switchSpec.Token.ToLowerInvariant())) { continue }
-        if ($switchSpec.ContainsKey('NeedsRemote') -and $switchSpec.NeedsRemote -and -not $remoteTarget) { continue }
-        if ($switchSpec.Token -eq '-c' -and -not $identifier) { continue }
-        if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $switchSpec.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-        [void]$results.Add((New-PsFileCompletionResult -CompletionText $switchSpec.Token -ResultType 'ParameterName' -ToolTip $switchSpec.Description))
+    foreach ($switchSpec in Get-PsFileSwitchCatalog) {
+        if ($used.ContainsKey((Get-PsFileSwitchKey -Token $switchSpec.Token))) { continue }
+        if ($switchSpec.NeedsRemote -and -not $remoteTarget) { continue }
+        if ($switchSpec.NeedsIdentifier -and -not $identifier) { continue }
+        if ($switchSpec.SlashOnly -and -not $currentWord.StartsWith('/')) { continue }
+        Add-PsFileResult -Results $results -Seen $seen -CurrentWord $currentWord -CompletionText $switchSpec.Token -ResultType 'ParameterName' -ToolTip $switchSpec.Description
     }
 
-    if (-not $identifier) {
+    if (-not $identifier -and -not $closeMode) {
         foreach ($value in @('<file-id>', '<path>', '"C:\path\fragment*"')) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $value.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase) -or -not $currentWord.StartsWith('-')) {
-                [void]$results.Add((New-PsFileCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'PsFile file identifier or path pattern.'))
-            }
+            Add-PsFileResult -Results $results -Seen $seen -CurrentWord $currentWord -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'PsFile file identifier or path pattern.'
         }
-    } elseif (-not $closeMode) {
-        [void]$results.Add((New-PsFileCompletionResult -CompletionText '-c' -ResultType 'ParameterName' -ToolTip 'Close the file identified by the specified file ID. This is destructive and intentionally not executed by completion.'))
-    } elseif (-not [string]::IsNullOrWhiteSpace($currentWord)) {
-        [void]$results.Add((New-PsFileCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'PsFile does not take additional values here.'))
     }
 
     @($results.ToArray())

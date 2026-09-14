@@ -15,6 +15,9 @@ Instead, it completes the documented PsFile syntax with remote placeholders, rem
 ## Key completion behaviors
 
 - Remote preamble: `\\<RemoteComputer>`, `\\localhost`, `\\*`
+  - offered only in the leading positional slot, because the documented usage
+    `psfile [\\RemoteComputer [-u Username [-p Password]]] [[Id | path] [-c]]`
+    forbids a remote target after the identifier or after `-c`
 - Remote auth:
   - `-u` -> `<username>`, `<domain\user>`
   - `-p` -> `<password>`
@@ -22,9 +25,17 @@ Instead, it completes the documented PsFile syntax with remote placeholders, rem
   - `<file-id>`
   - `<path>`
   - `"C:\path\fragment*"`
+- Switches: `-nobanner`, `-accepteula`, `-?`, `/?`; the slash forms `/nobanner`
+  and `/accepteula` (real but undocumented) appear only once the typed word
+  starts with `/`
 - Close switch:
-  - `-c` is suggested only after an identifier is already present
+  - `-c` is suggested only after an identifier is already present, exactly once
   - its tooltip explicitly calls out the destructive effect
+
+Every suggestion goes through one emitter that applies a single case-insensitive
+prefix filter and de-duplicates by completion text, so a partially typed
+identifier or path is never rewritten into an unrelated switch. Any token that
+starts with `-` or `/` is treated as a switch, never as the file identifier.
 
 ## Registration
 
