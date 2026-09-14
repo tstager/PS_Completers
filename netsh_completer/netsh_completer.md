@@ -7,7 +7,8 @@ The script covers:
 - root commands and contexts
 - nested context and multiword command phrases such as `show interfaces`, `set address`, and `add rule`
 - leaf-page tags such as `name=`, `source=`, `store=`, and similar `tag=` parameters parsed from `Usage:` and `Parameters:` blocks
-- selected literal values parsed from usage alternation text, such as `dhcp`, `static`, `in`, `out`, `allow`, `block`, `active`, and `persistent`
+- `tag=value` enums parsed from the `Usage:` block and attached to their tag (`dir=in|out`, `action=allow|block|bypass`, `[profile=public|private|domain|any[,...]]`, `[[capture=]yes|no]`), so `netsh advfirewall firewall add rule dir=<TAB>` offers `dir=in` and `dir=out`
+- bare literal alternations that are not attached to a tag (true positional operands)
 - root global options `-a`, `-c`, `-r`, `-u`, `-p`, and `-f`
 
 ## Registration and command names
@@ -23,10 +24,7 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
 
     $line = $commandAst.Extent.Text
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { '' } else { Get-NetshCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
-    $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete) -or ($line.Substring(0, $safeCursor) -match '\s$')
-    $tokensBeforeCurrent = Get-NetshTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace:$hasTrailingSpace
+    $tokensBeforeCurrent = @(Get-NetshTokensBeforeCurrent -CommandAst $commandAst -CursorPosition $cursorPosition)
 
     $expectedOption = Get-NetshExpectedGlobalOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($expectedOption) {
@@ -49,6 +47,24 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
                 }
                 return
             }
+            'Text' {
+                # Free-form remote machine / user name: a placeholder (and the local
+                # machine name for -r) instead of the command tree or the filesystem.
+                $candidates = @($expectedOption.Placeholder)
+                if ($expectedOption.Token -eq '-r' -and -not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) {
+                    $candidates = @($env:COMPUTERNAME) + $candidates
+                }
+
+                foreach ($candidate in $candidates) {
+                    if ([string]::IsNullOrWhiteSpace($currentWord) -or $candidate -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
+                        New-NetshCompletionResult -CompletionText $candidate -ResultType 'ParameterValue' -ToolTip $expectedOption.ToolTip
+                    }
+                }
+                return
+            }
+            default {
+                return
+            }
         }
     }
 
@@ -64,13 +80,14 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
     $resultMap = [ordered]@{}
     $candidateItems = New-Object System.Collections.Generic.List[object]
 
-    if ($currentWord -like '-*' -or ($resolved.PathTokens.Count -eq 0 -and $resolved.Remaining.Count -eq 0)) {
+    $isOptionWord = ($currentWord -like '-*') -or ($currentWord -like '/*')
+    if ($isOptionWord -or $resolved.PathTokens.Count -eq 0) {
         foreach ($item in (Get-NetshGlobalOptionSuggestions -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
         }
     }
 
-    if (-not ($currentWord -like '-*')) {
+    if (-not $isOptionWord) {
         foreach ($item in (Get-NetshCollectionSuggestions -Collection $activeNode.NextTokens -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
         }
@@ -114,8 +131,8 @@ Each node in `NodesByKey` represents a token path such as:
 
 Each node caches:
 - `NextTokens`: next command or subcontext tokens available from that path
-- `UsageSuggestions`: leaf-page tags and literal keywords
-- `ValueHintsByTag`: enum-style values parsed from `Parameters:` sections
+- `UsageSuggestions`: leaf-page tags and bare literal keywords
+- `ValueHintsByTag`: enum-style values parsed from `Parameters:` sections and from `tag=a|b|c` alternations in the `Usage:` block (placeholders such as `<IPv4 address>`, numeric ranges such as `0-65535` and templates such as `icmpv4:type,code` are dropped)
 
 ### Lazy help loading
 `Initialize-NetshCompletionCatalog` seeds static global-option metadata and loads only the root help page.
@@ -134,13 +151,14 @@ Key helpers:
 - `Get-NetshHelpSections` extracts command entries, subcontexts, usage lines, and parameter lines.
 - `Add-NetshCommandPhrase` stores multiword phrases token by token so completion can offer `show` first, then `interfaces`, instead of flattening the phrase.
 - `Test-NetshContextDescription` detects context transitions from descriptions like `Changes to the 'netsh ...' context.`
-- `Get-NetshUsageTags`, `Get-NetshUsageLiteralValues`, and `Get-NetshParameterValueHints` parse leaf syntax into `tag=` suggestions, literal keywords, and enum-like `tag=value` hints.
+- `Get-NetshUsageTags`, `Get-NetshUsageLiteralValues`, `Get-NetshUsageTagValueMap` and `Get-NetshParameterValueHints` parse leaf syntax into `tag=` suggestions, bare literal keywords, and enum-like `tag=value` hints. A `Remarks:` or `Examples:` header closes the `Parameters:` section even when its prose shares the line, and commands whose description column is empty (`netsh trace postreset`) are kept.
+- `Invoke-NetshHelpText` spawns `netsh.exe <path> /?` through `System.Diagnostics.Process` with stdin closed, asynchronous reads and a 5 s timeout, so a slow or prompting context cannot hang the prompt.
 
 ### Command-line context detection
 The registered completer:
 - reconstructs the current token with `Get-NetshCurrentToken`
-- determines whether the cursor is after a trailing space
-- finds prior tokens with `Get-NetshTokensBeforeCurrent`
+- finds prior tokens with `Get-NetshTokensBeforeCurrent`, which keeps only the command elements whose extent ends before the cursor, so mid-token, end-of-token and trailing-space cursors behave the same and a command after another statement on the line still resolves
+- offers the global options (`-a`, `-c`, `-r`, `-u`, `-p`, `-f`, `/?`, `-?`) for a `-` or `/` prefixed word or before any context is typed; `-r` and `-u` complete a `<RemoteMachine>` (plus the local machine name) or `<DomainName\UserName>` placeholder rather than the command tree
 - separates root global-option state from command tokens with `Get-NetshParsedState`
 - resolves the deepest known command path with `Resolve-NetshCommandPath`
 - loads the active path on demand before returning suggestions

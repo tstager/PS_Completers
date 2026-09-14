@@ -149,13 +149,40 @@ function Invoke-NetshHelpText {
         return @()
     }
 
+    # netsh help never needs stdin, but some contexts are slow or may prompt, so the
+    # spawn keeps stdin closed, reads asynchronously and is bounded by a timeout.
     try {
-        if ($PathTokens -and $PathTokens.Count -gt 0) {
-            @(& netsh.exe @PathTokens '/?' 2>$null)
-        } else {
-            @(& netsh.exe '/?' 2>$null)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = 'netsh.exe'
+        foreach ($token in @($PathTokens)) {
+            $startInfo.ArgumentList.Add($token)
+        }
+        $startInfo.ArgumentList.Add('/?')
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [Console]::OutputEncoding
+        $startInfo.StandardErrorEncoding = [Console]::OutputEncoding
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                $process.Kill()
+                return @()
+            }
+
+            [void]$errorTask.Result
+            @($outputTask.Result -split '\r?\n')
+        } finally {
+            $process.Dispose()
         }
     } catch {
+        Write-Debug "netsh help failed for '$(Get-NetshPathText -PathTokens $PathTokens)': $($_.Exception.Message)"
         @()
     }
 }
@@ -222,14 +249,16 @@ function Get-NetshHelpSections {
             continue
         }
 
-        if ($line -match '^\s*(Remarks|Examples):\s*$' -or $line -match '^\s*To view help for a command,') {
+        # A header may carry its prose on the same physical line ('Remarks: Used to ...').
+        if ($line -match '^\s*(Remarks|Examples)\s*:' -or $line -match '^\s*To view help for a command,') {
             $section = ''
             continue
         }
 
         switch ($section) {
             'commands' {
-                if ($line -match '^\s*(.+?)\s+-\s+(.+?)\s*$') {
+                # The description column may be empty ('postreset      - ').
+                if ($line -match '^\s*(\S.*?)\s+-\s*(.*?)\s*$') {
                     $sections.CommandEntries += [pscustomobject]@{
                         Phrase      = $matches[1].Trim()
                         Description = $matches[2].Trim()
@@ -356,9 +385,14 @@ function Get-NetshUsageLiteralValues {
         $excluded[$token] = $true
     }
 
+    # Only bare alternations (not attached to a 'tag=') are loose operands; tagged
+    # ones belong to Get-NetshUsageTagValueMap. The '[,...]' repetition marker is
+    # removed on its own so the enum it follows survives.
     $normalizedText = ($UsageLines -join ' ')
+    $normalizedText = $normalizedText -replace '\[\s*,\s*\.\.\.\s*\]', ' '
     $normalizedText = [regex]::Replace($normalizedText, '<[^>]+>', ' ')
-    $normalizedText = $normalizedText -replace '\[[^\]]*\,\.\.\.\]', ' '
+    $normalizedText = $normalizedText -replace '\s*\|\s*', '|'
+    $normalizedText = $normalizedText -replace '\[?[A-Za-z][A-Za-z0-9-]*=\]?[^\s\[\]]+', ' '
 
     $values = New-Object System.Collections.Generic.List[string]
     foreach ($match in [regex]::Matches($normalizedText, '(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9-]*(?:\|[A-Za-z][A-Za-z0-9-]*)+)(?![A-Za-z0-9-])')) {
@@ -374,6 +408,49 @@ function Get-NetshUsageLiteralValues {
     }
 
     @($values | Sort-Object -Unique)
+}
+
+function Get-NetshUsageTagValueMap {
+    param([string[]]$UsageLines)
+
+    # Attaches usage-block enums to their tag: 'dir=in|out', '[profile=public|private|domain|any[,...]]',
+    # '[[capture=]yes|no]'. Placeholders (<IPv4 address>), numeric ranges (0-65535) and
+    # templates (icmpv4:type,code) are not literal values and are dropped.
+    $UsageLines = @($UsageLines)
+    if (-not $UsageLines -or $UsageLines.Count -eq 0) {
+        return @{}
+    }
+
+    $text = ($UsageLines -join ' ')
+    $text = $text -replace '\[\s*,\s*\.\.\.\s*\]', ' '
+    $text = [regex]::Replace($text, '<[^>]+>', '__placeholder__')
+    $text = $text -replace '\s*\|\s*', '|'
+
+    $valuesByTag = @{}
+    foreach ($match in [regex]::Matches($text, '(?<![A-Za-z0-9-])(?<Tag>[A-Za-z][A-Za-z0-9-]*)=\]?(?<Alt>[^\s\[\]|]+(?:\|[^\s\[\]|]+)+)')) {
+        $tag = $match.Groups['Tag'].Value
+        if ($tag -eq 'default') {
+            continue
+        }
+
+        $members = @(
+            $match.Groups['Alt'].Value -split '\|' |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -match '^[A-Za-z][A-Za-z0-9-]*$' }
+        )
+        if ($members.Count -eq 0) {
+            continue
+        }
+
+        $tagKey = $tag.ToLowerInvariant()
+        if (-not $valuesByTag.ContainsKey($tagKey)) {
+            $valuesByTag[$tagKey] = @()
+        }
+
+        $valuesByTag[$tagKey] = @($valuesByTag[$tagKey] + $members | Sort-Object -Unique)
+    }
+
+    $valuesByTag
 }
 
 function Get-NetshParameterValueHints {
@@ -400,7 +477,7 @@ function Get-NetshParameterValueHints {
             continue
         }
 
-        if ($line -match '^\s*([A-Za-z][A-Za-z0-9-]*)\s*:') {
+        if ($line -match '^\s*([A-Za-z][A-Za-z0-9-]*)\s*:' -and $matches[1] -notin @('Remarks', 'Examples', 'Usage', 'Parameters')) {
             $valueHints[$currentTag] += $matches[1]
         }
     }
@@ -472,6 +549,11 @@ function Update-NetshCatalogFromHelp {
     foreach ($tagKey in $valueHints.Keys) {
         Add-NetshValueHints -PathTokens $PathTokens -Tag $tagKey -Values $valueHints[$tagKey]
     }
+
+    $usageValues = Get-NetshUsageTagValueMap -UsageLines $sections.UsageLines
+    foreach ($tagKey in $usageValues.Keys) {
+        Add-NetshValueHints -PathTokens $PathTokens -Tag $tagKey -Values $usageValues[$tagKey]
+    }
 }
 
 function Ensure-NetshPathLoaded {
@@ -495,11 +577,12 @@ function Initialize-NetshCompletionCatalog {
     $script:NetshCompletionCatalog.GlobalOptions = @(
         [pscustomobject]@{ Token = '-a'; ExpectsValue = $true; ValueKind = 'Path';    ToolTip = 'Specifies an alias file to use.' },
         [pscustomobject]@{ Token = '-c'; ExpectsValue = $true; ValueKind = 'Context'; ToolTip = 'Changes to the specified netsh context.' },
-        [pscustomobject]@{ Token = '-r'; ExpectsValue = $true; ValueKind = 'Text';    ToolTip = 'Runs the command on a remote machine.' },
-        [pscustomobject]@{ Token = '-u'; ExpectsValue = $true; ValueKind = 'Text';    ToolTip = 'Specifies the user name for a remote connection.' },
+        [pscustomobject]@{ Token = '-r'; ExpectsValue = $true; ValueKind = 'Text';    ToolTip = 'Runs the command on a remote machine.'; Placeholder = '<RemoteMachine>' },
+        [pscustomobject]@{ Token = '-u'; ExpectsValue = $true; ValueKind = 'Text';    ToolTip = 'Specifies the user name for a remote connection.'; Placeholder = '<DomainName\UserName>' },
         [pscustomobject]@{ Token = '-p'; ExpectsValue = $true; ValueKind = 'Password'; ToolTip = 'Specifies the password for a remote connection, or * to prompt.' },
         [pscustomobject]@{ Token = '-f'; ExpectsValue = $true; ValueKind = 'Path';    ToolTip = 'Runs commands from a script file.' },
-        [pscustomobject]@{ Token = '/?'; ExpectsValue = $false; ValueKind = 'None';   ToolTip = 'Displays netsh help.' }
+        [pscustomobject]@{ Token = '/?'; ExpectsValue = $false; ValueKind = 'None';   ToolTip = 'Displays netsh help.' },
+        [pscustomobject]@{ Token = '-?'; ExpectsValue = $false; ValueKind = 'None';   ToolTip = 'Displays netsh help.' }
     )
 
     $optionMap = @{}
@@ -562,38 +645,20 @@ function Get-NetshCurrentToken {
 
 function Get-NetshTokensBeforeCurrent {
     param(
-        [string[]]$Tokens,
-        [string]$CurrentWord,
-        [bool]$HasTrailingSpace
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ($HasTrailingSpace) {
-        return @($Tokens)
-    }
-
-    if (-not $Tokens -or $Tokens.Count -eq 0) {
-        return @()
-    }
-
-    if (-not [string]::IsNullOrEmpty($CurrentWord)) {
-        for ($suffixLength = 1; $suffixLength -le $Tokens.Count; $suffixLength++) {
-            $suffix = (@($Tokens | Select-Object -Last $suffixLength) -join '')
-            if ($suffix -eq $CurrentWord) {
-                $prefixLength = $Tokens.Count - $suffixLength
-                if ($prefixLength -le 0) {
-                    return @()
-                }
-
-                return @($Tokens | Select-Object -First $prefixLength)
-            }
-        }
-    }
-
-    if ($Tokens.Count -gt 1) {
-        return @($Tokens | Select-Object -First ($Tokens.Count - 1))
-    }
-
-    @()
+    # Extent offsets are absolute like $CursorPosition. Only elements that end before
+    # the cursor are already typed; the element under the cursor and anything after it
+    # are not, which handles mid-token, end-of-token and trailing-space uniformly.
+    # Callers wrap the result in @() because an empty array unrolls to nothing.
+    @(
+        $CommandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $CursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 }
 
 function ConvertTo-NetshContextTokens {
@@ -630,7 +695,7 @@ function Get-NetshExpectedGlobalOption {
 function Get-NetshParsedState {
     param([string[]]$Tokens)
 
-    $Tokens = @($Tokens)
+    $Tokens = @($Tokens | Where-Object { -not [string]::IsNullOrEmpty($_) })
     $contextTokens = New-Object System.Collections.Generic.List[string]
     $commandTokens = New-Object System.Collections.Generic.List[string]
 
@@ -712,12 +777,17 @@ function Get-NetshFilePathCompletions {
     param([string]$InputPath)
 
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $parentPath = Split-Path -Path $cleanInput -Parent
-    if ([string]::IsNullOrWhiteSpace($parentPath)) {
-        $parentPath = '.'
+    $parentPath = '.'
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $candidateParent = Split-Path -Path $cleanInput -Parent
+        if (-not [string]::IsNullOrWhiteSpace($candidateParent)) {
+            $parentPath = $candidateParent
+        }
+
+        $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $leaf = Split-Path -Path $cleanInput -Leaf
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
 
     @(
@@ -837,10 +907,7 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
 
     $line = $commandAst.Extent.Text
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { '' } else { Get-NetshCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
-    $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete) -or ($line.Substring(0, $safeCursor) -match '\s$')
-    $tokensBeforeCurrent = Get-NetshTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace:$hasTrailingSpace
+    $tokensBeforeCurrent = @(Get-NetshTokensBeforeCurrent -CommandAst $commandAst -CursorPosition $cursorPosition)
 
     $expectedOption = Get-NetshExpectedGlobalOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($expectedOption) {
@@ -863,6 +930,24 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
                 }
                 return
             }
+            'Text' {
+                # Free-form remote machine / user name: a placeholder (and the local
+                # machine name for -r) instead of the command tree or the filesystem.
+                $candidates = @($expectedOption.Placeholder)
+                if ($expectedOption.Token -eq '-r' -and -not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) {
+                    $candidates = @($env:COMPUTERNAME) + $candidates
+                }
+
+                foreach ($candidate in $candidates) {
+                    if ([string]::IsNullOrWhiteSpace($currentWord) -or $candidate -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
+                        New-NetshCompletionResult -CompletionText $candidate -ResultType 'ParameterValue' -ToolTip $expectedOption.ToolTip
+                    }
+                }
+                return
+            }
+            default {
+                return
+            }
         }
     }
 
@@ -878,13 +963,14 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
     $resultMap = [ordered]@{}
     $candidateItems = New-Object System.Collections.Generic.List[object]
 
-    if ($currentWord -like '-*' -or ($resolved.PathTokens.Count -eq 0 -and $resolved.Remaining.Count -eq 0)) {
+    $isOptionWord = ($currentWord -like '-*') -or ($currentWord -like '/*')
+    if ($isOptionWord -or $resolved.PathTokens.Count -eq 0) {
         foreach ($item in (Get-NetshGlobalOptionSuggestions -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
         }
     }
 
-    if (-not ($currentWord -like '-*')) {
+    if (-not $isOptionWord) {
         foreach ($item in (Get-NetshCollectionSuggestions -Collection $activeNode.NextTokens -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
         }
