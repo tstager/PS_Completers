@@ -42,8 +42,7 @@ The script initializes `$script:UvCompletionCache` once and reuses it across com
 
 - resolved executable paths for `uv` and `uvx`,
 - per-command-path parsed help data,
-- a static command tree,
-- a small set of static option values.
+- a static command tree that serves as the fallback when `uv` is not installed.
 
 ### 2. Executable discovery
 
@@ -52,7 +51,7 @@ The script initializes `$script:UvCompletionCache` once and reuses it across com
 - `uv.exe` / `uv`
 - `uvx.exe` / `uvx`
 
-If the executable cannot be found, the completer returns nothing.
+If the executable cannot be found, completion falls back to the static command tree.
 
 ### 3. Command-path detection
 
@@ -60,7 +59,10 @@ If the executable cannot be found, the completer returns nothing.
 
 Important details:
 
-- tokens that start with `-` are treated as options and skipped for path building,
+- tokens that start with `-` are treated as options and skipped for path building; a value-bearing option (one whose help line shows a `<METAVAR>`) also consumes the following token,
+- a non-option token that is not a known subcommand switches the completer into operand mode: no further subcommands are offered, only options and positional values,
+- at the root, an unknown token is probed once with `uv <token> --help` (safe because uv rejects unknown subcommands) so hidden commands such as `generate-shell-completion` still resolve,
+- trailing whitespace is judged against the last element before the cursor, so editing mid-line keeps the command path (`uv pip | --no-cache`),
 - `uv help ...` is treated specially through a help mode,
 - `uvx` is given a synthetic root path of `tool run`, so its completion model is based on the `uv tool run` branch.
 
@@ -79,7 +81,9 @@ and parse the returned help text.
 - subcommands from `Commands:` sections,
 - options from `Options:`-style sections,
 - possible values from inline help such as `[possible values: ...]`,
-- possible values from indented `Possible values:` lists.
+- possible values from indented `Possible values:` lists,
+- the metavariable of every option (`--cache-dir <CACHE_DIR>`), which decides whether the option is a switch, a path-typed option, or a free/enum value,
+- the closed value set of the first positional in `Arguments:` (`uv generate-shell-completion <SHELL>`).
 
 ### 5. Result shaping
 
@@ -87,7 +91,8 @@ The completer then decides what to offer based on context:
 
 - subcommands,
 - options,
-- values for the previous option,
+- values for the previous option when it takes one (switches such as `--frozen` fall through to the normal option/command list; path-typed options such as `--cache-dir` deliberately return nothing so PowerShell's filesystem completion applies; free values with no published set get a `<metavar>` placeholder),
+- positional values such as the shell names for `uv generate-shell-completion`,
 - values for `--option=value` assignments,
 - help-topic subcommands when `uv help ...` is being completed.
 
@@ -108,12 +113,15 @@ The script seeds completion with these top-level `uv` subcommands:
 - `export`
 - `tree`
 - `format`
+- `check`
+- `audit`
 - `tool`
 - `python`
 - `pip`
 - `venv`
 - `build`
 - `publish`
+- `workspace`
 - `cache`
 - `self`
 - `help`
@@ -121,9 +129,10 @@ The script seeds completion with these top-level `uv` subcommands:
 It also seeds several nested command paths:
 
 - `auth` → `login`, `logout`, `token`, `dir`
-- `tool` → `run`, `install`, `upgrade`, `list`, `uninstall`, `update-shell`, `dir`
+- `tool` → `run`, `install`, `upgrade`, `list`, `audit`, `uninstall`, `update-shell`, `dir`
 - `python` → `list`, `install`, `upgrade`, `find`, `pin`, `dir`, `uninstall`, `update-shell`
 - `pip` → `compile`, `sync`, `install`, `uninstall`, `freeze`, `list`, `show`, `tree`, `check`
+- `workspace` → `metadata`, `dir`, `list`
 - `cache` → `clean`, `prune`, `dir`, `size`
 - `self` → `update`, `version`
 
@@ -144,15 +153,7 @@ uv auth login --keyring-provider <TAB>
 uv auth login --keyring-provider=<TAB>
 ```
 
-Value suggestions are taken from parsed help and a small static value map.
-
-### Static value hints included in the script
-
-The script explicitly seeds these values:
-
-- `--color` → `auto`, `always`, `never`
-- `--keyring-provider` → `disabled`, `subprocess`
-- `auth login --keyring-provider` → `disabled`, `subprocess`, `native`
+Value suggestions are taken from parsed help only; there is no static value map, so the list can never disagree with the installed uv (for example `uv auth login --keyring-provider` offers exactly `disabled` and `subprocess` on 0.12.13).
 
 ### `uv help` support
 
@@ -199,9 +200,9 @@ uvx <TAB>
 
 ## Limitations / notes
 
-- The completer only suggests values it can discover from help output or from the small `StaticValues` table.
+- The completer only suggests values it can discover from help output.
 - It does not add project-specific completions such as package names or filesystem-aware argument completion.
 - The help parser depends on the general shape of `uv --help` output. Major format changes in the CLI could reduce completion quality.
 - `uvx` is intentionally mapped onto the `uv tool run` branch; this is a repository-specific design choice in the script.
-- Blank completion can fall back to option suggestions when a command path exposes options but no further subcommands.
+- Blank completion falls back to option suggestions (typed as parameter names) when a command path exposes options but no further subcommands.
 
