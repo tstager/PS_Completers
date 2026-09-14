@@ -71,12 +71,13 @@ That keeps the top level import-safe while still centralizing switch description
 
 The completer routes suggestions by the actual slash-switch context:
 
-- `/U` is only suggested after `/S` has received a value
-- `/P` is only suggested after `/U` has received a value
-- `/D` and `/SKIPSL` are only suggested after `/R`
+- every switch not yet on the line is offered in any order (takeown accepts them in any order); the documented ordering shows up as list-item hints such as `/D  (requires /R)` and `/SKIPSL  (only with /R)`
+- a fully typed value switch (`/S`, `/U`, `/P`, `/F`, `/D`) completes as the switch itself; its value slot opens after the following space
+- `/P` takes an optional value, so a `/`-prefixed word in its value slot completes the next switch (`takeown /S s /U u /P /F`)
+- `/D` values are only meaningful with `/R`; without it the slot returns an advisory
 - `/?` is terminal; once present, no further real arguments are suggested
 
-The completer intentionally does **not** invent attached forms such as `/S:server`, `/F:path`, or `/D:Y`.
+A run-together word such as `/FC:\Wind` is split into the switch and a partial value and completes with the `/F` prefix kept; the completer does **not** invent `:`-attached forms such as `/S:server` or `/D:Y`.
 
 ### 3. Safe value handling
 
@@ -96,6 +97,7 @@ Value behavior by switch:
 - `/F`
   - local path completion for files and directories
   - UNC values echo the typed path and add scoped placeholder guidance without enumerating remote shares
+  - once `/S` names a remote system, the slot switches to the documented share-relative form (`<share>\<file>`, `<share>\*`, or `share\<file>` after a share segment is typed) instead of listing the local directory
 
 ## Usage examples
 

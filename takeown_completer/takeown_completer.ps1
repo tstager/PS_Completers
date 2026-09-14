@@ -161,13 +161,13 @@ function Get-TakeownCatalog {
     }
 
     $switches = @(
-        [pscustomobject]@{ Token = '/S';       Description = 'Specifies the remote system to connect to.'; ValueKind = 'System' }
-        [pscustomobject]@{ Token = '/U';       Description = 'Specifies the user context under which the command should execute.'; ValueKind = 'User' }
-        [pscustomobject]@{ Token = '/P';       Description = 'Specifies the password for the given user context. Prompts if omitted.'; ValueKind = 'Password' }
-        [pscustomobject]@{ Token = '/F';       Description = 'Specifies the file or directory name pattern.'; ValueKind = 'Path' }
+        [pscustomobject]@{ Token = '/S';       Description = 'Specifies the remote system to connect to.'; ValueKind = 'System'; OptionalValue = $false }
+        [pscustomobject]@{ Token = '/U';       Description = 'Specifies the user context under which the command should execute. Documented after /S.'; ValueKind = 'User'; OptionalValue = $false }
+        [pscustomobject]@{ Token = '/P';       Description = 'Specifies the password for the given user context. Prompts if omitted, so the value may be left out. Documented after /U.'; ValueKind = 'Password'; OptionalValue = $true }
+        [pscustomobject]@{ Token = '/F';       Description = 'Specifies the file or directory name pattern; sharename\filename with /S.'; ValueKind = 'Path'; OptionalValue = $false }
         [pscustomobject]@{ Token = '/A';       Description = 'Gives ownership to the Administrators group instead of the current user.' }
         [pscustomobject]@{ Token = '/R';       Description = 'Operates on files in the specified directory and all subdirectories.' }
-        [pscustomobject]@{ Token = '/D';       Description = 'Default answer used during recursive processing when list-folder permission is missing.'; ValueKind = 'Prompt' }
+        [pscustomobject]@{ Token = '/D';       Description = 'Default answer (Y or N) used during recursive processing when list-folder permission is missing. Requires /R.'; ValueKind = 'Prompt'; OptionalValue = $false }
         [pscustomobject]@{ Token = '/SKIPSL';  Description = 'Do not follow symbolic links. Only applicable with /R.' }
         [pscustomobject]@{ Token = '/?';       Description = 'Displays takeown help.' }
     )
@@ -247,12 +247,16 @@ function Get-TakeownState {
         HasDefaultAnswerValue = $false
         HasSkipSymbolicLinks  = $false
         HasHelp               = $false
+        UsedSwitches          = (New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase))
     }
 
     $pendingValueSwitch = $null
 
     for ($index = 0; $index -lt $Arguments.Count; $index++) {
         $argument = $Arguments[$index]
+        if ($argument.StartsWith('/')) {
+            [void]$state.UsedSwitches.Add($argument)
+        }
 
         if ($null -ne $pendingValueSwitch) {
             if (-not [string]::IsNullOrWhiteSpace($argument) -and -not $argument.StartsWith('/')) {
@@ -296,51 +300,33 @@ function Get-TakeownSwitchCompletions {
         [pscustomobject]$State
     )
 
+    # takeown accepts its switches in any order, so every switch not yet on the line is
+    # offered; the documented ordering constraints are surfaced as list-item hints instead.
     $catalog = Get-TakeownCatalog
-    $allowedTokens = New-Object System.Collections.Generic.List[string]
+    $hints = @{
+        '/U'      = if (-not $State.HasSystemValue) { '(documented after /S)' } else { '' }
+        '/P'      = if (-not $State.HasUserValue) { '(documented after /U)' } else { '' }
+        '/D'      = if (-not $State.HasRecurse) { '(requires /R)' } else { '' }
+        '/SKIPSL' = if (-not $State.HasRecurse) { '(only with /R)' } else { '' }
+    }
 
-    if (-not $State.HasFileValue) {
-        if (-not $State.HasSystemValue) {
-            $allowedTokens.Add('/S')
+    foreach ($switch in $catalog.Switches) {
+        $token = $switch.Token
+        if ($State.UsedSwitches.Contains($token)) {
+            continue
         }
 
-        if ($State.HasSystemValue -and -not $State.HasUserValue) {
-            $allowedTokens.Add('/U')
-        }
-
-        if ($State.HasUserValue -and -not $State.HasPasswordSwitch) {
-            $allowedTokens.Add('/P')
-        }
-
-        $allowedTokens.Add('/F')
-    }
-
-    if ($State.HasFileValue -and -not $State.HasAdministrators) {
-        $allowedTokens.Add('/A')
-    }
-
-    if ($State.HasFileValue -and -not $State.HasRecurse) {
-        $allowedTokens.Add('/R')
-    }
-
-    if ($State.HasRecurse -and -not $State.HasDefaultAnswerValue) {
-        $allowedTokens.Add('/D')
-    }
-
-    if ($State.HasRecurse -and -not $State.HasSkipSymbolicLinks) {
-        $allowedTokens.Add('/SKIPSL')
-    }
-
-    $allowedTokens.Add('/?')
-
-    foreach ($token in @($allowedTokens | Select-Object -Unique)) {
         if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and
             -not $token.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        $metadata = $catalog.SwitchLookup[$token.ToUpperInvariant()]
-        New-TakeownCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $metadata.Description -ListItemText $token
+        $listItemText = $token
+        if ($hints.ContainsKey($token) -and $hints[$token]) {
+            $listItemText = '{0}  {1}' -f $token, $hints[$token]
+        }
+
+        New-TakeownCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $switch.Description -ListItemText $listItemText
     }
 }
 
@@ -448,7 +434,7 @@ function Get-TakeownPathCompletions {
     }
 
     try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
+        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
     } catch {
         $items = @()
     }
@@ -471,6 +457,34 @@ function Get-TakeownPathCompletions {
     if ($results.Count -eq 0) {
         $fallback = if ([string]::IsNullOrWhiteSpace($typedValue)) { '<path>' } else { $typedValue }
         [void]$results.Add((New-TakeownCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $fallback))
+    }
+
+    @($results.ToArray())
+}
+
+function Get-TakeownShareRelativeCompletionList {
+    param(
+        [string]$CurrentValue,
+        [string]$ToolTip
+    )
+
+    # With /S the help documents share-relative operands (MyShare\Acme*.doc); the remote
+    # share is never enumerated, so the slot is a progressive placeholder chain.
+    $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    $cleanValue = Remove-TakeownOuterQuotes -Value $typedValue
+    $results = New-Object System.Collections.Generic.List[object]
+
+    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
+        [void]$results.Add((New-TakeownCompletionResult -CompletionText $typedValue -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $typedValue))
+    }
+
+    $share = if ($cleanValue -match '^(?<share>[^\\]+)\\') { $Matches.share } else { '<share>' }
+    foreach ($candidate in @(($share + '\<file>'), ($share + '\*'))) {
+        if ($results.Count -gt 0 -and $candidate -eq $typedValue) {
+            continue
+        }
+
+        [void]$results.Add((New-TakeownCompletionResult -CompletionText $candidate -ResultType 'ParameterValue' -ToolTip 'Share-relative path on the /S system. Remote shares are not enumerated during completion.' -ListItemText $candidate))
     }
 
     @($results.ToArray())
@@ -505,7 +519,8 @@ function Complete-Takeown {
         [int]$cursorPosition
     )
 
-    $tokenState = Get-TakeownTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    # $cursorPosition is a whole-line offset; the command text is command-relative.
+    $tokenState = Get-TakeownTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-TakeownArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
@@ -522,39 +537,63 @@ function Complete-Takeown {
         return @(Get-TakeownTerminalCompletions -CurrentWord $currentWord)
     }
 
+    $catalog = Get-TakeownCatalog
     $expectedValueSwitch = Get-TakeownPendingValueSwitch -ArgumentsBeforeCurrent $argumentsBeforeCurrent
-    if ($null -eq $expectedValueSwitch) {
-        $inlineValueSwitch = Get-TakeownValueSwitchName -Argument $currentWord
-        if ($null -ne $inlineValueSwitch) {
+    $valuePrefix = ''
+
+    # A switch whose value is optional (/P) yields to the next switch typed in its slot.
+    if ($null -ne $expectedValueSwitch -and $catalog.SwitchLookup[$expectedValueSwitch].OptionalValue -and $currentWord.StartsWith('/')) {
+        $expectedValueSwitch = $null
+    }
+
+    # A run-together word such as /FC:\Wind is switch plus partial value; the switch itself
+    # typed in full (or a prefix of a longer switch such as /SK) stays a switch completion.
+    if ($null -eq $expectedValueSwitch -and $currentWord.Length -gt 2) {
+        $inlineValueSwitch = Get-TakeownValueSwitchName -Argument $currentWord.Substring(0, 2)
+        $isSwitchPrefix = [bool]@($catalog.Switches | Where-Object { $_.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase) }).Count
+        if ($null -ne $inlineValueSwitch -and -not $isSwitchPrefix) {
             $expectedValueSwitch = $inlineValueSwitch
-            $currentWord = ''
+            $valuePrefix = $currentWord.Substring(0, 2)
+            $currentWord = $currentWord.Substring(2)
         }
     }
 
-    $catalog = Get-TakeownCatalog
-
     if ($null -ne $expectedValueSwitch) {
-        switch ($expectedValueSwitch) {
+        $valueResults = switch ($expectedValueSwitch) {
             '/S' {
-                return @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.SystemSuggestions -Placeholder '<system>' -ToolTip $catalog.SwitchLookup['/S'].Description)
+                @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.SystemSuggestions -Placeholder '<system>' -ToolTip $catalog.SwitchLookup['/S'].Description)
             }
             '/U' {
-                return @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.UserSuggestions -Placeholder '<domain\user>' -ToolTip $catalog.SwitchLookup['/U'].Description)
+                @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.UserSuggestions -Placeholder '<domain\user>' -ToolTip $catalog.SwitchLookup['/U'].Description)
             }
             '/P' {
-                return @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions @('<password>') -Placeholder '<password>' -ToolTip 'Password placeholder only. The completer never inspects secrets.' -PlaceholderOnlyOnMiss)
+                @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions @('<password>') -Placeholder '<password>' -ToolTip 'Password placeholder only. The completer never inspects secrets.' -PlaceholderOnlyOnMiss)
             }
             '/F' {
-                return @(Get-TakeownPathCompletions -CurrentValue $currentWord -ToolTip $catalog.SwitchLookup['/F'].Description)
+                if ($state.HasSystemValue -and -not (Remove-TakeownOuterQuotes -Value $currentWord).StartsWith('\\')) {
+                    @(Get-TakeownShareRelativeCompletionList -CurrentValue $currentWord -ToolTip $catalog.SwitchLookup['/F'].Description)
+                } else {
+                    @(Get-TakeownPathCompletions -CurrentValue $currentWord -ToolTip $catalog.SwitchLookup['/F'].Description)
+                }
             }
             '/D' {
                 if (-not $state.HasRecurse) {
-                    return @(Get-TakeownRequiresRecurseCompletions -CurrentWord $currentWord)
+                    @(Get-TakeownRequiresRecurseCompletions -CurrentWord $currentWord)
+                } else {
+                    @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.PromptSuggestions -Placeholder '<Y|N>' -ToolTip $catalog.SwitchLookup['/D'].Description)
                 }
-
-                return @(Get-TakeownValueCompletions -CurrentWord $currentWord -Suggestions $catalog.PromptSuggestions -Placeholder '<Y|N>' -ToolTip $catalog.SwitchLookup['/D'].Description)
             }
         }
+
+        if ([string]::IsNullOrEmpty($valuePrefix)) {
+            return @($valueResults)
+        }
+
+        return @(
+            foreach ($result in @($valueResults)) {
+                New-TakeownCompletionResult -CompletionText ($valuePrefix + $result.CompletionText) -ResultType $result.ResultType -ToolTip $result.ToolTip -ListItemText ($valuePrefix + $result.ListItemText)
+            }
+        )
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('/')) {
