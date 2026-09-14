@@ -51,7 +51,7 @@ The primary source for option tokens is:
 sed --help
 ```
 
-`Get-SedHelpOptionTokens` extracts tokens such as:
+`ConvertFrom-SedHelpText` parses each synopsis line (tokens, value placeholder, wrapped description) and yields tokens such as:
 
 - `-n`
 - `--quiet`
@@ -71,7 +71,7 @@ sed --help
 - `-z`
 - `--null-data`
 
-If help probing fails, the script falls back to the embedded option metadata so completion still works.
+Help is additive: static definitions are kept only when the installed build documents at least one of their tokens, and every help group the static table lacks (for example `--follow-symlinks` on stock GNU builds) is added with a value kind inferred from its placeholder (`script`, `script-file`, `SUFFIX`, `N`, `locale-name`). If help probing fails, the script falls back to the embedded option metadata so completion still works.
 
 `--zero-terminated` is intentionally added even though the local help output omits it, because runtime verification showed that alias is accepted by the installed build.
 
@@ -161,11 +161,12 @@ The completer routes these forms to value completion when appropriate:
 
 The completer also handles conservative attached short forms for:
 
-- `-eSCRIPT`
+- `-eSCRIPT` (an opening quote is preserved: `-e's/` completes to `-e's///'`)
 - `-fPATH`
 - `-l80`
+- `-i.bak` (PowerShell splits the token into `-i` and `.bak`; the completer re-joins adjacent command elements before routing)
 
-It intentionally avoids aggressive short-option cluster parsing because `sed` short clustering is nuanced and `-i` has optional attached suffix semantics. In-place suffix hints are primarily exposed through `--in-place=...`, with only conservative short-form handling in the script.
+It intentionally avoids aggressive short-option cluster parsing because `sed` short clustering is nuanced and `-i` has optional attached suffix semantics. An unrecognised `--option` is treated as an option, never as the implicit script, so the following slot keeps its meaning.
 
 ## Dependencies or external command expectations
 
@@ -205,4 +206,4 @@ sed -- -n <TAB>
 - The completer does not try to fully synthesize sed-program text for `-e` or `--expression`; it only offers a few starter hints to avoid generic fallback completion.
 - `-i` / `--in-place` suffix completion is intentionally conservative and limited to sample hints.
 - Short-option clustering is not deeply interpreted beyond safe attached-value forms.
-- Help parsing is used for option-token discovery, while value behavior is driven by embedded metadata.
+- Help parsing drives option discovery and value modes; the embedded metadata supplies richer value hints for the options it knows and is the offline fallback.

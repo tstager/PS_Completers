@@ -227,41 +227,94 @@ function Get-SedHelpText {
     }
 }
 
-function Get-SedHelpOptionTokens {
+function Get-SedHelpValueKind {
+    param([string]$Placeholder)
+
+    switch -Regex ($Placeholder) {
+        '^script$' { return 'ScriptText' }
+        '^script-file$' { return 'SourceFile' }
+        '^SUFFIX$' { return 'InPlaceSuffix' }
+        '^N$' { return 'LineLength' }
+        '^locale-name$' { return 'Locale' }
+        '^$' { return 'None' }
+        default { return 'Text' }
+    }
+}
+
+function ConvertFrom-SedHelpText {
+    # Parses GNU sed's option table into definitions shaped like Get-SedStaticOptionDefinitions,
+    # so options the static table does not know (--follow-symlinks on stock builds) stay reachable.
     param([string]$HelpText)
 
     if ([string]::IsNullOrWhiteSpace($HelpText)) {
         return @()
     }
 
-    $matches = [regex]::Matches(
-        $HelpText,
-        '(?<!\w)(--[a-z][a-z\-]*)(?:\[[^\]]+\])?(?:=[^\s,]+)?|(?<!\w)(-[A-Za-z])(?:\[[^\]]+\])?'
-    )
+    $groups = New-Object System.Collections.Generic.List[hashtable]
+    $current = $null
 
-    $seen = New-SedStringSet
-    $results = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($HelpText -split "`r?`n")) {
+        if ($line -match '^\s{2,6}(?<spec>-\S.*?)(?:\s{3,}(?<inline>\S.*))?\s*$') {
+            $spec = $Matches['spec']
+            $inline = $Matches['inline']
+            $tokens = New-Object System.Collections.Generic.List[string]
+            $valueMode = 'None'
+            $placeholder = ''
+            $hasShort = $false
+            $hasLong = $false
 
-    foreach ($match in $matches) {
-        $token = $match.Value
-        if ([string]::IsNullOrWhiteSpace($token)) {
+            foreach ($part in ($spec -split ',\s+')) {
+                if ($part -notmatch '^(?<token>--?[A-Za-z][A-Za-z0-9\-]*)(?<rest>.*)$') {
+                    continue
+                }
+
+                $token = $Matches['token']
+                $rest = $Matches['rest']
+                [void]$tokens.Add($token)
+                if ($token.StartsWith('--', [System.StringComparison]::Ordinal)) { $hasLong = $true } else { $hasShort = $true }
+
+                if ($rest -match '^\[=?(?<value>[^\]]+)\]') {
+                    if ($valueMode -eq 'None') { $valueMode = 'Optional' }
+                    if (-not $placeholder) { $placeholder = $Matches['value'] }
+                } elseif ($rest -match '^(?:=|\s+)(?<value>\S+)') {
+                    $valueMode = 'Required'
+                    if (-not $placeholder) { $placeholder = $Matches['value'] }
+                }
+            }
+
+            if ($tokens.Count -eq 0) {
+                $current = $null
+                continue
+            }
+
+            $valueKind = Get-SedHelpValueKind -Placeholder $placeholder
+            $current = @{
+                Canonical            = $tokens[0]
+                Tokens               = @($tokens.ToArray())
+                Description          = if ($inline) { $inline.Trim() } else { '' }
+                ValueMode            = $valueMode
+                ValueKind            = $valueKind
+                Placeholder          = $placeholder
+                ShortAllowsSeparate  = $hasShort -and ($valueMode -eq 'Required')
+                ShortAllowsAttached  = $hasShort -and ($valueMode -ne 'None')
+                LongAllowsSeparate   = $hasLong -and ($valueMode -eq 'Required')
+                LongAllowsEquals     = $hasLong -and ($valueMode -ne 'None')
+                ExplicitScriptSource = $valueKind -in @('ScriptText', 'SourceFile')
+            }
+            [void]$groups.Add($current)
             continue
         }
 
-        $token = ($token -replace '(?:\[[^\]]+\])?(?:=[^\s,]+)?$', '')
-        if ([string]::IsNullOrWhiteSpace($token)) {
+        if ($null -ne $current -and $line -match '^\s{8,}(?<text>\S.*?)\s*$') {
+            $text = $Matches['text']
+            $current.Description = if ($current.Description) { $current.Description + ' ' + $text } else { $text }
             continue
         }
 
-        if ($seen.Contains($token)) {
-            continue
-        }
-
-        [void]$seen.Add($token)
-        [void]$results.Add($token)
+        $current = $null
     }
 
-    @($results.ToArray())
+    @($groups.ToArray())
 }
 
 function Get-SedStaticOptionDefinitions {
@@ -455,7 +508,8 @@ function Initialize-SedCompletionCatalog {
     }
 
     $helpText = Get-SedHelpText -CommandName $CommandName
-    $helpTokens = @(Get-SedHelpOptionTokens -HelpText $helpText)
+    $helpDefinitions = @(ConvertFrom-SedHelpText -HelpText $helpText)
+    $helpTokens = @($helpDefinitions | ForEach-Object { $_.Tokens })
     $helpTokenMap = New-SedStringSet
     foreach ($token in $helpTokens) {
         [void]$helpTokenMap.Add($token)
@@ -497,6 +551,33 @@ function Initialize-SedCompletionCatalog {
                 [pscustomobject]@{
                     CompletionText = $token
                     ToolTip = $resolvedDefinition.Description
+                }
+            )
+        }
+    }
+
+    # Help is additive: any option the installed build documents but the static table lacks is
+    # synthesized from its synopsis line, so the static table is only an offline fallback.
+    foreach ($helpDefinition in $helpDefinitions) {
+        $known = $false
+        foreach ($token in @($helpDefinition.Tokens)) {
+            if ($tokenMap.ContainsKey($token)) {
+                $known = $true
+                break
+            }
+        }
+
+        if ($known) {
+            continue
+        }
+
+        [void]$definitions.Add($helpDefinition)
+        foreach ($token in @($helpDefinition.Tokens)) {
+            $tokenMap[$token] = $helpDefinition
+            [void]$suggestions.Add(
+                [pscustomobject]@{
+                    CompletionText = $token
+                    ToolTip = if ($helpDefinition.Description) { $helpDefinition.Description } else { $token }
                 }
             )
         }
@@ -664,8 +745,10 @@ function Update-SedParseState {
                         }
                     }
 
-                    continue
                 }
+
+                # An unrecognised long option is still an option, never the implicit script.
+                continue
             } elseif ($token.StartsWith('-', [System.StringComparison]::Ordinal) -and ($token -ne '-')) {
                 Parse-SedShortCompletedToken -Token $token -State $state
                 continue
@@ -737,7 +820,7 @@ function Get-SedPathCompletions {
     )
 
     foreach ($item in $sortedItems) {
-        $completionText = if ($trimmedInput -and -not [System.IO.Path]::IsPathRooted($trimmedInput)) {
+        $completionText = if (-not [System.IO.Path]::IsPathRooted($trimmedInput)) {
             if ($parent -eq '.') {
                 $item.Name
             } else {
@@ -772,13 +855,16 @@ function Get-SedSimpleValueCompletions {
         [string]$AttachedPrefix = ''
     )
 
-    $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
+    $rawWord = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
+    $quoteCharacter = Get-SedQuoteCharacter -InputText $rawWord
+    $word = Remove-SedOuterQuotes -InputText $rawWord
 
     foreach ($value in @($Values)) {
         $text = if ($value -is [string]) { $value } else { $value.Text }
         $toolTip = if ($value -is [string]) { $value } else { $value.ToolTip }
         if ([string]::IsNullOrWhiteSpace($word) -or $text.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-SedCompletionResult -CompletionText ($AttachedPrefix + $text) -ResultType 'ParameterValue' -ToolTip $toolTip
+            $completionText = if ($quoteCharacter) { ConvertTo-SedQuotedValue -Value $text -QuoteCharacter $quoteCharacter } else { $text }
+            New-SedCompletionResult -CompletionText ($AttachedPrefix + $completionText) -ResultType 'ParameterValue' -ToolTip $toolTip
         }
     }
 }
@@ -789,12 +875,10 @@ function Get-SedInPlaceSuffixCompletions {
         [string]$AttachedPrefix = ''
     )
 
-    $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
-    foreach ($suffix in @($script:SedCompletionCatalog.InPlaceSuffixHints)) {
-        if ([string]::IsNullOrWhiteSpace($word) -or $suffix.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-SedCompletionResult -CompletionText ($AttachedPrefix + $suffix) -ResultType 'ParameterValue' -ToolTip ('Use backup suffix {0}' -f $suffix)
-        }
-    }
+    $hints = @($script:SedCompletionCatalog.InPlaceSuffixHints | ForEach-Object {
+            [pscustomobject]@{ Text = $_; ToolTip = ('Use backup suffix {0}' -f $_) }
+        })
+    Get-SedSimpleValueCompletions -Values $hints -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix
 }
 
 function Get-SedLocaleCompletions {
@@ -843,8 +927,12 @@ function Get-SedValueCompletions {
         'InPlaceSuffix' {
             return @(Get-SedInPlaceSuffixCompletions -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix)
         }
-        default {
+        'None' {
             return @()
+        }
+        default {
+            $placeholder = if ($Definition.ContainsKey('Placeholder') -and $Definition.Placeholder) { '<' + $Definition.Placeholder + '>' } else { '<value>' }
+            return @(New-SedCompletionResult -CompletionText ($AttachedPrefix + $placeholder) -ResultType 'ParameterValue' -ToolTip $Definition.Description)
         }
     }
 }
@@ -899,49 +987,48 @@ function Complete-SedNative {
         [int]$CursorPosition
     )
 
-    [object[]]$commandElements = @($CommandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+    [object[]]$commandElements = @($CommandAst.CommandElements)
     if ($commandElements.Count -eq 0) {
         return
     }
 
-    Initialize-SedCompletionCatalog -CommandName $commandElements[0]
+    Initialize-SedCompletionCatalog -CommandName $commandElements[0].Extent.Text
 
-    $line = $CommandAst.ToString()
-    $hasTrailingSpace =
-        (([string]::IsNullOrEmpty($WordToComplete) -and ($CursorPosition -ge $line.Length)) -or
-        ($line -match '\s$'))
-    $currentWord = if ($hasTrailingSpace) {
+    # PowerShell splits an attached short value at the parameter boundary ('-i.bak' becomes
+    # [-i][.bak]), so rebuild words from adjacent extents and locate the one under the cursor.
+    $words = New-Object System.Collections.Generic.List[object]
+    foreach ($element in ($commandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if (($words.Count -gt 0) -and ($words[$words.Count - 1].End -eq $extent.StartOffset)) {
+            $words[$words.Count - 1].Text += $extent.Text
+            $words[$words.Count - 1].End = $extent.EndOffset
+        } else {
+            [void]$words.Add([pscustomobject]@{ Start = $extent.StartOffset; End = $extent.EndOffset; Text = $extent.Text })
+        }
+    }
+
+    $currentWordEntry = $null
+    foreach ($word in $words) {
+        if (($word.Start -lt $CursorPosition) -and ($CursorPosition -le $word.End)) {
+            $currentWordEntry = $word
+            break
+        }
+    }
+
+    $effectiveCurrentToken = if ($null -ne $currentWordEntry) {
+        $currentWordEntry.Text.Substring(0, [Math]::Min($currentWordEntry.Text.Length, $CursorPosition - $currentWordEntry.Start))
+    } elseif ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
-    } elseif ([string]::IsNullOrWhiteSpace($WordToComplete)) {
-        Get-SedCurrentToken -Line $line -CursorPosition $CursorPosition -Fallback $WordToComplete
     } else {
         $WordToComplete
     }
-    [object[]]$argumentTokens = if ($commandElements.Count -gt 1) {
-        @($commandElements[1..($commandElements.Count - 1)])
-    } else {
-        @()
-    }
+    $currentWord = $effectiveCurrentToken
 
-    [object[]]$completedTokens = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 1) {
-        @($argumentTokens[0..($argumentTokens.Count - 2)])
-    } else {
-        @()
-    }
-
-    $effectiveCurrentToken = $currentWord
-    if (-not [string]::IsNullOrEmpty($currentWord) -and ($argumentTokens.Count -gt 0)) {
-        $lastArgumentToken = [string]$argumentTokens[$argumentTokens.Count - 1]
-        if (
-            -not [string]::IsNullOrEmpty($lastArgumentToken) -and
-            ($lastArgumentToken.Length -gt $currentWord.Length) -and
-            $lastArgumentToken.EndsWith($currentWord, [System.StringComparison]::Ordinal)
-        ) {
-            $effectiveCurrentToken = $lastArgumentToken
-        }
-    }
+    [object[]]$completedTokens = @(
+        $words | Where-Object {
+            if ($null -ne $currentWordEntry) { $_.End -le $currentWordEntry.Start } else { $_.End -le $CursorPosition }
+        } | ForEach-Object { $_.Text }
+    )
 
     $state = Update-SedParseState -CompletedTokens $completedTokens
 
