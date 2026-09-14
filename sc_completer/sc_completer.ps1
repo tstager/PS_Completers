@@ -205,7 +205,7 @@ function Get-ScStaticConfigOptions {
         [pscustomobject]@{ Key = 'type='; CanonicalToken = 'type= '; Description = 'Service type.'; ValueKind = 'StaticList'; Values = $typeValues }
         [pscustomobject]@{ Key = 'start='; CanonicalToken = 'start= '; Description = 'Service start mode.'; ValueKind = 'StaticList'; Values = @('boot', 'system', 'auto', 'demand', 'disabled', 'delayed-auto') }
         [pscustomobject]@{ Key = 'error='; CanonicalToken = 'error= '; Description = 'Error severity.'; ValueKind = 'StaticList'; Values = @('normal', 'severe', 'critical', 'ignore') }
-        [pscustomobject]@{ Key = 'binpath='; CanonicalToken = 'binPath= '; Description = 'Binary path for the service executable.'; ValueKind = 'FreeText'; Placeholder = '<binary path>' }
+        [pscustomobject]@{ Key = 'binpath='; CanonicalToken = 'binPath= '; Description = 'Binary path for the service executable.'; ValueKind = 'Path'; Placeholder = '<binary path>' }
         [pscustomobject]@{ Key = 'group='; CanonicalToken = 'group= '; Description = 'Load order group.'; ValueKind = 'FreeText'; Placeholder = '<load order group>' }
         [pscustomobject]@{ Key = 'tag='; CanonicalToken = 'tag= '; Description = 'Whether to obtain a TagID.'; ValueKind = 'StaticList'; Values = @('yes', 'no') }
         [pscustomobject]@{ Key = 'depend='; CanonicalToken = 'depend= '; Description = 'Dependencies separated by forward slashes.'; ValueKind = 'FreeText'; Placeholder = '<dependency1/dependency2>' }
@@ -219,7 +219,7 @@ function Get-ScStaticFailureOptions {
     @(
         [pscustomobject]@{ Key = 'reset='; CanonicalToken = 'reset= '; Description = 'Length of period after which to reset the failure count.'; ValueKind = 'FailureReset' }
         [pscustomobject]@{ Key = 'reboot='; CanonicalToken = 'reboot= '; Description = 'Message broadcast before rebooting on failure.'; ValueKind = 'FreeText'; Placeholder = '<reboot message>' }
-        [pscustomobject]@{ Key = 'command='; CanonicalToken = 'command= '; Description = 'Command line to run on failure.'; ValueKind = 'FreeText'; Placeholder = '<command line>' }
+        [pscustomobject]@{ Key = 'command='; CanonicalToken = 'command= '; Description = 'Command line to run on failure.'; ValueKind = 'Path'; Placeholder = '<command line>' }
         [pscustomobject]@{ Key = 'actions='; CanonicalToken = 'actions= '; Description = 'Failure actions with delay times separated by forward slashes.'; ValueKind = 'FailureActions' }
     )
 }
@@ -538,9 +538,17 @@ function Get-ScStringValueCompletions {
         [bool]$QuoteWhitespace = $false
     )
 
+    # The parser closes an open string, so 'sc start "Win' arrives as "Win": strip both
+    # quotes and undo the escaping so the bare prefix is what gets matched.
     $matchPrefix = $CurrentWord
     if ($matchPrefix.Length -gt 0 -and ($matchPrefix[0] -eq [char]34 -or $matchPrefix[0] -eq [char]39)) {
+        $quoteChar = $matchPrefix[0]
         $matchPrefix = $matchPrefix.Substring(1)
+        if ($matchPrefix.Length -gt 0 -and $matchPrefix[$matchPrefix.Length - 1] -eq $quoteChar) {
+            $matchPrefix = $matchPrefix.Substring(0, $matchPrefix.Length - 1)
+        }
+
+        $matchPrefix = if ($quoteChar -eq [char]39) { $matchPrefix.Replace("''", "'") } else { $matchPrefix.Replace('`"', '"') }
     }
 
     $results = @()
@@ -734,7 +742,29 @@ function Get-ScOptionValueCompletions {
             return @(Get-ScStringValueCompletions -Values (Get-ScQueryTypeValues -OptionCounts $OptionCounts) -CurrentWord $prefixWord -ToolTip $Option.Description -Prefix $InlinePrefix)
         }
         'QueryState' {
-            return @(Get-ScStringValueCompletions -Values @('inactive', 'all') -CurrentWord $prefixWord -ToolTip $Option.Description -Prefix $InlinePrefix)
+            return @(Get-ScStringValueCompletions -Values @('active', 'inactive', 'all') -CurrentWord $prefixWord -ToolTip ($Option.Description + ' (default = active)') -Prefix $InlinePrefix)
+        }
+        'Path' {
+            # binPath= and command= are filesystem paths: hand them to the engine's own
+            # filename completer (in-process) and keep its ProviderItem/ProviderContainer types.
+            $pathResults = @(
+                foreach ($pathResult in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord))) {
+                    New-ScCompletionResult -CompletionText ($InlinePrefix + $pathResult.CompletionText) -ListItemText $pathResult.ListItemText -ResultType $pathResult.ResultType -ToolTip $pathResult.ToolTip
+                }
+            )
+
+            if ($pathResults.Count -gt 0) {
+                return $pathResults
+            }
+
+            $placeholder = if ($Option.PSObject.Properties.Name -contains 'Placeholder') { $Option.Placeholder } else { '<path>' }
+            if ([string]::IsNullOrEmpty($InlinePrefix)) {
+                return @(New-ScLiteralValueResults -CurrentValue $CurrentWord -Placeholder $placeholder -ToolTip $Option.Description)
+            }
+
+            return @(
+                New-ScCompletionResult -CompletionText ($InlinePrefix + $CurrentWord) -ListItemText $(if ([string]::IsNullOrEmpty($CurrentWord)) { $placeholder } else { $CurrentWord }) -ResultType 'ParameterValue' -ToolTip $Option.Description
+            )
         }
         'BufferSize' {
             return @(Get-ScNumericCompletions -Hints $script:ScCompletionCatalog.BufferSizeHints -CurrentWord $prefixWord -ToolTip $Option.Description -Prefix $InlinePrefix)
@@ -1088,8 +1118,10 @@ function Complete-Sc {
 
     Initialize-ScCompletionCatalog
 
-    $tokenState = Get-ScCurrentTokenState -Line $commandAst.Extent.Text -CursorPosition $cursorPosition
-    if ([string]::IsNullOrEmpty($wordToComplete) -and $cursorPosition -gt $commandAst.Extent.EndOffset) {
+    # $cursorPosition is line-absolute; the extent text is command-relative.
+    $relativeCursor = [Math]::Max(0, $cursorPosition - $commandAst.Extent.StartOffset)
+    $tokenState = Get-ScCurrentTokenState -Line $commandAst.Extent.Text -CursorPosition $relativeCursor
+    if ([string]::IsNullOrEmpty($wordToComplete) -and $relativeCursor -gt $commandAst.Extent.Text.Length) {
         $allTokens = @($tokenState.TokensBeforeCurrent)
         if (-not [string]::IsNullOrEmpty($tokenState.CurrentToken)) {
             $allTokens += $tokenState.CurrentToken

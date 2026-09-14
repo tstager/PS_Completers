@@ -54,7 +54,7 @@ On first use, `Initialize-ScCompletionCatalog`:
 
 ### Token-state parsing
 
-The completer reconstructs tokens from the command line text up to the cursor so real `TabExpansion2` behavior stays aligned with runtime completion.
+The completer reconstructs tokens from the command line text up to the cursor (rebased to the command's start offset, so `sc` need not be the first statement on the line) so real `TabExpansion2` behavior stays aligned with runtime completion.
 
 It tracks:
 
@@ -101,7 +101,7 @@ Commands that take an existing service name complete from local `Get-Service` na
 - `qc`, `qdescription`, `qfailure`, `qfailureflag`, `qsidtype`, `qprivs`, `qtriggerinfo`, `qpreferrednode`, `qmanagedaccount`, `qprotection`
 - `delete`, `control`, `sdshow`, `sdset`, `triggerinfo`, `preferrednode`, `EnumDepend`
 
-Service names and display names that contain spaces are returned as quoted completion texts so the native command receives them as a single argument.
+Service names and display names that contain spaces are returned as quoted completion texts so the native command receives them as a single argument. A prefix typed inside an open quote (`sc start "Win`) is matched without the quote the parser closes for it, so quoted names stay reachable.
 
 ### `query` / `queryex`
 
@@ -119,7 +119,7 @@ Value completion includes:
 
 - first `type=` values like `driver`, `service`, `userservice`, `all`
 - second `type=` values like `own`, `share`, `interact`, `kernel`, `filesys`, `rec`, `adapt`
-- `state=` values `inactive`, `all`
+- `state=` values `active` (the default), `inactive`, `all`
 - numeric hints for `bufsize=` and `ri=`
 
 ### `config` / `create`
@@ -144,7 +144,9 @@ Enumerated values are provided for:
 - `error=`
 - `tag=`
 
-Free-form value slots such as `binPath=`, `group=`, `depend=`, `obj=`, `DisplayName=`, and `password=` return placeholder-style completions to suppress filesystem fallback rather than inventing content.
+`binPath=` (and `failure` `command=`) are filesystem paths: they complete through the engine's own filename completer, keeping its provider item types, in both the separate (`binPath= C:\Win`) and inline (`binPath=C:\Win`) forms.
+
+Free-form value slots such as `group=`, `depend=`, `obj=`, `DisplayName=`, and `password=` return placeholder-style completions to suppress filesystem fallback rather than inventing content.
 
 `create` treats the first positional service name as free-form and likewise suppresses filesystem fallback there.
 
