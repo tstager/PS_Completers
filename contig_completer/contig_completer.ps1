@@ -10,16 +10,23 @@ if (-not (Get-Variable -Name ContigCompletionCatalog -Scope Script -ErrorAction 
             '$Boot', '$BadClus', '$Secure', '$UpCase', '$Extend'
         )
         LengthHints   = @('65536', '1048576', '10485760', '1073741824')
+        DriveCache    = $null
+        # Forms are Contig's three documented usage lines:
+        #   1  contig [-a] [-s] [-q] [-v] <existing file>
+        #   2  contig -f [-v] [drive:]
+        #   3  contig [-v] [-l] -n <new file> <new file length>
         RootSwitches  = @(
-            @{ Token = '-a'; Description = 'Analyze fragmentation for an existing file.'; Modes = @('existing') }
-            @{ Token = '-f'; Description = 'Analyze free-space fragmentation on a drive.'; Modes = @('root', 'existing') }
-            @{ Token = '-l'; Description = 'Set valid data length for quick file creation (with -n).' ; Modes = @('new') }
-            @{ Token = '-n'; Description = 'Create a new file.'; Modes = @('root', 'existing') }
-            @{ Token = '-q'; Description = 'Quiet mode.'; Modes = @('existing') }
-            @{ Token = '-s'; Description = 'Recurse subdirectories.'; Modes = @('existing') }
-            @{ Token = '-v'; Description = 'Verbose output.'; Modes = @('existing', 'new', 'free') }
-            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; Modes = @('existing', 'new', 'free', 'root') }
-            @{ Token = '/?'; Description = 'Show Contig help.'; Modes = @('existing', 'new', 'free', 'root') }
+            @{ Token = '-a'; Description = 'Analyze fragmentation.'; Forms = @(1) }
+            @{ Token = '-f'; Description = 'Analyze free space fragmentation.'; Forms = @(2) }
+            @{ Token = '-l'; Description = 'Set valid data length for quick file creation (requires administrator rights).'; Forms = @(3) }
+            @{ Token = '-n'; Description = 'Create a new file.'; Forms = @(3) }
+            @{ Token = '-q'; Description = 'Quiet mode.'; Forms = @(1) }
+            @{ Token = '-s'; Description = 'Recurse subdirectories.'; Forms = @(1) }
+            @{ Token = '-v'; Description = 'Verbose.'; Forms = @(1, 2, 3) }
+            @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; Forms = @(1, 2, 3) }
+            @{ Token = '-accepteula'; Description = 'Accept the Sysinternals EULA silently.'; Forms = @(1, 2, 3) }
+            @{ Token = '-?'; Description = 'Show Contig help.'; Forms = @(1, 2, 3) }
+            @{ Token = '/?'; Description = 'Show Contig help.'; Forms = @(1, 2, 3) }
         )
     }
 }
@@ -74,31 +81,6 @@ function ConvertTo-ContigQuotedValue {
     }
 
     $Value
-}
-
-function Get-ContigCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
 }
 
 function Get-ContigTokenState {
@@ -166,22 +148,6 @@ function Get-ContigTokenState {
     }
 }
 
-function Get-ContigArgumentTokens {
-    param(
-        [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
-    )
-
-    $tokens = @()
-    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
-        if ($element.Extent.EndOffset -lt $CursorPosition) {
-            $tokens += $element.Extent.Text
-        }
-    }
-
-    $tokens
-}
-
 function Get-ContigState {
     param([string[]]$TokensBeforeCurrent)
 
@@ -198,7 +164,7 @@ function Get-ContigState {
         if ($cleanToken.StartsWith('-') -or $cleanToken.StartsWith('/')) {
             $lookup = $cleanToken.ToLowerInvariant()
             $usedSwitches[$lookup] = $true
-            if ($lookup -eq '/?') {
+            if ($lookup -in @('-?', '/?')) {
                 $helpRequested = $true
             }
             continue
@@ -207,10 +173,22 @@ function Get-ContigState {
         $positionals.Add($cleanToken)
     }
 
+    $viableForms = @(1, 2, 3)
+    foreach ($switchSpec in $script:ContigCompletionCatalog.RootSwitches) {
+        if ($usedSwitches.ContainsKey($switchSpec.Token.ToLowerInvariant())) {
+            $viableForms = @($viableForms | Where-Object { $_ -in $switchSpec.Forms })
+        }
+    }
+
+    # A bare operand with no form-selecting switch can only be usage form 1.
+    if ($positionals.Count -gt 0 -and $viableForms -contains 1) {
+        $viableForms = @(1)
+    }
+
     $mode = 'existing'
     if ($usedSwitches.ContainsKey('-f')) {
         $mode = 'free'
-    } elseif ($usedSwitches.ContainsKey('-n')) {
+    } elseif ($usedSwitches.ContainsKey('-n') -or $usedSwitches.ContainsKey('-l')) {
         $mode = 'new'
     }
 
@@ -218,6 +196,7 @@ function Get-ContigState {
         UsedSwitches   = $usedSwitches
         Positionals    = @($positionals)
         HelpRequested  = $helpRequested
+        ViableForms    = @($viableForms)
         Mode           = $mode
     }
 }
@@ -251,15 +230,7 @@ function Get-ContigSwitchCompletions {
 
     $cleanCurrent = Remove-ContigOuterQuotes -Value $CurrentWord
     $results = foreach ($switchSpec in $script:ContigCompletionCatalog.RootSwitches) {
-        if ($State.HelpRequested -and $switchSpec.Token -ne '/?') {
-            continue
-        }
-
-        if ($State.Mode -eq 'existing' -and ($State.UsedSwitches.ContainsKey('-f') -or $State.UsedSwitches.ContainsKey('-n'))) {
-            continue
-        }
-
-        if ($switchSpec.Modes -notcontains $State.Mode -and $switchSpec.Modes -notcontains 'root') {
+        if ($State.HelpRequested -and $switchSpec.Token -notin @('-?', '/?')) {
             continue
         }
 
@@ -267,15 +238,7 @@ function Get-ContigSwitchCompletions {
             continue
         }
 
-        if (($State.Mode -eq 'free') -and ($switchSpec.Token -in @('-a', '-l', '-n', '-q', '-s'))) {
-            continue
-        }
-
-        if (($State.Mode -eq 'new') -and ($switchSpec.Token -in @('-a', '-f', '-q', '-s'))) {
-            continue
-        }
-
-        if (($State.Mode -eq 'existing') -and ($State.Positionals.Count -gt 0) -and ($switchSpec.Token -in @('-f', '-n'))) {
+        if (-not @($switchSpec.Forms | Where-Object { $_ -in $State.ViableForms })) {
             continue
         }
 
@@ -309,7 +272,7 @@ function Get-ContigPathCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
@@ -337,9 +300,30 @@ function Get-ContigMetadataCompletions {
     $cleanCurrent = Remove-ContigOuterQuotes -Value $CurrentWord
     foreach ($metadataName in $script:ContigCompletionCatalog.MetadataFiles) {
         if ($metadataName.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-ContigCompletionResult -CompletionText $metadataName -ListItemText $metadataName -ResultType 'ParameterValue' -ToolTip 'NTFS metadata file supported by Contig.'
+            New-ContigCompletionResult -CompletionText ("'" + $metadataName + "'") -ListItemText $metadataName -ResultType 'ParameterValue' -ToolTip 'NTFS metadata file supported by Contig.'
         }
     }
+}
+
+function Get-ContigDriveLetterCache {
+    if ($null -eq $script:ContigCompletionCatalog.DriveCache) {
+        $entries = New-Object System.Collections.Generic.List[object]
+        foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
+            try {
+                if (-not $drive.IsReady -or $drive.DriveFormat -ne 'NTFS') {
+                    continue
+                }
+
+                $entries.Add([pscustomobject]@{ Token = $drive.Name.Substring(0, 2); Label = $drive.VolumeLabel })
+            } catch {
+                continue
+            }
+        }
+
+        $script:ContigCompletionCatalog.DriveCache = @($entries.ToArray())
+    }
+
+    @($script:ContigCompletionCatalog.DriveCache)
 }
 
 function Get-ContigDriveCompletions {
@@ -348,10 +332,16 @@ function Get-ContigDriveCompletions {
     $cleanCurrent = Remove-ContigOuterQuotes -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
-    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Sort-Object -Property Name)) {
-        $candidate = $drive.Name + ':'
+    foreach ($drive in (Get-ContigDriveLetterCache)) {
+        $candidate = $drive.Token
         if ($candidate.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $results.Add((New-ContigCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Free-space analysis on drive ' + $candidate)))
+            $tooltip = if ([string]::IsNullOrWhiteSpace($drive.Label)) {
+                'NTFS free-space analysis on drive ' + $candidate
+            } else {
+                'NTFS free-space analysis on drive ' + $candidate + ' (' + $drive.Label + ')'
+            }
+
+            $results.Add((New-ContigCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip $tooltip))
         }
     }
 
@@ -392,13 +382,15 @@ function Complete-Contig {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-ContigCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $line = $commandAst.ToString()
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
 
-    $state = Get-ContigState -TokensBeforeCurrent (Get-ContigArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
+    $tokenState = Get-ContigTokenState -Line $line -CursorPosition $relativeCursor
+    $currentWord = $tokenState.CurrentToken
+    $state = Get-ContigState -TokensBeforeCurrent @($tokenState.TokensBeforeCurrent | Select-Object -Skip 1)
 
     if ($state.HelpRequested) {
         return @(
@@ -411,7 +403,7 @@ function Complete-Contig {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($switchResult in @(Get-ContigSwitchCompletions -CurrentWord '' -State $state)) {
+    foreach ($switchResult in @(Get-ContigSwitchCompletions -CurrentWord $currentWord -State $state)) {
         $results.Add($switchResult)
     }
 
