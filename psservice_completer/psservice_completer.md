@@ -89,8 +89,11 @@ That allows the script to keep `\\Computer`, `-u`, and `-p` separate from the ac
 
 - service key names from `Get-Service | Select-Object -ExpandProperty Name`
 - display names from `Get-Service | Select-Object -ExpandProperty DisplayName`
+- the same names split into active (any non-stopped state) and inactive (stopped) sets for `query -s`
 
-Display names with spaces are emitted as quoted completion texts. The cache is script-scoped and short-lived so repeated completion stays cheap.
+`Get-PsServiceDriverNameList` caches kernel and file-system driver names (registry `Type` 1 or 2 under `HKLM\SYSTEM\CurrentControlSet\Services`, plus non-resource display names) for `query -t driver` and `query -t all`; `Get-Service` never returns drivers and `Win32_SystemDriver` costs seconds.
+
+Display names with spaces are emitted as quoted completion texts, and a word typed inside `"` or `'` matches with both quotes stripped so `psservice stop "Spot Ver<TAB>` completes. The caches are script-scoped and short-lived so repeated completion stays cheap.
 
 Remote service enumeration is intentionally not attempted.
 
@@ -111,7 +114,7 @@ If `-u` or `-p` is waiting for a value, the completer returns placeholder-style 
 
 `query` offers:
 
-- local service names and display names
+- local service names and display names, filtered by the `-t`/`-s` values already on the line: `-t driver` lists drivers only, `-t all` adds them to the services, `-s active`/`-s inactive` keep only running or stopped services (drivers carry no state)
 - `-g`, `-t`, and `-s`
 - `-?` and `/?`
 

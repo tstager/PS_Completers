@@ -43,10 +43,14 @@ if (-not (Get-Variable -Name PsServiceCompletionCatalog -Scope Script -ErrorActi
 
 if (-not (Get-Variable -Name PsServiceServiceCache -Scope Script -ErrorAction Ignore)) {
     $script:PsServiceServiceCache = @{
-        LastUpdated  = $null
-        TtlSeconds   = 30
-        ServiceNames = @()
-        DisplayNames = @()
+        LastUpdated        = $null
+        TtlSeconds         = 30
+        ServiceNames       = @()
+        DisplayNames       = @()
+        ActiveNames        = @()
+        InactiveNames      = @()
+        DriverLastUpdated  = $null
+        DriverNames        = @()
     }
 }
 
@@ -176,6 +180,21 @@ function Update-PsServiceServiceCache {
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                 Sort-Object -Unique
         )
+        # PsService's -s active is every non-stopped SCM state; inactive is stopped only.
+        $script:PsServiceServiceCache.ActiveNames = @(
+            $services |
+                Where-Object { $_.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped } |
+                ForEach-Object { $_.Name; $_.DisplayName } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Sort-Object -Unique
+        )
+        $script:PsServiceServiceCache.InactiveNames = @(
+            $services |
+                Where-Object { $_.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Stopped } |
+                ForEach-Object { $_.Name; $_.DisplayName } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Sort-Object -Unique
+        )
         $script:PsServiceServiceCache.LastUpdated = Get-Date
     } catch {
         if (-not $script:PsServiceServiceCache.ServiceNames) {
@@ -185,6 +204,50 @@ function Update-PsServiceServiceCache {
             $script:PsServiceServiceCache.DisplayNames = @()
         }
     }
+}
+
+function Get-PsServiceDriverNameList {
+    $lastUpdated = $script:PsServiceServiceCache.DriverLastUpdated
+    if ($null -ne $lastUpdated) {
+        $age = (Get-Date) - $lastUpdated
+        if ($script:PsServiceServiceCache.DriverNames.Count -gt 0 -and $age.TotalSeconds -lt $script:PsServiceServiceCache.TtlSeconds) {
+            return @($script:PsServiceServiceCache.DriverNames)
+        }
+    }
+
+    # 'query -t driver' lists kernel (Type 1) and file-system (Type 2) drivers; Get-Service
+    # never returns them, and Win32_SystemDriver costs seconds, so read the SCM registry keys.
+    $names = New-Object System.Collections.Generic.List[string]
+    $root = $null
+    try {
+        $root = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Services')
+        if ($root) {
+            foreach ($subKeyName in $root.GetSubKeyNames()) {
+                $subKey = $null
+                try {
+                    $subKey = $root.OpenSubKey($subKeyName)
+                    if (-not $subKey) { continue }
+                    $type = $subKey.GetValue('Type')
+                    if ($type -ne 1 -and $type -ne 2) { continue }
+                    $names.Add($subKeyName)
+                    $displayName = [string]$subKey.GetValue('DisplayName')
+                    if (-not [string]::IsNullOrWhiteSpace($displayName) -and -not $displayName.StartsWith('@')) {
+                        $names.Add($displayName)
+                    }
+                } finally {
+                    if ($subKey) { $subKey.Close() }
+                }
+            }
+        }
+    } catch {
+        Write-Debug "psservice driver enumeration failed: $($_.Exception.Message)"
+    } finally {
+        if ($root) { $root.Close() }
+    }
+
+    $script:PsServiceServiceCache.DriverNames = @($names | Sort-Object -Unique)
+    $script:PsServiceServiceCache.DriverLastUpdated = Get-Date
+    @($script:PsServiceServiceCache.DriverNames)
 }
 
 function Get-PsServiceCurrentTokenState {
@@ -293,17 +356,25 @@ function Get-PsServiceStringValueCompletions {
         [bool]$QuoteWhitespace = $false
     )
 
+    # The engine hands over a quoted word with both quotes intact ("Spot Ver" or 'Spot Ver'), so strip both.
     $matchPrefix = $CurrentWord
+    $typedQuote = $null
     if ($matchPrefix.Length -gt 0 -and (($matchPrefix[0] -eq [char]34) -or ($matchPrefix[0] -eq [char]39))) {
+        $typedQuote = [string]$matchPrefix[0]
         $matchPrefix = $matchPrefix.Substring(1)
+        if ($matchPrefix.Length -gt 0 -and $matchPrefix.EndsWith($typedQuote)) {
+            $matchPrefix = $matchPrefix.Substring(0, $matchPrefix.Length - 1)
+        }
+
+        $matchPrefix = if ($typedQuote -eq "'") { $matchPrefix.Replace("''", "'") } else { $matchPrefix.Replace('`"', '"') }
     }
 
     $results = @()
     foreach ($value in ($Values | Sort-Object -Unique)) {
         if (Test-PsServiceStartsWith -Value $value -Prefix $matchPrefix) {
             $completionText = $value
-            if ($QuoteWhitespace -and ($value -match '\s' -or ($CurrentWord.Length -gt 0 -and (($CurrentWord[0] -eq [char]34) -or ($CurrentWord[0] -eq [char]39))))) {
-                $quoteCharacter = if ($CurrentWord.Length -gt 0 -and $CurrentWord[0] -eq [char]34) { '"' } else { "'" }
+            if ($QuoteWhitespace -and ($value -match '\s' -or $typedQuote)) {
+                $quoteCharacter = if ($typedQuote -eq '"') { '"' } else { "'" }
                 $escapedValue = if ($quoteCharacter -eq "'") {
                     $value -replace "'", "''"
                 } else {
@@ -475,11 +546,13 @@ function Get-PsServiceQueryState {
 
     $positionals = New-Object System.Collections.Generic.List[string]
     $usedSwitches = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $filters = @{}
     $pendingSwitch = $null
 
     foreach ($argument in $ArgumentsBeforeCurrent) {
         if ($pendingSwitch) {
             [void]$usedSwitches.Add($pendingSwitch)
+            $filters[$pendingSwitch] = $argument.Trim('"', "'").ToLowerInvariant()
             $pendingSwitch = $null
             continue
         }
@@ -509,7 +582,37 @@ function Get-PsServiceQueryState {
         PendingSwitch = $pendingSwitch
         Positionals   = @($positionals)
         UsedSwitches  = @($usedSwitches)
+        Filters       = $filters
     }
+}
+
+function Get-PsServiceQueryServiceCompletionList {
+    param(
+        [string]$CurrentWord,
+        [hashtable]$Filters
+    )
+
+    # Mirror what 'psservice query -t <type> -s <state>' would list: services default to
+    # type 'service' and state 'all'; drivers come from the SCM registry and carry no state.
+    $type = if ($Filters.ContainsKey('-t')) { $Filters['-t'] } else { 'service' }
+    $state = if ($Filters.ContainsKey('-s')) { $Filters['-s'] } else { 'all' }
+
+    $values = @()
+    if ($type -ne 'driver') {
+        Update-PsServiceServiceCache
+        $values += switch ($state) {
+            'active' { @($script:PsServiceServiceCache.ActiveNames) }
+            'inactive' { @($script:PsServiceServiceCache.InactiveNames) }
+            default { @($script:PsServiceServiceCache.ServiceNames) + @($script:PsServiceServiceCache.DisplayNames) }
+        }
+    }
+
+    if ($type -eq 'driver' -or $type -eq 'all') {
+        $values += @(Get-PsServiceDriverNameList)
+    }
+
+    $toolTip = if ($type -eq 'driver') { 'Local driver name.' } else { 'Local service name.' }
+    @(Get-PsServiceStringValueCompletions -Values @($values) -CurrentWord $CurrentWord -ToolTip $toolTip -QuoteWhitespace $true)
 }
 
 function Get-PsServiceUnusedSwitches {
@@ -578,7 +681,7 @@ function Complete-PsServiceQuery {
     $results += @(Get-PsServiceSwitchCompletions -Switches $availableSwitches -CurrentWord $CurrentWord)
 
     if ($state.Positionals.Count -eq 0 -and -not (($CurrentWord -like '-*') -or ($CurrentWord -like '/*'))) {
-        $results += @(Get-PsServiceCombinedServiceCompletions -CurrentWord $CurrentWord)
+        $results += @(Get-PsServiceQueryServiceCompletionList -CurrentWord $CurrentWord -Filters $state.Filters)
     }
 
     @(Get-PsServiceUniqueCompletions -Results $results)
@@ -659,7 +762,8 @@ function Complete-PsService {
         return @()
     }
 
-    $tokenState = Get-PsServiceCurrentTokenState -Line $commandAst.Extent.Text -CursorPosition $cursorPosition
+    # $cursorPosition is a whole-line offset; the extent text is command-relative.
+    $tokenState = Get-PsServiceCurrentTokenState -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     if ([string]::IsNullOrEmpty($wordToComplete) -and $cursorPosition -gt $commandAst.Extent.EndOffset) {
         $allTokens = @($tokenState.TokensBeforeCurrent)
         if (-not [string]::IsNullOrEmpty($tokenState.CurrentToken)) {
