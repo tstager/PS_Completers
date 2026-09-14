@@ -23,9 +23,9 @@ The script:
 2. Runs `7z --help`.
 3. Normalizes the help text so the `Usage:`, `<Commands>`, and `<Switches>` sections are easier to parse.
 4. Extracts:
-   - command verbs from `<Commands>`
-   - switch tokens from `<Switches>`
-   - enumerated value hints from switch definitions that expose values in `{...}` or `[...]`, ignoring lone metavariables such as `{Directory}`, `{Type}` and `[N]`
+   - command verbs and their one-line descriptions from `<Commands>` (the description becomes the tooltip)
+   - switch tokens and their descriptions from `<Switches>`
+   - the value grammar printed after each switch, parsed as nested `{required}` / `[optional]` groups with `|` alternatives: `-bs{o|e|p}{0|1|2}`, `-scs{UTF-8|...|{id}}`, `-v{Size}[b|k|m|g]`, `-u[-][p#]...` and `-i[r[-|0]][m[-|2]][w[-]]{@listfile|!wildcard}` all parse; a lone `{Directory}`, `{Type}`, `{name}` or `[N]` is a metavariable placeholder rather than a value
 5. Caches the parsed catalog for later completion requests.
 6. On first use of `-t` or `-stx`, runs `7z i` and caches the archive format names from its `Formats:` table.
 
@@ -45,8 +45,11 @@ At completion time it inspects the current command line, determines:
   - discovered 7-Zip command verbs
   - discovered switch tokens
 - After a command is chosen, an operand slot completes files and directories; switches are still offered for an empty word and whenever the word starts with `-`.
-- If a switch has enumerated values in the parsed help output, those values are completed inline.
+- If a switch has a value grammar in the parsed help output, the next step of that grammar is completed inline: `-bs` offers `-bso0` ... `-bsp2`, `-r` offers `-r-` and `-r0`, `-sns` offers `-sns-`, `-v10` offers `-v10b|k|m|g`, `-i` offers the `r`/`m`/`w` modifiers plus `@<listfile>` and `!<wildcard>`, and once `@` or `!` has been typed (`-i@`, `-x!`, `-ir@lists`) the rest completes as a file path with the switch prefix kept. A switch whose only documented value is a metavariable (`-p{Password}`, `-sfx[{name}]`) keeps completing its own name.
+- `-mx`, `-mmt` and `-m` complete from a static table of the documented method parameters: levels for `-mx` (`-mx9` or `-mx=9`), thread counts for `-mmt`, and `-m<key>=` parameters such as `-m0=LZMA2`, `-ms=on`, `-mhe=on`, `-md=64m`, `-mfb=64`.
 - `-t` and `-stx` complete the archive format names reported by `7z i`.
+- A bare `@` (or `@` after a command) completes a `@listfile` path.
+- The current word is recovered from the command text rather than from PowerShell's parsed elements, so `-oC:\Users\Tr` and `-wD:` keep their switch prefix even though PowerShell splits a token containing a drive colon.
 - The script treats these switches as directory-valued and completes directories for them:
   - `-o`
   - `-w`
