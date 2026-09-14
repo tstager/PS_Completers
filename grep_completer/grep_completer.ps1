@@ -254,8 +254,10 @@ function ConvertFrom-GrepOptionSpecLine {
     # Separate the option synopsis from any inline description. Both GNU and clap help
     # put the description after a run of two or more spaces, so cut at the first such gap.
     $specPart = ($Line -replace '^\s+', '')
-    if ($specPart -match '^(?<spec>.*?\S)\s{2,}\S') {
+    $description = ''
+    if ($specPart -match '^(?<spec>.*?\S)\s{2,}(?<desc>\S.*)$') {
         $specPart = $matches['spec']
+        $description = $matches['desc'].Trim()
     }
     $specPart = $specPart.TrimEnd()
 
@@ -265,39 +267,40 @@ function ConvertFrom-GrepOptionSpecLine {
         return @($results.ToArray())
     }
 
-    $parts = $specLine -split ',\s+', 2
+    # Every comma-separated alias on the line is a spec of its own ("-q, --quiet, --silent"); the
+    # placeholder found on any alias applies to all of them, and a bracketed value marks it optional.
+    $parts = @($specLine -split ',\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $placeholder = $null
+    $optionalValue = $false
+    $parsedParts = New-Object System.Collections.Generic.List[object]
 
-    if ($parts.Count -eq 2 -and $parts[0].Trim().StartsWith('-') -and -not $parts[0].Trim().StartsWith('--')) {
-        $shortPart = $parts[0].Trim()
-        $longPart = $parts[1].Trim()
-
-        if ($shortPart -match '^(?<token>-[A-Za-z0-9])(?:[= ]\[?(?<value>[^\]\s]+)\]?)?$') {
-            [void]$results.Add([pscustomobject]@{
-                    Token       = $matches['token']
-                    DisplayText = $shortPart
-                    Placeholder = $matches['value']
-                })
+    foreach ($part in $parts) {
+        $token = $null
+        if ($part -match '^(?<token>--[A-Za-z0-9][A-Za-z0-9\-]*)(?:(?<bracket>\[?)[= ]\<?(?<value>[^\]\s>]+)\>?\]?)?$') {
+            $token = $matches['token']
+        } elseif ($part -match '^(?<token>-[A-Za-z0-9])(?:(?<bracket>\[?)[= ]?\<?(?<value>[^\]\s>]+)\>?\]?)?$') {
+            $token = $matches['token']
+        } else {
+            continue
         }
 
-        if ($longPart -match '^(?<token>--[A-Za-z0-9][A-Za-z0-9\-]*)(?:\[?[= ]\<?(?<value>[^\]\s>]+)\>?\]?)?$') {
-            [void]$results.Add([pscustomobject]@{
-                    Token       = $matches['token']
-                    DisplayText = $longPart
-                    Placeholder = $matches['value']
-                })
+        if ($matches['value'] -and -not $placeholder) {
+            $placeholder = $matches['value']
         }
-    } elseif ($specLine -match '^(?<token>--[A-Za-z0-9][A-Za-z0-9\-]*)(?:\[?[= ]\<?(?<value>[^\]\s>]+)\>?\]?)?$') {
+        if ($matches['bracket']) {
+            $optionalValue = $true
+        }
+
+        [void]$parsedParts.Add([pscustomobject]@{ Token = $token; DisplayText = $part })
+    }
+
+    foreach ($parsed in $parsedParts) {
         [void]$results.Add([pscustomobject]@{
-                Token       = $matches['token']
-                DisplayText = $specLine
-                Placeholder = $matches['value']
-            })
-    } elseif ($specLine -match '^(?<token>-[A-Za-z0-9])(?:[= ]\[?(?<value>[^\]\s]+)\]?)?$') {
-        # Short-only option line such as "  -I  equivalent to --binary-files=without-match".
-        [void]$results.Add([pscustomobject]@{
-                Token       = $matches['token']
-                DisplayText = $specLine
-                Placeholder = $matches['value']
+                Token         = $parsed.Token
+                DisplayText   = $parsed.DisplayText
+                Placeholder   = $placeholder
+                OptionalValue = $optionalValue
+                Description   = $description
             })
     }
 
@@ -309,7 +312,8 @@ function Add-GrepOptionSpec {
         [string]$Token,
         [string]$DisplayText,
         [string]$Description,
-        [string]$Placeholder
+        [string]$Placeholder,
+        [bool]$OptionalValue = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Token)) {
@@ -326,14 +330,36 @@ function Add-GrepOptionSpec {
     }
 
     $catalog.OptionByToken[$key] = [pscustomobject]@{
-        Token       = $Token
-        DisplayText = if ([string]::IsNullOrWhiteSpace($DisplayText)) { $Token } else { $DisplayText }
-        Description = $Description
-        Placeholder = $Placeholder
-        ValueKind   = Get-GrepValueKind -Token $Token -Placeholder $Placeholder
+        Token         = $Token
+        DisplayText   = if ([string]::IsNullOrWhiteSpace($DisplayText)) { $Token } else { $DisplayText }
+        Description   = $Description
+        Placeholder   = $Placeholder
+        OptionalValue = $OptionalValue
+        ValueKind     = Get-GrepValueKind -Token $Token -Placeholder $Placeholder
     }
 
     $catalog.Options += $catalog.OptionByToken[$key]
+}
+
+function Add-GrepGnuHiddenOptionSpec {
+    # GNU grep accepts these without printing them in --help (verified against GNU grep 3.0):
+    # the --group-separator pair, the --fixed-regexp alias of -F and the obsolete -y synonym of -i.
+    $isGnu = $false
+    foreach ($line in @(Invoke-GrepCapture -Arguments @('--version'))) {
+        if ($line -match 'GNU grep') {
+            $isGnu = $true
+            break
+        }
+    }
+
+    if (-not $isGnu) {
+        return
+    }
+
+    Add-GrepOptionSpec -Token '--group-separator' -DisplayText '--group-separator=SEP' -Description 'print SEP on line between matches with context' -Placeholder 'SEP'
+    Add-GrepOptionSpec -Token '--no-group-separator' -DisplayText '--no-group-separator' -Description 'do not print separator for matches with context'
+    Add-GrepOptionSpec -Token '--fixed-regexp' -DisplayText '--fixed-regexp' -Description 'obsolete synonym for -F, --fixed-strings'
+    Add-GrepOptionSpec -Token '-y' -DisplayText '-y' -Description 'obsolete synonym for -i, --ignore-case'
 }
 
 function Initialize-GrepCompletionCatalog {
@@ -344,6 +370,7 @@ function Initialize-GrepCompletionCatalog {
 
     $helpLines = Invoke-GrepCapture -Arguments @('--help')
     $currentKeys = @()
+    $carriedKeys = @()
 
     foreach ($line in @($helpLines)) {
         # A synopsis line is indented and begins (after indent) with an option token:
@@ -358,9 +385,21 @@ function Initialize-GrepCompletionCatalog {
                 $currentKeys = @()
 
                 foreach ($spec in $parsed) {
-                    Add-GrepOptionSpec -Token $spec.Token -DisplayText $spec.DisplayText -Description $spec.DisplayText -Placeholder $spec.Placeholder
+                    $description = if ([string]::IsNullOrWhiteSpace($spec.Description)) { $spec.DisplayText } else { $spec.Description }
+                    Add-GrepOptionSpec -Token $spec.Token -DisplayText $spec.DisplayText -Description $description -Placeholder $spec.Placeholder -OptionalValue $spec.OptionalValue
                     $currentKeys += Get-GrepCanonicalOptionKey -Token $spec.Token
                 }
+
+                # "--color[=WHEN]," continues onto "--colour[=WHEN]  use markers ...": the aliases
+                # on the earlier line share the description that the later line carries.
+                foreach ($carriedKey in $carriedKeys) {
+                    $carriedOption = $catalog.OptionByToken[$carriedKey]
+                    if ($carriedOption.Description -eq $carriedOption.DisplayText -and $parsed[0].Description) {
+                        $carriedOption.Description = $parsed[0].Description
+                    }
+                }
+                $currentKeys = @($carriedKeys) + @($currentKeys)
+                $carriedKeys = if ($line.TrimEnd().EndsWith(',')) { @($currentKeys) } else { @() }
 
                 continue
             }
@@ -385,6 +424,7 @@ function Initialize-GrepCompletionCatalog {
         }
     }
 
+    Add-GrepGnuHiddenOptionSpec
     $catalog.Initialized = $true
 }
 
@@ -662,9 +702,9 @@ function Get-GrepCompletionContext {
         if ($lookup -and $catalog.OptionByToken.ContainsKey($lookup)) {
             $option = $catalog.OptionByToken[$lookup]
 
-            # --color is an optional-value flag (--color[=<WHEN>]); a bare --color does not consume the
-            # next token as its value, so it must not become a pending value option.
-            if ($option.ValueKind -and $option.Token -ne '--color') {
+            # An optional-value flag (--color[=<WHEN>], --colour[=WHEN]) never consumes the next token
+            # as its value, so it must not become a pending value option.
+            if ($option.ValueKind -and -not $option.OptionalValue) {
                 $pendingOption = $option
             }
             continue
@@ -767,12 +807,17 @@ Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock 
     }
 
     if ($context.PendingOption) {
-        return @(Get-GrepValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+        return @(Get-GrepValueCompletions -OptionSpec $context.PendingOption -CurrentValue $currentToken)
+    }
+
+    if ($currentToken -match '^-\d+$' -and -not $context.EndOfOptions) {
+        # GNU's documented -NUM shortcut: keep the typed number, it is the same as --context=NUM.
+        return @(New-GrepCompletionResult -CompletionText $currentToken -ResultType 'ParameterName' -ToolTip ('same as --context=' + $currentToken.Substring(1)))
     }
 
     if ($currentToken.StartsWith('-')) {
-        return @(Get-GrepOptionCompletions -CurrentWord $wordToComplete)
+        return @(Get-GrepOptionCompletions -CurrentWord $currentToken)
     }
 
-    @(Get-GrepPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+    @(Get-GrepPositionalCompletions -CurrentWord $currentToken -Context $context)
 }

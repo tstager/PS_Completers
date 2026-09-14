@@ -61,14 +61,19 @@ Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock 
     }
 
     if ($context.PendingOption) {
-        return @(Get-GrepValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+        return @(Get-GrepValueCompletions -OptionSpec $context.PendingOption -CurrentValue $currentToken)
+    }
+
+    if ($currentToken -match '^-\d+$' -and -not $context.EndOfOptions) {
+        # GNU's documented -NUM shortcut: keep the typed number, it is the same as --context=NUM.
+        return @(New-GrepCompletionResult -CompletionText $currentToken -ResultType 'ParameterName' -ToolTip ('same as --context=' + $currentToken.Substring(1)))
     }
 
     if ($currentToken.StartsWith('-')) {
-        return @(Get-GrepOptionCompletions -CurrentWord $wordToComplete)
+        return @(Get-GrepOptionCompletions -CurrentWord $currentToken)
     }
 
-    @(Get-GrepPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+    @(Get-GrepPositionalCompletions -CurrentWord $currentToken -Context $context)
 }
 ```
 
@@ -98,7 +103,7 @@ All help capture, parsing, and command resolution happen lazily from helper func
 
 ### Help-driven option catalog
 
-Initialization captures `grep --help` and parses the option synopsis lines into a cached option catalog. That gives the completer a local view of the installed grep build without hard-coding the entire flag set. The parser separates each option synopsis from its inline description and understands short pairs (`-x, --long`), long-only lines (`    --long`), and short-only lines (`  -I`). It also resolves both the GNU-style `--option=PLACEHOLDER` and the clap-style `--option <PLACEHOLDER>` synopsis forms, so the same completer adapts to whichever `grep.exe` is first on `PATH`.
+Initialization captures `grep --help` and parses the option synopsis lines into a cached option catalog. That gives the completer a local view of the installed grep build without hard-coding the entire flag set. The parser separates each option synopsis from its inline description (which becomes the tooltip, together with any wrapped continuation lines) and treats every comma-separated alias on a line as its own option, so `-q, --quiet, --silent` yields all three. A line that ends in a comma (`--color[=WHEN],`) shares the description of the line that continues it (`--colour[=WHEN]  use markers ...`). It also resolves both the GNU-style `--option=PLACEHOLDER` and the clap-style `--option <PLACEHOLDER>` synopsis forms, records a bracketed value (`[=WHEN]`) as optional, and, when `grep --version` reports GNU grep, adds the options that build accepts but never prints (`--group-separator=SEP`, `--no-group-separator`, `--fixed-regexp`, `-y`), so the same completer adapts to whichever `grep.exe` is first on `PATH`.
 
 ### Enum value overlay
 
@@ -150,7 +155,9 @@ grep -e pat .\
 ## Limitations / notes
 
 - Combined short-flag clusters (for example `-rni`) are not split; an unknown leading-`-` token is treated as a consumed boolean switch.
-- `--color` is an optional-value flag (`--color[=<WHEN>]`); its `WHEN` enum values are offered only via the inline `--color=` form. A bare `--color` followed by a space is a completed flag and does not consume the next token as its value.
+- `--color` / `--colour` are optional-value flags (`--color[=<WHEN>]`); their `WHEN` enum values are offered only via the inline `--color=` form. A bare `--color` or `--colour` followed by a space is a completed flag and does not consume the next token as its value.
+- The option and value branches complete the token up to the cursor, so editing an earlier token (`grep --includ|e= pattern`) offers completions for the prefix under the cursor.
+- GNU's `-NUM` context shortcut is accepted as typed (`grep -1` keeps `-1`, tooltip `same as --context=1`).
 - The four enum value sets are curated in the script rather than scraped from grep's `[possible values: ...]` help text.
 - The completer does not validate glob or regular-expression syntax for pattern, glob, label, or separator slots.
 - `grep` exposes no machine-readable completion schema (`--cli-schema` does not exist on these builds), so `grep --help` is the only discovery surface used and the script deliberately does not attempt to invoke a schema command.
