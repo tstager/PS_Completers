@@ -4,9 +4,14 @@
 
 `tar_completer.ps1` registers a native PowerShell completer for `tar` and `tar.exe`.
 
-It is tailored to the local Windows `bsdtar` implementation and combines:
+It models whichever `tar` `Get-Command` resolves first. Two builds usually coexist on Windows: the libarchive `bsdtar` in `System32` and Git for Windows' GNU tar. The completer runs `tar --version` once per session and picks the flavor:
 
-- mode-first completion for `-c`, `-r`, `-t`, `-u`, and `-x`
+- `bsdtar`: the static catalog below, verified against `bsdtar 3.8.8`
+- `GNU tar`: a catalog parsed live from `tar --help` (modes, every option with its description, `--format` values, `--quoting-style` styles), because GNU tar rejects roughly a third of the bsdtar spellings (`--cd`, `--norecurse`, `--fast-read`, `--newer-than`, ...) and adds modes of its own
+
+It combines:
+
+- mode-first completion for `-c`, `-r`, `-t`, `-u`, and `-x` (plus `-A`/`--catenate`, `--delete`, `-d`/`--diff`, `--test-label` under GNU tar)
 - common and mode-specific short/long options
 - archive and directory path completion for `-f` and `-C`
 - file/directory operand completion in create/append/update modes
@@ -37,9 +42,10 @@ Load it into the current session with:
 
 On first use, the script creates `$script:TarCompletionCatalog` and:
 
-- verifies `tar.exe` is available
-- seeds a static catalog aligned with the local `bsdtar --help` output and relevant `bsdtar` documentation
-- loads `--help` once to confirm format/value hints such as `--format`
+- verifies `tar.exe` is available and remembers its resolved path
+- runs `tar --version` once to decide between the `bsdtar` and `GNU tar` flavors
+- for `bsdtar`, seeds a static catalog aligned with the local `bsdtar --help` output and relevant `bsdtar` documentation
+- for `GNU tar`, parses `tar --help` into the same spec shape: value kinds are inferred from the placeholders (`FILE`, `DIR`, `DATE-OR-FILE`, `NUMBER`, `FORMAT`, `PATTERN`, `PROG`, ...), `[=VALUE]` options are marked optional so they never swallow the next token, and enum placeholders (`ORDER`, `METHOD`, `STYLE`, `CONTROL`, `TYPE`) get their documented value sets
 - prepares small hint sets for `--mtime` and archive-entry patterns
 
 ### Mode-aware parsing
@@ -111,6 +117,6 @@ tar -x -f archive.tar <TAB>
 
 ## Limitations / notes
 
-- The completer targets the local Windows `bsdtar` help surface, not GNU tar.
+- Under GNU tar the option surface is only as complete as `tar --help`; options are not mode-gated there, and GNU's `-L` is the numeric `--tape-length`, not bsdtar's `--dereference`.
 - List/extract pattern completion uses generic wildcard hints rather than enumerating archive contents.
 - The catalog covers the options verified against the installed `bsdtar 3.8.8`; macOS-only options (`--mac-metadata`, `--hfsCompression`, `--nodump`) and `-s` (rejected by this build) are deliberately left out.

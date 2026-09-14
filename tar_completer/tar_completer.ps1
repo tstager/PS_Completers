@@ -1,5 +1,6 @@
 # tar tab completion for PowerShell
-# Provides mode-aware completion for Windows bsdtar.
+# Provides mode-aware completion for whichever tar resolves first: the static bsdtar catalog for
+# Windows' libarchive build, or a catalog parsed live from 'tar --help' for GNU tar.
 
 Set-StrictMode -Version 2.0
 
@@ -7,6 +8,8 @@ if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction Ign
     $script:TarCompletionCatalog = @{
         Initialized       = $false
         CommandName       = $null
+        CommandPath       = $null
+        Flavor            = $null
         AllModes          = @('c', 'r', 't', 'u', 'x')
         ModeEntries       = @()
         ModeByAlias       = @{}
@@ -32,9 +35,204 @@ function Resolve-TarCommandName {
     $command = Get-Command -Name tar.exe, tar -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($command) {
         $script:TarCompletionCatalog.CommandName = $command.Name
+        $script:TarCompletionCatalog.CommandPath = if ($command.Source) { $command.Source } else { $command.Name }
     }
 
     $script:TarCompletionCatalog.CommandName
+}
+
+function Get-TarFlavor {
+    # 'gnu' or 'bsdtar', decided once per session from the resolved binary's --version banner.
+    if ($script:TarCompletionCatalog.Flavor) {
+        return $script:TarCompletionCatalog.Flavor
+    }
+
+    if (-not (Resolve-TarCommandName)) {
+        return $null
+    }
+
+    $banner = ''
+    try {
+        $banner = [string](@($null | & $script:TarCompletionCatalog.CommandPath --version 2>$null) | Select-Object -First 1)
+    } catch {
+        Write-Debug "tar --version probe failed: $($_.Exception.Message)"
+    }
+
+    $script:TarCompletionCatalog.Flavor = if ($banner -match 'GNU tar') { 'gnu' } else { 'bsdtar' }
+    $script:TarCompletionCatalog.Flavor
+}
+
+function Get-TarGnuValueKind {
+    param(
+        [string]$Placeholder,
+        [string]$Canonical
+    )
+
+    switch -Regex ($Placeholder) {
+        '^(ARCHIVE|FILE|MEMBER-NAME)$' { return 'ArchivePath' }
+        '^DIR$' { return 'DirectoryPath' }
+        '^(DATE|DATE-OR-FILE)$' { return 'DateTime' }
+        '^(PATTERN|MASK)$' { return 'Pattern' }
+        '^PROG$' { return 'CompressProgram' }
+        '^FORMAT$' { return 'Format' }
+        '^BLOCKS$' { return 'BlockSize' }
+        '^NUMBER$' { return 'StripCount' }
+        '^NAME$' { return 'Name' }
+        '^(ORDER|METHOD|STYLE|CONTROL|TYPE)$' { return 'Enum:' + $Canonical }
+        '^$' { return $null }
+        default { return 'Text:' + $Placeholder }
+    }
+}
+
+function Get-TarGnuEnumValueList {
+    param(
+        [string]$Placeholder,
+        [string[]]$QuotingStyles
+    )
+
+    switch ($Placeholder) {
+        'ORDER' { return @('none', 'name', 'inode') }
+        'METHOD' { return @('replace', 'system') }
+        'STYLE' { if ($QuotingStyles.Count -gt 0) { return @($QuotingStyles) } else { return @('literal', 'shell', 'shell-always', 'shell-escape', 'shell-escape-always', 'c', 'c-maybe', 'escape', 'locale', 'clocale') } }
+        'CONTROL' { return @('none', 'off', 't', 'numbered', 'nil', 'existing', 'never', 'simple') }
+        'TYPE' { return @('raw', 'seek') }
+    }
+
+    @()
+}
+
+function ConvertFrom-TarGnuHelp {
+    # Parses GNU tar's --help into the same mode/option spec shape the static bsdtar catalog uses.
+    param([string[]]$Lines)
+
+    $modeSpecs = New-Object System.Collections.Generic.List[hashtable]
+    $optionSpecs = New-Object System.Collections.Generic.List[hashtable]
+    $formatValues = New-Object System.Collections.Generic.List[string]
+    $quotingStyles = New-Object System.Collections.Generic.List[string]
+    $section = ''
+    $lastSpec = $null
+    $inQuotingList = $false
+
+    foreach ($line in @($Lines)) {
+        if ($line -match '^ (?<section>[A-Z][A-Za-z ]+):\s*$') {
+            $section = $Matches['section']
+            $lastSpec = $null
+            continue
+        }
+
+        if ($line -match '^Valid arguments for the --quoting-style option') {
+            $inQuotingList = $true
+            $lastSpec = $null
+            continue
+        }
+
+        if ($inQuotingList) {
+            if ($line -match '^\s{2}(?<style>[a-z][a-z-]*)\s*$') {
+                $quotingStyles.Add($Matches['style'])
+                continue
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                $inQuotingList = $false
+            }
+        }
+
+        if ($section -eq 'Archive format selection' -and $line -match '^\s{4}(?<name>[a-z0-9]+)\s{2,}\S') {
+            $formatValues.Add($Matches['name'])
+            $lastSpec = $null
+            continue
+        }
+
+        if ($line -match '^\s{2,6}(?<spec>-\S.*?)(?:\s{2,}(?<desc>\S.*))?\s*$') {
+            $spec = $Matches['spec']
+            $description = if ($Matches['desc']) { $Matches['desc'].Trim() } else { '' }
+            $aliases = New-Object System.Collections.Generic.List[string]
+            $shortName = $null
+            $placeholder = ''
+            $optionalValue = $false
+
+            foreach ($part in ($spec -split ',\s+')) {
+                if ($part -notmatch '^(?<token>--?[A-Za-z?][A-Za-z0-9-]*)(?<value>\[=[^\]]+\]|=\S+)?$') {
+                    continue
+                }
+
+                $token = $Matches['token']
+                $aliases.Add($token)
+                if ($Matches['value']) {
+                    $valueText = $Matches['value']
+                    if ($valueText.StartsWith('[')) {
+                        $optionalValue = $true
+                        $valueText = $valueText.Substring(1).TrimEnd(']')
+                    }
+                    if (-not $placeholder) {
+                        $placeholder = $valueText.TrimStart('=')
+                    }
+                }
+
+                if ($token -match '^-([A-Za-z])$' -and -not $shortName) {
+                    $shortName = $Matches[1]
+                }
+            }
+
+            if ($aliases.Count -eq 0) {
+                $lastSpec = $null
+                continue
+            }
+
+            $canonical = if ($shortName) { '-' + $shortName } else { $aliases[0] }
+            if ($section -eq 'Main operation mode') {
+                $modeCanonical = if ($shortName) { $shortName } else { $aliases[0].TrimStart('-') }
+                $lastSpec = @{ Canonical = $modeCanonical; Aliases = @($aliases.ToArray()); Description = $description }
+                $modeSpecs.Add($lastSpec)
+                continue
+            }
+
+            $lastSpec = @{
+                Canonical   = $canonical
+                Aliases     = @($aliases.ToArray())
+                Modes       = @()
+                Description = $description
+                Placeholder = $placeholder
+            }
+            if ($shortName) {
+                $lastSpec['ShortName'] = $shortName
+            }
+
+            $valueKind = Get-TarGnuValueKind -Placeholder $placeholder -Canonical $canonical
+            if ($valueKind) {
+                $lastSpec['ValueKind'] = $valueKind
+                if ($optionalValue) {
+                    $lastSpec['OptionalValue'] = $true
+                }
+            }
+
+            if ($canonical -in @('--help', '--usage', '--version', '--show-defaults') -or $aliases -contains '--help') {
+                $lastSpec['Standalone'] = $true
+            }
+
+            $optionSpecs.Add($lastSpec)
+            continue
+        }
+
+        if ($null -ne $lastSpec -and $line -match '^\s{20,}(?<text>\S.*?)\s*$') {
+            $lastSpec.Description = if ($lastSpec.Description) { $lastSpec.Description + ' ' + $Matches['text'] } else { $Matches['text'] }
+            continue
+        }
+
+        $lastSpec = $null
+    }
+
+    foreach ($spec in $optionSpecs) {
+        if ($spec.ContainsKey('ValueKind') -and $spec.ValueKind.StartsWith('Enum:')) {
+            $spec['Values'] = @(Get-TarGnuEnumValueList -Placeholder $spec.Placeholder -QuotingStyles @($quotingStyles.ToArray()))
+        }
+    }
+
+    [pscustomobject]@{
+        ModeSpecs    = @($modeSpecs.ToArray())
+        OptionSpecs  = @($optionSpecs.ToArray())
+        FormatValues = @($formatValues.ToArray())
+    }
 }
 
 function New-TarCompletionResult {
@@ -649,6 +847,30 @@ function Initialize-TarCompletionCatalog {
         }
     )
 
+    # GNU tar rejects roughly a third of the bsdtar catalog and adds four modes of its own, so its
+    # catalog is parsed from the live --help instead; the static table stays the bsdtar model.
+    if ((Get-TarFlavor) -eq 'gnu') {
+        $helpLines = @()
+        try {
+            $helpLines = @($null | & $script:TarCompletionCatalog.CommandPath --help 2>$null)
+        } catch {
+            Write-Debug "tar --help probe failed: $($_.Exception.Message)"
+        }
+
+        $parsed = ConvertFrom-TarGnuHelp -Lines $helpLines
+        if ($parsed.OptionSpecs.Count -gt 0 -and $parsed.ModeSpecs.Count -gt 0) {
+            $modeSpecs = $parsed.ModeSpecs
+            $script:TarCompletionCatalog.AllModes = @($modeSpecs | ForEach-Object { $_.Canonical })
+            $optionSpecs = @(
+                foreach ($spec in $parsed.OptionSpecs) {
+                    $spec.Modes = $script:TarCompletionCatalog.AllModes
+                    $spec
+                }
+            )
+            $script:TarCompletionCatalog.FormatValues = if ($parsed.FormatValues.Count -gt 0) { $parsed.FormatValues } else { @('gnu', 'oldgnu', 'pax', 'posix', 'ustar', 'v7') }
+        }
+    }
+
     $modeEntries = @()
     $modeByAlias = @{}
     foreach ($modeSpec in $modeSpecs) {
@@ -677,6 +899,8 @@ function Initialize-TarCompletionCatalog {
                 Description    = $specObject.Description
                 Modes          = @($specObject.Modes)
                 ValueKind      = $valueKind
+                OptionalValue  = [bool]($optionSpec.ContainsKey('OptionalValue') -and $optionSpec.OptionalValue)
+                Values         = @(if ($optionSpec.ContainsKey('Values')) { $optionSpec.Values })
             }
             $optionEntries += $entry
             $optionByAlias[$alias.ToLowerInvariant()] = $entry
@@ -808,7 +1032,8 @@ function Get-TarParsedTokenInfo {
             $result.IsPositional = $false
             $option = $script:TarCompletionCatalog.OptionByAlias[$lookup]
             $valueKind = Get-TarValueKind -InputObject $option
-            if (-not [string]::IsNullOrWhiteSpace($valueKind) -and -not $match.Groups[2].Success) {
+            # An optional value (--occurrence[=NUMBER]) only ever arrives attached, never as the next token.
+            if (-not [string]::IsNullOrWhiteSpace($valueKind) -and -not $match.Groups[2].Success -and -not $option.OptionalValue) {
                 $result.PendingValue = $valueKind
             }
 
@@ -1254,6 +1479,20 @@ function Invoke-TarValueCompletion {
             Get-TarPatternCompletionResults -CurrentValue $CurrentValue -Prefix $Prefix -ToolTipPrefix 'Pattern'
             break
         }
+        default {
+            if ($ValueKind -like 'Enum:*') {
+                $lookup = $ValueKind.Substring(5).ToLowerInvariant()
+                $values = @()
+                if ($script:TarCompletionCatalog.OptionByAlias.ContainsKey($lookup)) {
+                    $values = @($script:TarCompletionCatalog.OptionByAlias[$lookup].Values)
+                }
+                Get-TarSimpleValueResults -Values $values -CurrentValue $CurrentValue -ToolTipPrefix 'Value' -Prefix $Prefix
+            } elseif ($ValueKind -like 'Text:*') {
+                $placeholder = '<' + $ValueKind.Substring(5).ToLowerInvariant() + '>'
+                Get-TarSimpleValueResults -Values @($placeholder) -CurrentValue $CurrentValue -ToolTipPrefix 'Value' -Prefix $Prefix
+            }
+            break
+        }
     }
 }
 
@@ -1276,7 +1515,7 @@ function Invoke-TarPositionalCompletion {
         }
     }
 
-    if ($Mode -in @('c', 'r', 'u')) {
+    if ($Mode -in @('c', 'r', 'u', 'A')) {
         if ($CurrentValue.StartsWith('@')) {
             foreach ($item in (Get-TarPathCompletionResults -CurrentValue $CurrentValue.Substring(1) -Prefix '@' -ToolTipPrefix 'Source archive')) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {
@@ -1294,7 +1533,7 @@ function Invoke-TarPositionalCompletion {
             }
         }
     }
-    elseif ($Mode -in @('t', 'x')) {
+    elseif ($Mode -in @('t', 'x', 'd', 'delete')) {
         foreach ($item in (Get-TarPatternCompletionResults -CurrentValue $CurrentValue -ToolTipPrefix 'Archive entry pattern')) {
             if (-not $seen.ContainsKey($item.CompletionText)) {
                 $seen[$item.CompletionText] = $true
