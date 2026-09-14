@@ -5,15 +5,16 @@ Set-StrictMode -Version 2.0
 
 if (-not (Get-Variable -Name PsSuspendCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsSuspendCompletionCatalog = @{
-        SwitchOrder             = @('-r', '-u', '-p', '-nobanner', '-?', '/?', '--help')
+        SwitchOrder             = @('-r', '-u', '-p', '-nobanner', '-accepteula', '-?', '/?', '--help')
         SwitchInfo              = @{
-            '-r'        = 'Resume a suspended process.'
-            '-u'        = 'Optional user name for remote login.'
-            '-p'        = 'Optional password for the remote login.'
-            '-nobanner' = 'Do not display the startup banner and copyright message.'
-            '-?'        = 'Display pssuspend help.'
-            '/?'        = 'Display pssuspend help.'
-            '--help'    = 'Display pssuspend help.'
+            '-r'          = 'Resume a suspended process.'
+            '-u'          = 'Optional user name for remote login.'
+            '-p'          = 'Optional password for the remote login.'
+            '-nobanner'   = 'Do not display the startup banner and copyright message.'
+            '-accepteula' = 'Suppress the Sysinternals EULA dialog (accepts the license).'
+            '-?'          = 'Display pssuspend help.'
+            '/?'          = 'Display pssuspend help.'
+            '--help'      = 'Display pssuspend help.'
         }
         ProcessEntries          = @()
         ProcessCacheUpdated     = $null
@@ -93,31 +94,34 @@ function Update-PsSuspendProcessCache {
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $idSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $entries = [System.Collections.Generic.List[object]]::new()
+    $idSet = [System.Collections.Generic.HashSet[int]]::new()
+    $nameEntries = [System.Collections.Generic.List[object]]::new()
+    $idEntries = [System.Collections.Generic.List[object]]::new()
 
     foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
         if ($process.ProcessName -and $nameSet.Add($process.ProcessName)) {
-            $entries.Add([pscustomobject]@{
+            $nameEntries.Add([pscustomobject]@{
                     CompletionText = $process.ProcessName
                     ResultType     = 'ParameterValue'
                     ToolTip        = "Process name $($process.ProcessName)"
+                    SortKey        = $process.ProcessName
                 })
         }
 
-        $processIdText = [string]$process.Id
-        if ($processIdText -and $idSet.Add($processIdText)) {
-            $entries.Add([pscustomobject]@{
-                    CompletionText = $processIdText
+        if ($idSet.Add($process.Id)) {
+            $idEntries.Add([pscustomobject]@{
+                    CompletionText = [string]$process.Id
                     ResultType     = 'ParameterValue'
-                    ToolTip        = "Process ID $processIdText"
+                    ToolTip        = "Process ID $($process.Id) ($($process.ProcessName))"
+                    SortKey        = $process.Id
                 })
         }
     }
 
+    # Names first (alphabetical), then PIDs in numeric order, so tab-cycling reaches names before hundreds of numbers.
     $script:PsSuspendCompletionCatalog.ProcessEntries = @(
-        $entries |
-            Sort-Object -Property CompletionText
+        @($nameEntries | Sort-Object -Property SortKey) +
+        @($idEntries | Sort-Object -Property SortKey)
     )
     $script:PsSuspendCompletionCatalog.ProcessCacheUpdated = Get-Date
 }
@@ -272,12 +276,7 @@ function Complete-PsSuspend {
     $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $safeCursor)
     $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    [object[]]$argumentTokens = if ($commandTokens.Count -gt 1) {
-        @($commandTokens | Select-Object -Skip 1)
-    } else {
-        @()
-    }
-    $argumentTokens = @($argumentTokens)
+    $argumentTokens = @($commandTokens | Select-Object -Skip 1)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
         Get-PsSuspendCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
@@ -286,9 +285,9 @@ function Complete-PsSuspend {
     }
 
     $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
-    [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 0) {
+    $tokensBeforeCurrent = if ($hasTrailingSpace) {
+        $argumentTokens
+    } elseif ($argumentTokens.Count -gt 1) {
         @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
     } else {
         @()
@@ -318,7 +317,7 @@ function Complete-PsSuspend {
         )
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
+    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/'))) {
         return @(Get-PsSuspendSwitchCompletions -CurrentWord $currentWord -State $state -NoArgumentsYet:($tokensBeforeCurrent.Count -eq 0))
     }
 

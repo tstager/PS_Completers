@@ -33,9 +33,8 @@ The completer covers:
 - `-u`
 - `-p`
 - `-nobanner`
-- `-?`
-- `/?`
-- `--help`
+- `-accepteula`
+- `-?`, `/?`, `--help` (offered only before the first argument; `/` reaches `/?`)
 
 ### Remote preamble parsing
 
@@ -51,8 +50,8 @@ That keeps the remote-login path context-aware without probing remote systems, w
 
 For local usage, the first positional process slot is completed from `Get-Process`:
 
-- process names
-- process IDs
+- process names (alphabetical, offered first)
+- process IDs (numeric order, after the names)
 
 ## Key completion behaviors / supported values
 
@@ -61,7 +60,7 @@ For local usage, the first positional process slot is completed from `Get-Proces
 At `pssuspend ` the completer offers:
 
 - `-r`
-- `-nobanner`
+- `-nobanner`, `-accepteula`
 - `\\computer`
 - local process names and PIDs
 
