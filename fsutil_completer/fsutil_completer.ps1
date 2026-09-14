@@ -312,8 +312,72 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('behavior', 'set')) = @{
             Handler = 'BehaviorSet'
         }
+        (Get-FsutilPathKey @('bypassIo', 'State')) = @{
+            Positionals = @('Path')
+            Options     = @(
+                @{ Token = '/v'; Description = 'Verbose mode - display the name of the storage driver.' }
+            )
+        }
+        (Get-FsutilPathKey @('clfs', 'authenticate')) = @{
+            Positionals = @('FilePath')
+        }
+        (Get-FsutilPathKey @('dax', 'queryFileAlignment')) = @{
+            Positionals = @('FilePath')
+            Tags        = @(
+                @{ Name = 'q'; ValueKind = 'DaxQueryFlag'; Description = 'Query flag: large, huge or both (default both).' }
+                @{ Name = 'n'; ValueKind = 'Number';       Description = 'Number of output ranges (default all).' }
+                @{ Name = 's'; ValueKind = 'Offset';       Description = 'Starting file offset of the range (default 0).' }
+                @{ Name = 'l'; ValueKind = 'Length';       Description = 'Range length in bytes.' }
+            )
+        }
+        (Get-FsutilPathKey @('devdrv', 'clearFiltersAllowed')) = @{
+            Positionals = @('VolumePath')
+            Options     = @(
+                @{ Token = '/f'; Description = 'Force dismount the volume so the change takes effect immediately.' }
+            )
+        }
+        (Get-FsutilPathKey @('devdrv', 'setFiltersAllowed')) = @{
+            Positionals = @('FilterList')
+            Options     = @(
+                @{ Token = '/f';      Description = 'Force dismount the volume so the change takes effect immediately.' }
+                @{ Token = '/volume'; Description = 'Set the allowed filter list only for this volume.'; ValueKind = 'VolumePath' }
+            )
+        }
+        (Get-FsutilPathKey @('devdrv', 'trust')) = @{
+            Positionals = @('VolumePath')
+            Options     = @(
+                @{ Token = '/f'; Description = 'Force dismount the volume so the change takes effect immediately.' }
+            )
+        }
+        (Get-FsutilPathKey @('devdrv', 'untrust')) = @{
+            Positionals = @('VolumePath')
+            Options     = @(
+                @{ Token = '/f'; Description = 'Force dismount the volume so the change takes effect immediately.' }
+            )
+        }
+        (Get-FsutilPathKey @('dirty', 'query')) = @{
+            Positionals = @('VolumePath')
+        }
+        (Get-FsutilPathKey @('dirty', 'set')) = @{
+            Positionals = @('VolumePath')
+        }
         (Get-FsutilPathKey @('file', 'createNew')) = @{
             Positionals = @('FilePath', 'Length')
+        }
+        (Get-FsutilPathKey @('file', 'findBySID')) = @{
+            Positionals = @('UserOrSid', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('file', 'layout')) = @{
+            Positionals = @('Path')
+            Options     = @(
+                @{ Token = '/v'; Description = 'Verbose mode - display the attribute buffer hex dump for $EA and $REPARSE_POINT.' }
+            )
+        }
+        (Get-FsutilPathKey @('file', 'optimizeMetadata')) = @{
+            Positionals = @('Path')
+            Options     = @(
+                @{ Token = '/A'; Description = 'Display metadata usage.' }
+            )
         }
         (Get-FsutilPathKey @('file', 'queryAllocRanges')) = @{
             Handler = 'FileQueryAllocRanges'
@@ -321,20 +385,59 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('file', 'queryCaseSensitiveInfo')) = @{
             Positionals = @('DirectoryPath')
         }
+        (Get-FsutilPathKey @('file', 'queryEA')) = @{
+            Positionals = @('FilePath')
+        }
+        (Get-FsutilPathKey @('file', 'queryExtents')) = @{
+            Positionals = @('FilePath', 'Vcn', 'Vcn')
+            Options     = @(
+                @{ Token = '/R'; Description = 'If <filename> is a reparse point, open it rather than its target.' }
+            )
+            Words       = @(
+                @{ Name = 'csv'; Description = 'Display the result in csv format.' }
+            )
+        }
+        (Get-FsutilPathKey @('file', 'queryExtentsAndRefCounts')) = @{
+            Positionals = @('FilePath', 'Vcn', 'Vcn')
+            Options     = @(
+                @{ Token = '/R'; Description = 'If <filename> is a reparse point, open it rather than its target.' }
+            )
+        }
         (Get-FsutilPathKey @('file', 'queryFileID')) = @{
             Positionals = @('FilePath')
         }
         (Get-FsutilPathKey @('file', 'queryFileNameById')) = @{
             Handler = 'FileQueryFileNameById'
         }
+        (Get-FsutilPathKey @('file', 'queryOptimizeMetadata')) = @{
+            Positionals = @('Path')
+        }
         (Get-FsutilPathKey @('file', 'queryProcessesUsing')) = @{
             Positionals = @('Path')
             Options     = @(
-                @{ Token = '/C'; Description = 'Search child items recursively.' }
+                @{ Token = '/C'; Description = 'Output in CSV format.' }
             )
         }
         (Get-FsutilPathKey @('file', 'queryValidData')) = @{
             Positionals = @('FilePath')
+        }
+        (Get-FsutilPathKey @('file', 'setCaseSensitiveInfo')) = @{
+            Positionals = @('DirectoryPath', 'EnableDisable', 'Recursive', 'Depth')
+        }
+        (Get-FsutilPathKey @('file', 'setEOF')) = @{
+            Positionals = @('FilePath', 'Length')
+        }
+        (Get-FsutilPathKey @('file', 'setShortName')) = @{
+            Positionals = @('FilePath', 'ShortName')
+        }
+        (Get-FsutilPathKey @('file', 'setStrictlySequential')) = @{
+            Positionals = @('FilePath')
+        }
+        (Get-FsutilPathKey @('file', 'setValidData')) = @{
+            Positionals = @('FilePath', 'Length')
+        }
+        (Get-FsutilPathKey @('file', 'setZeroData')) = @{
+            Handler = 'FileQueryAllocRanges'
         }
         (Get-FsutilPathKey @('fsInfo', 'driveType')) = @{
             Positionals = @('VolumePath')
@@ -393,14 +496,62 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('repair', 'enumerate')) = @{
             Handler = 'RepairEnumerate'
         }
+        (Get-FsutilPathKey @('repair', 'initiate')) = @{
+            Positionals = @('VolumePath', 'FileRef')
+        }
         (Get-FsutilPathKey @('repair', 'query')) = @{
             Positionals = @('VolumePath')
         }
         (Get-FsutilPathKey @('repair', 'set')) = @{
             Handler = 'RepairSet'
         }
+        (Get-FsutilPathKey @('repair', 'state')) = @{
+            Positionals = @('VolumePath')
+        }
         (Get-FsutilPathKey @('repair', 'wait')) = @{
             Handler = 'RepairWait'
+        }
+        (Get-FsutilPathKey @('resource', 'create')) = @{
+            Positionals = @('DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'info')) = @{
+            Positionals = @('DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setAutoReset')) = @{
+            Positionals = @('TrueFalse', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setAvailable')) = @{
+            Positionals = @('DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setConsistent')) = @{
+            Positionals = @('DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'growth')) = @{
+            Positionals = @('Number', 'GrowthUnit', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'maxExtents')) = @{
+            Positionals = @('Number', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'minExtents')) = @{
+            Positionals = @('Number', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'mode')) = @{
+            Positionals = @('LogMode', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'rename')) = @{
+            Positionals = @('DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'shrink')) = @{
+            Positionals = @('Number', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'setLog', 'size')) = @{
+            Positionals = @('Number', 'DirectoryPath')
+        }
+        (Get-FsutilPathKey @('resource', 'start')) = @{
+            Positionals = @('DirectoryPath', 'Path', 'Path')
+        }
+        (Get-FsutilPathKey @('resource', 'stop')) = @{
+            Positionals = @('DirectoryPath')
         }
         (Get-FsutilPathKey @('reparsePoint', 'delete')) = @{
             Positionals = @('Path')
@@ -429,8 +580,40 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('storageReserve', 'repair')) = @{
             Positionals = @('VolumePath')
         }
+        (Get-FsutilPathKey @('tiering', 'clearFlags')) = @{
+            Positionals = @('VolumePath', 'TieringFlags')
+        }
+        (Get-FsutilPathKey @('tiering', 'queryFlags')) = @{
+            Positionals = @('VolumePath')
+        }
+        (Get-FsutilPathKey @('tiering', 'regionList')) = @{
+            Positionals = @('VolumePath')
+        }
+        (Get-FsutilPathKey @('tiering', 'setFlags')) = @{
+            Positionals = @('VolumePath', 'TieringFlags')
+        }
+        (Get-FsutilPathKey @('tiering', 'tierList')) = @{
+            Positionals = @('VolumePath')
+        }
+        (Get-FsutilPathKey @('trace', 'decode')) = @{
+            Positionals  = @('FilePath')
+            TagsAnywhere = $true
+            Tags         = @(
+                @{ Name = 'output'; ValueKind = 'Path';        Description = 'Output file name (defaults to the input name).' }
+                @{ Name = 'format'; ValueKind = 'TraceFormat'; Description = 'Output format: CSV, XML, EVTX, TXT or No.' }
+            )
+        }
+        (Get-FsutilPathKey @('transaction', 'commit')) = @{
+            Positionals = @('Guid')
+        }
+        (Get-FsutilPathKey @('transaction', 'fileinfo')) = @{
+            Positionals = @('FilePath')
+        }
         (Get-FsutilPathKey @('transaction', 'query')) = @{
             Handler = 'TransactionQuery'
+        }
+        (Get-FsutilPathKey @('transaction', 'rollback')) = @{
+            Positionals = @('Guid')
         }
         (Get-FsutilPathKey @('usn', 'createJournal')) = @{
             Handler = 'UsnCreateJournal'
@@ -442,13 +625,23 @@ function Get-FsutilStaticSpecs {
             Handler = 'UsnEnableRangeTracking'
         }
         (Get-FsutilPathKey @('usn', 'enumData')) = @{
-            Positionals = @('VolumePath')
+            Positionals = @('FileRef', 'Usn', 'Usn', 'VolumePath')
         }
         (Get-FsutilPathKey @('usn', 'queryJournal')) = @{
             Positionals = @('VolumePath')
         }
         (Get-FsutilPathKey @('usn', 'readJournal')) = @{
             Positionals = @('VolumePath')
+            Words       = @(
+                @{ Name = 'csv';  Description = 'Print the USN records in CSV format.' }
+                @{ Name = 'wait'; Description = 'Wait for more records to be added to the USN journal.' }
+                @{ Name = 'tail'; Description = 'Start reading at the end of the USN journal (overrides startUsn).' }
+            )
+            Tags        = @(
+                @{ Name = 'minVer';   ValueKind = 'UsnVersion'; Description = 'Minimum major version of USN_RECORD to return (default 2).' }
+                @{ Name = 'maxVer';   ValueKind = 'UsnVersion'; Description = 'Maximum major version of USN_RECORD to return (default 4).' }
+                @{ Name = 'startUsn'; ValueKind = 'Usn';        Description = 'USN to start reading the journal from (default 0).' }
+            )
         }
         (Get-FsutilPathKey @('usn', 'readData')) = @{
             Positionals = @('FilePath')
@@ -480,6 +673,19 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('volume', 'findShrinkBlocker')) = @{
             Handler = 'VolumeFindShrinkBlocker'
         }
+        (Get-FsutilPathKey @('volume', 'fileLayout')) = @{
+            Positionals = @('Path', 'FileIdOrStar')
+            Options     = @(
+                @{ Token = '/v'; Description = 'Verbose mode - display the attribute buffer hex dump for $EA and $REPARSE_POINT.' }
+            )
+        }
+        (Get-FsutilPathKey @('volume', 'smrGC')) = @{
+            Positionals = @('VolumePath')
+            Tags        = @(
+                @{ Name = 'Action';        ValueKind = 'SmrAction'; Description = 'Garbage collection action: start, startfullspeed, pause or stop.' }
+                @{ Name = 'IoGranularity'; ValueKind = 'Length';    Description = 'I/O granularity for Action=start.' }
+            )
+        }
         (Get-FsutilPathKey @('volume', 'smrInfo')) = @{
             Positionals = @('VolumePath')
         }
@@ -492,17 +698,22 @@ function Get-FsutilStaticSpecs {
         (Get-FsutilPathKey @('wim', 'enumFiles')) = @{
             Handler = 'WimEnumFiles'
         }
+        (Get-FsutilPathKey @('wim', 'enumWims')) = @{
+            Positionals = @('DriveName')
+        }
         (Get-FsutilPathKey @('wim', 'queryFile')) = @{
             Positionals = @('FilePath')
+        }
+        (Get-FsutilPathKey @('wim', 'removeWim')) = @{
+            Positionals = @('DriveName', 'DataSource')
         }
     }
 }
 
 function Invoke-FsutilHelpText {
-    param(
-        [string[]]$Arguments,
-        [switch]$Bare
-    )
+    # Runs fsutil with exactly the given arguments (never '/?': several verbs take it as an operand)
+    # through a bounded process with stdin closed, so a verb that blocks cannot stall the prompt.
+    param([string[]]$Arguments)
 
     $commandName = Resolve-FsutilCommandName
     if (-not $commandName) {
@@ -510,12 +721,42 @@ function Invoke-FsutilHelpText {
     }
 
     try {
-        if ($Bare) {
-            return @(& $commandName @Arguments 2>$null)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $commandName
+        foreach ($argument in @($Arguments)) {
+            $startInfo.ArgumentList.Add($argument)
         }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
 
-        return @($null | & $commandName @Arguments '/?' 2>$null)
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                $process.Kill()
+                return @()
+            }
+
+            $text = $outputTask.Result
+            if ([string]::IsNullOrWhiteSpace($text)) {
+                $text = $errorTask.Result
+            }
+
+            if ([string]::IsNullOrWhiteSpace($text)) {
+                return @()
+            }
+
+            return @($text -split '\r?\n')
+        } finally {
+            $process.Dispose()
+        }
     } catch {
+        Write-Debug "fsutil completer: '$commandName $($Arguments -join ' ')' failed: $($_.Exception.Message)"
         @()
     }
 }
@@ -544,10 +785,13 @@ function Get-FsutilHelpEntries {
             continue
         }
 
-        if ($line -match '^\s*(?<name>[A-Za-z0-9]+)\s{2,}(?<description>.+?)\s*$') {
+        # A single space separates name and description when the name fills the column
+        # (file queryExtentsAndRefCounts), so any run of whitespace is accepted.
+        if ($line -match '^\s{0,4}(?<name>[A-Za-z0-9]+)(?:\s+(?<description>\S.*?))?\s*$') {
+            $description = if ($matches.ContainsKey('description')) { $matches.description.Trim() } else { '' }
             $entries.Add([pscustomobject]@{
                     Name        = $matches.name
-                    Description = $matches.description.Trim()
+                    Description = $description
                 })
         }
     }
@@ -565,7 +809,7 @@ function Ensure-FsutilPathLoaded {
 
     $entries = @()
     if (-not $PathTokens -or $PathTokens.Count -eq 0) {
-        $entries = Get-FsutilHelpEntries -Lines (Invoke-FsutilHelpText -Arguments @() -Bare)
+        $entries = Get-FsutilHelpEntries -Lines (Invoke-FsutilHelpText -Arguments @())
         if (-not $entries -or $entries.Count -eq 0) {
             $entries = foreach ($entry in (Get-FsutilStaticRootEntries)) {
                 [pscustomobject]@{
@@ -575,7 +819,7 @@ function Ensure-FsutilPathLoaded {
             }
         }
     } elseif ($PathTokens.Count -eq 1) {
-        $entries = Get-FsutilHelpEntries -Lines (Invoke-FsutilHelpText -Arguments $PathTokens -Bare)
+        $entries = Get-FsutilHelpEntries -Lines (Invoke-FsutilHelpText -Arguments $PathTokens)
         if ((-not $entries -or $entries.Count -eq 0)) {
             $fallbacks = Get-FsutilStaticFamilyFallbacks
             $familyKey = $PathTokens[0].ToLowerInvariant()
@@ -588,7 +832,10 @@ function Ensure-FsutilPathLoaded {
                 }
             }
         }
-    } else {
+    } elseif ($key -eq (Get-FsutilPathKey -PathTokens @('resource', 'setLog'))) {
+        # The only two-token node with sub-verbs; invoked bare it prints its listing. Every other
+        # two-token path is a leaf and is never executed: running 'verb /?' or a bare verb could
+        # perform the operation (fsutil tiering queryFlags /? tries to open a volume named '/?').
         $entries = Get-FsutilHelpEntries -Lines (Invoke-FsutilHelpText -Arguments $PathTokens)
     }
 
@@ -600,6 +847,8 @@ function Ensure-FsutilPathLoaded {
 }
 
 function Get-FsutilLeafHelpLines {
+    # Only for 'behavior query' and 'behavior set', which print their usage table when run without
+    # arguments (verified on 10.0.26100); no '/?' is appended.
     param([string[]]$PathTokens)
 
     $key = Get-FsutilPathKey -PathTokens $PathTokens
@@ -668,42 +917,6 @@ function Get-FsutilCurrentToken {
     }
 
     $Fallback
-}
-
-function Get-FsutilTokensBeforeCurrent {
-    param(
-        [string[]]$Tokens,
-        [string]$CurrentWord,
-        [bool]$HasTrailingSpace
-    )
-
-    if ($HasTrailingSpace) {
-        return @($Tokens)
-    }
-
-    if (-not $Tokens -or $Tokens.Count -eq 0) {
-        return @()
-    }
-
-    if (-not [string]::IsNullOrEmpty($CurrentWord)) {
-        for ($suffixLength = 1; $suffixLength -le $Tokens.Count; $suffixLength++) {
-            $suffix = (@($Tokens | Select-Object -Last $suffixLength) -join '')
-            if ($suffix -eq $CurrentWord) {
-                $prefixLength = $Tokens.Count - $suffixLength
-                if ($prefixLength -le 0) {
-                    return @()
-                }
-
-                return @($Tokens | Select-Object -First $prefixLength)
-            }
-        }
-    }
-
-    if ($Tokens.Count -gt 1) {
-        return @($Tokens | Select-Object -First ($Tokens.Count - 1))
-    }
-
-    @()
 }
 
 function Get-FsutilChildSuggestions {
@@ -914,6 +1127,8 @@ function Get-FsutilArgumentState {
         Positionals      = @()
         PendingValueKind = $null
         SeenOptions      = @()
+        SeenTags         = @()
+        SeenWords        = @()
     }
 
     foreach ($token in @($Tokens)) {
@@ -940,6 +1155,18 @@ function Get-FsutilArgumentState {
             continue
         }
 
+        $tagInfo = Get-FsutilTagInfo -Spec $Spec -Token $cleanToken
+        if ($tagInfo) {
+            $state.SeenTags += ([string]$tagInfo.Name).ToLowerInvariant()
+            continue
+        }
+
+        $wordInfo = Get-FsutilWordInfo -Spec $Spec -Token $cleanToken
+        if ($wordInfo) {
+            $state.SeenWords += ([string]$wordInfo.Name).ToLowerInvariant()
+            continue
+        }
+
         $state.Positionals += [pscustomobject]@{
             Kind  = $null
             Value = $cleanToken
@@ -947,6 +1174,88 @@ function Get-FsutilArgumentState {
     }
 
     $state
+}
+
+function Get-FsutilTagInfo {
+    # 'name=value' operands such as startUsn=0xF00 or format=CSV.
+    param(
+        [hashtable]$Spec,
+        [string]$Token
+    )
+
+    if (-not $Spec -or -not ($Spec.ContainsKey('Tags'))) {
+        return $null
+    }
+
+    $match = [regex]::Match((Remove-FsutilOuterQuotes -Value $Token), '^(?<name>[A-Za-z]+)=')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    foreach ($tag in @($Spec.Tags)) {
+        if ([string]$tag.Name -ieq $match.Groups['name'].Value) {
+            return $tag
+        }
+    }
+
+    $null
+}
+
+function Get-FsutilWordInfo {
+    # Bare keyword operands such as csv, wait or tail.
+    param(
+        [hashtable]$Spec,
+        [string]$Token
+    )
+
+    if (-not $Spec -or -not ($Spec.ContainsKey('Words'))) {
+        return $null
+    }
+
+    $lookup = Remove-FsutilOuterQuotes -Value $Token
+    foreach ($word in @($Spec.Words)) {
+        if ([string]$word.Name -ieq $lookup) {
+            return $word
+        }
+    }
+
+    $null
+}
+
+function Get-FsutilTagAndWordCompletionList {
+    param(
+        [hashtable]$Spec,
+        [string]$CurrentValue,
+        [hashtable]$State
+    )
+
+    $cleanCurrent = Remove-FsutilOuterQuotes -Value $CurrentValue
+    if ($Spec.ContainsKey('Tags')) {
+        foreach ($tag in @($Spec.Tags)) {
+            $name = [string]$tag.Name
+            if ($State.SeenTags -contains $name.ToLowerInvariant()) {
+                continue
+            }
+
+            $completionText = $name + '='
+            if ([string]::IsNullOrWhiteSpace($cleanCurrent) -or $completionText.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+                New-FsutilCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $tag.Description
+            }
+        }
+    }
+
+    if ($Spec.ContainsKey('Words')) {
+        foreach ($word in @($Spec.Words)) {
+            $name = [string]$word.Name
+            if ($State.SeenWords -contains $name.ToLowerInvariant()) {
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($cleanCurrent) -or $name.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+                New-FsutilCompletionResult -CompletionText $name -ListItemText $name -ResultType 'ParameterValue' -ToolTip $word.Description
+            }
+        }
+    }
 }
 
 function Get-FsutilOptionCompletions {
@@ -1168,6 +1477,125 @@ function Get-FsutilValueKindCompletions {
                     @{ CompletionText = '<data-source>'; ToolTip = 'Data source' }
                 ) -DefaultToolTip 'Data source')
         }
+        'FileRef' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '1';                  ToolTip = 'Example file reference number' }
+                    @{ CompletionText = '0x001600000000123D'; ToolTip = 'Example file reference number including the segment number' }
+                    @{ CompletionText = '<file ref#>';        ToolTip = 'File reference number' }
+                ) -DefaultToolTip 'File reference number')
+        }
+        'Usn' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '0';     ToolTip = 'USN 0' }
+                    @{ CompletionText = '1';     ToolTip = 'USN 1' }
+                    @{ CompletionText = '0xF00'; ToolTip = 'Example hexadecimal USN' }
+                    @{ CompletionText = '<usn>'; ToolTip = 'Update sequence number' }
+                ) -DefaultToolTip 'USN')
+        }
+        'UsnVersion' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '2'; ToolTip = 'USN_RECORD major version 2' }
+                    @{ CompletionText = '3'; ToolTip = 'USN_RECORD major version 3' }
+                    @{ CompletionText = '4'; ToolTip = 'USN_RECORD major version 4' }
+                ) -DefaultToolTip 'USN_RECORD major version')
+        }
+        'Vcn' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '0';     ToolTip = 'VCN 0' }
+                    @{ CompletionText = '10';    ToolTip = 'Example VCN count' }
+                    @{ CompletionText = '100';   ToolTip = 'Example VCN count' }
+                    @{ CompletionText = '<vcn>'; ToolTip = 'Virtual cluster number' }
+                ) -DefaultToolTip 'Virtual cluster number')
+        }
+        'ShortName' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '""';          ToolTip = 'Remove the existing short name' }
+                    @{ CompletionText = '<shortname>'; ToolTip = '8.3 short name to set' }
+                ) -DefaultToolTip 'Short name')
+        }
+        'EnableDisable' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'enable';  ToolTip = 'Enable the case sensitive attribute (default)' }
+                    @{ CompletionText = 'disable'; ToolTip = 'Disable the case sensitive attribute' }
+                ) -DefaultToolTip 'enable or disable')
+        }
+        'Recursive' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'recursive'; ToolTip = 'Also set the attribute on subdirectories' }
+                ) -DefaultToolTip 'recursive')
+        }
+        'Depth' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '0';       ToolTip = 'Depth 0 (same as not recursive)' }
+                    @{ CompletionText = '1';       ToolTip = 'One level of subdirectories' }
+                    @{ CompletionText = '2';       ToolTip = 'Two levels of subdirectories' }
+                    @{ CompletionText = '<depth>'; ToolTip = 'Subdirectory depth to traverse' }
+                ) -DefaultToolTip 'Depth')
+        }
+        'TieringFlags' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '/TrNH'; ToolTip = 'NTFS and ReFS only: disable heat gathering on tiered volumes'; ResultType = 'ParameterName' }
+                ) -DefaultToolTip 'Tiering flags')
+        }
+        'FileIdOrStar' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '*';                  ToolTip = 'All files on the volume' }
+                    @{ CompletionText = '0x00040000000001bf'; ToolTip = 'Example 64-bit file ID' }
+                    @{ CompletionText = '<file id>';          ToolTip = 'File ID' }
+                ) -DefaultToolTip 'File ID or *')
+        }
+        'TrueFalse' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'true';  ToolTip = 'true' }
+                    @{ CompletionText = 'false'; ToolTip = 'false' }
+                ) -DefaultToolTip 'true or false')
+        }
+        'Number' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = '5';        ToolTip = 'Example value' }
+                    @{ CompletionText = '50';       ToolTip = 'Example value' }
+                    @{ CompletionText = '<number>'; ToolTip = 'Number' }
+                ) -DefaultToolTip 'Number')
+        }
+        'GrowthUnit' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'containers'; ToolTip = 'Grow by a number of containers' }
+                    @{ CompletionText = 'percent';    ToolTip = 'Grow by a percentage' }
+                ) -DefaultToolTip 'Growth unit')
+        }
+        'LogMode' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'full'; ToolTip = 'Full logging' }
+                    @{ CompletionText = 'undo'; ToolTip = 'Undo only logging' }
+                ) -DefaultToolTip 'Log mode')
+        }
+        'TraceFormat' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'CSV';  ToolTip = 'Comma separated values' }
+                    @{ CompletionText = 'XML';  ToolTip = 'XML' }
+                    @{ CompletionText = 'EVTX'; ToolTip = 'Event log file' }
+                    @{ CompletionText = 'TXT';  ToolTip = 'Plain text (default)' }
+                    @{ CompletionText = 'No';   ToolTip = 'Do not dump events' }
+                ) -DefaultToolTip 'Trace output format')
+        }
+        'DaxQueryFlag' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'large'; ToolTip = 'Query for large page alignment' }
+                    @{ CompletionText = 'huge';  ToolTip = 'Query for huge page alignment (64-bit only)' }
+                    @{ CompletionText = 'both';  ToolTip = 'Query for both large and huge page alignment (default)' }
+                ) -DefaultToolTip 'Query flag')
+        }
+        'SmrAction' {
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentValue -Items @(
+                    @{ CompletionText = 'start';          ToolTip = 'Start garbage collection (requires IoGranularity=)' }
+                    @{ CompletionText = 'startfullspeed'; ToolTip = 'Start garbage collection at full speed' }
+                    @{ CompletionText = 'pause';          ToolTip = 'Pause garbage collection' }
+                    @{ CompletionText = 'stop';           ToolTip = 'Stop garbage collection' }
+                ) -DefaultToolTip 'SMR garbage collection action')
+        }
+        'FilterList' {
+            return @(Get-FsutilPlaceholderCompletions -CurrentValue $CurrentValue -Placeholder '"filter1, filter2"' -ToolTip 'Comma separated list of allowed filter names')
+        }
     }
 
     @()
@@ -1183,6 +1611,22 @@ function Get-FsutilGenericArgumentCompletions {
     $state = Get-FsutilArgumentState -Spec $Spec -Tokens $TokensBeforeCurrent
     if ($state.PendingValueKind) {
         return @(Get-FsutilValueKindCompletions -ValueKind $state.PendingValueKind -CurrentValue $CurrentWord -Context $state)
+    }
+
+    # Attached 'name=value' operand in progress: complete the value and keep the 'name=' prefix.
+    $currentTag = Get-FsutilTagInfo -Spec $Spec -Token $CurrentWord
+    if ($currentTag) {
+        $tagName = [string]$currentTag.Name
+        $valuePrefix = (Remove-FsutilOuterQuotes -Value $CurrentWord).Substring($tagName.Length + 1)
+        $items = foreach ($item in @(Get-FsutilValueKindCompletions -ValueKind ([string]$currentTag.ValueKind) -CurrentValue $valuePrefix -Context $state)) {
+            [pscustomobject]@{
+                CompletionText = "$tagName=$($item.CompletionText)"
+                ListItemText   = "$tagName=$($item.ListItemText)"
+                ToolTip        = $item.ToolTip
+            }
+        }
+
+        return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @($items) -DefaultToolTip ($tagName + '= value'))
     }
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -1203,6 +1647,13 @@ function Get-FsutilGenericArgumentCompletions {
 
     if ($nextKind) {
         foreach ($item in @(Get-FsutilValueKindCompletions -ValueKind $nextKind -CurrentValue $CurrentWord -Context $state)) {
+            $results.Add($item)
+        }
+    }
+
+    $tagsAnywhere = $Spec.ContainsKey('TagsAnywhere') -and [bool]$Spec.TagsAnywhere
+    if (-not $CurrentWord.StartsWith('/') -and ($tagsAnywhere -or $positionalCount -ge $declaredPositionalCount)) {
+        foreach ($item in @(Get-FsutilTagAndWordCompletionList -Spec $Spec -CurrentValue $CurrentWord -State $state)) {
             $results.Add($item)
         }
     }
@@ -1302,7 +1753,8 @@ function Get-FsutilBehaviorSetValueShapeCompletions {
 
             return @()
         }
-        'disabletxf' {
+        { $_ -in @('disabletxf', 'disablewriteautotiering', 'enablereallocatealldatawrites') } {
+            # [<Volume Path> <0|1>]
             if ($TypedValues.Count -eq 0) {
                 return @(Get-FsutilValueKindCompletions -ValueKind 'VolumePath' -CurrentValue $CurrentWord -Context @{})
             }
@@ -1313,37 +1765,80 @@ function Get-FsutilBehaviorSetValueShapeCompletions {
 
             return @()
         }
+        'symlinkevaluation' {
+            # [<L2L>|<L2R>|<R2L>|<R2R>:<0|1>] [...] - any number of kind:value pairs
+            $items = foreach ($kind in @('L2L', 'L2R', 'R2L', 'R2R')) {
+                if (@($TypedValues | Where-Object { $_ -match ('^' + $kind + ':') }).Count -gt 0) {
+                    continue
+                }
+
+                foreach ($flag in @('0', '1')) {
+                    @{ CompletionText = "${kind}:$flag"; ToolTip = "$kind symbolic link evaluation " + $(if ($flag -eq '1') { 'enabled' } else { 'disabled' }) }
+                }
+            }
+
+            return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @($items) -DefaultToolTip 'symlinkEvaluation value')
+        }
+    }
+
+    if ($TypedValues.Count -gt 0) {
+        return @()
     }
 
     $valueShape = [string]$script:FsutilCompletionCatalog.BehaviorSetValueMaps[$lookup].ValueShape
-    if ($valueShape -match '<0\|1>') {
-        return @(Get-FsutilValueKindCompletions -ValueKind 'Boolean01' -CurrentValue $CurrentWord -Context @{})
+    Get-FsutilValueShapeCompletionList -ValueShape $valueShape -CurrentWord $CurrentWord
+}
+
+function Get-FsutilValueShapeCompletionList {
+    # Expands every <a-b> range and <a|b|...> alternation found in a help value shape such as
+    # '<0-3> | <0|1>' or '<1|2>' into literal values; wide ranges get their bounds plus a placeholder.
+    param(
+        [string]$ValueShape,
+        [string]$CurrentWord
+    )
+
+    $items = New-Object System.Collections.Generic.List[object]
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($match in [regex]::Matches($ValueShape, '<(?<body>[^<>]+)>')) {
+        $body = $match.Groups['body'].Value.Trim()
+        if ($body -match '^(?<low>\d[\d,]*)-(?<high>\d[\d,]*)$') {
+            $low = [int64]($matches['low'] -replace ',', '')
+            $high = [int64]($matches['high'] -replace ',', '')
+            if (($high - $low) -le 32) {
+                for ($value = $low; $value -le $high; $value++) {
+                    if ($seen.Add([string]$value)) {
+                        $items.Add(@{ CompletionText = [string]$value; ToolTip = "Value $value ($low-$high)" })
+                    }
+                }
+            } else {
+                foreach ($bound in @($low, $high)) {
+                    if ($seen.Add([string]$bound)) {
+                        $items.Add(@{ CompletionText = [string]$bound; ToolTip = "Value $bound ($low-$high)" })
+                    }
+                }
+
+                $placeholder = "<$low-$high>"
+                if ($seen.Add($placeholder)) {
+                    $items.Add(@{ CompletionText = $placeholder; ToolTip = "Any value from $low to $high" })
+                }
+            }
+        } elseif ($body -match '^[\w.]+(?:\|[\w.]+)+$') {
+            foreach ($alternative in $body.Split('|')) {
+                if ($seen.Add($alternative)) {
+                    $items.Add(@{ CompletionText = $alternative; ToolTip = "Value $alternative" })
+                }
+            }
+        }
     }
 
-    if ($valueShape -match '<0-3>') {
-        return @(Get-FsutilValueKindCompletions -ValueKind 'Range03' -CurrentValue $CurrentWord -Context @{})
+    if ($ValueShape -match '<Volume Path>') {
+        foreach ($item in @(Get-FsutilValueKindCompletions -ValueKind 'VolumePath' -CurrentValue $CurrentWord -Context @{})) {
+            $item
+        }
     }
 
-    if ($valueShape -match '<1-2>') {
-        return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @(
-                @{ CompletionText = '1'; ToolTip = 'Value 1' }
-                @{ CompletionText = '2'; ToolTip = 'Value 2' }
-            ) -DefaultToolTip '1 or 2')
-    }
-
-    if ($valueShape -match '<0-15>') {
-        return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @(
-                @{ CompletionText = '0'; ToolTip = 'Value 0' }
-                @{ CompletionText = '1'; ToolTip = 'Value 1' }
-                @{ CompletionText = '15'; ToolTip = 'Value 15' }
-            ) -DefaultToolTip '0 through 15')
-    }
-
-    if ($valueShape -match '<Volume Path>') {
-        return @(Get-FsutilValueKindCompletions -ValueKind 'VolumePath' -CurrentValue $CurrentWord -Context @{})
-    }
-
-    @()
+    Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @($items.ToArray()) -DefaultToolTip 'behavior set value'
 }
 
 function Get-FsutilBehaviorSetCompletions {
@@ -1972,18 +2467,24 @@ function Complete-Fsutil {
 
     Initialize-FsutilCompletionCatalog
 
+    # $CursorPosition is an offset into the whole input line; the extent text is command-relative.
     $line = $CommandAst.Extent.Text
-    $cursorAfterExtent = $CursorPosition -gt $line.Length
-    $currentWord = if ($cursorAfterExtent -or [string]::IsNullOrEmpty($WordToComplete)) {
+    $relativeCursor = [Math]::Max($CursorPosition - $CommandAst.Extent.StartOffset, 0)
+    $cursorAfterExtent = $relativeCursor -gt $line.Length
+    $safeCursor = [Math]::Min($relativeCursor, $line.Length)
+    $hasTrailingSpace = $cursorAfterExtent -or ($safeCursor -gt 0 -and [char]::IsWhiteSpace($line[$safeCursor - 1]))
+    $currentWord = if ($hasTrailingSpace) {
         ''
     } else {
-        Get-FsutilCurrentToken -Line $line -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-FsutilCurrentToken -Line $line -CursorPosition $safeCursor -Fallback $WordToComplete
     }
 
-    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $line.Length)
-    $hasTrailingSpace = $cursorAfterExtent -or [string]::IsNullOrEmpty($WordToComplete) -or ($line.Substring(0, $safeCursor) -match '\s$')
-    $tokensBeforeCurrent = Get-FsutilTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace:$hasTrailingSpace
+    # Only elements that end before the cursor are completed tokens; the element under the cursor
+    # is the current word (truncated at the cursor) and anything after it is ignored.
+    $tokensBeforeCurrent = @($CommandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $CursorPosition } |
+            ForEach-Object { $_.Extent.Text })
 
     if (@($tokensBeforeCurrent).Count -eq 0) {
         Ensure-FsutilPathLoaded -PathTokens @()
