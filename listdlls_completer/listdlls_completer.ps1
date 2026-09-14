@@ -6,11 +6,11 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name ListdllsCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:ListdllsCompletionCatalog = @{
         Initialized             = $false
-        SwitchOrder             = @('-r', '-v', '-u', '-d', '-?', '/?', '--help')
+        SwitchOrder             = @('-r', '-v', '-u', '-d', '-accepteula', '-nobanner', '-?', '/?', '--help')
         SwitchInfo              = @{}
         ProcessEntries          = @()
         ProcessCacheUpdated     = $null
-        ProcessCacheTtlSeconds  = 2
+        ProcessCacheTtlSeconds  = 15
         DllPlaceholder          = '<dll-name>'
     }
 }
@@ -83,6 +83,8 @@ function Get-ListdllsStaticSwitchCatalog {
         '-v'     = 'Show DLL version information.'
         '-u'     = 'Only list unsigned DLLs.'
         '-d'     = 'Show only processes that loaded the specified DLL.'
+        '-accepteula' = 'Accept the Sysinternals EULA (suppresses the first-run dialog).'
+        '-nobanner'   = 'Do not display the startup banner and copyright message.'
         '-?'     = 'Display listdlls help.'
         '/?'     = 'Display listdlls help.'
         '--help' = 'Display listdlls help.'
@@ -115,11 +117,34 @@ function Invoke-ListdllsHelpText {
     }
 
     try {
-        @(
-            $null | & $commandPath '/?' 2>&1 |
-                ForEach-Object { $_.ToString() }
-        )
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $commandPath
+        foreach ($argument in @('-accepteula', '-nobanner', '/?')) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                $process.Kill()
+                return @()
+            }
+
+            $text = $outputTask.Result + $errorTask.Result
+            return @($text -split '\r?\n')
+        } finally {
+            $process.Dispose()
+        }
     } catch {
+        Write-Debug "listdlls help unavailable: $($_.Exception.Message)"
         @()
     }
 }
@@ -188,31 +213,32 @@ function Update-ListdllsProcessCache {
     }
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $idSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $entries = [System.Collections.Generic.List[object]]::new()
+    $nameEntries = [System.Collections.Generic.List[object]]::new()
+    $idEntries = [System.Collections.Generic.List[object]]::new()
 
-    foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
+    foreach ($process in @(Get-Process -ErrorAction Ignore)) {
         if ($process.ProcessName -and $nameSet.Add($process.ProcessName)) {
-            $entries.Add([pscustomobject]@{
+            $nameEntries.Add([pscustomobject]@{
                     CompletionText = $process.ProcessName
-                    ResultType     = 'ParameterValue'
+                    Kind           = 'Name'
                     ToolTip        = "Process name $($process.ProcessName)"
                 })
         }
 
-        $processIdText = [string]$process.Id
-        if ($processIdText -and $idSet.Add($processIdText)) {
-            $entries.Add([pscustomobject]@{
-                    CompletionText = $processIdText
-                    ResultType     = 'ParameterValue'
-                    ToolTip        = "Process ID $processIdText"
+        # PIDs 0 (Idle) and 4 (System) cannot be opened by listdlls.
+        if ($process.Id -gt 4) {
+            $idEntries.Add([pscustomobject]@{
+                    CompletionText = [string]$process.Id
+                    Kind           = 'Pid'
+                    SortKey        = [int]$process.Id
+                    ToolTip        = "Process ID $($process.Id) ($($process.ProcessName))"
                 })
         }
     }
 
     $script:ListdllsCompletionCatalog.ProcessEntries = @(
-        $entries |
-            Sort-Object -Property CompletionText
+        @($nameEntries | Sort-Object -Property CompletionText) +
+        @($idEntries | Sort-Object -Property SortKey)
     )
     $script:ListdllsCompletionCatalog.ProcessCacheUpdated = Get-Date
 }
@@ -241,12 +267,15 @@ function Get-ListdllsProcessCompletions {
     Update-ListdllsProcessCache
 
     $typedValue = Remove-ListdllsOuterQuotes -Value $CurrentWord
+    # PIDs are only useful once the user starts typing digits; otherwise they bury the process names.
+    $wantsPids = $typedValue -match '^\d+$'
     $results = $script:ListdllsCompletionCatalog.ProcessEntries |
         Where-Object {
-            [string]::IsNullOrWhiteSpace($typedValue) -or $_.CompletionText.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)
+            ($_.Kind -eq 'Name' -or $wantsPids) -and
+            ([string]::IsNullOrWhiteSpace($typedValue) -or $_.CompletionText.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase))
         } |
         ForEach-Object {
-            New-ListdllsCompletionResult -CompletionText $_.CompletionText -ResultType $_.ResultType -ToolTip $_.ToolTip
+            New-ListdllsCompletionResult -CompletionText $_.CompletionText -ResultType 'ParameterValue' -ToolTip $_.ToolTip
         }
 
     if (@($results).Count -gt 0) {
@@ -264,6 +293,8 @@ function Get-ListdllsCommandState {
     $usedSwitchLookup = @{}
     $valueContext = $null
     $dllMode = $false
+    $verboseUsed = $false
+    $unsignedUsed = $false
     $processTarget = $null
     $helpRequested = $false
 
@@ -294,6 +325,8 @@ function Get-ListdllsCommandState {
 
         if ($lookup.StartsWith('-')) {
             $usedSwitchLookup[$lookup] = $true
+            if ($lookup -eq '-v') { $verboseUsed = $true }
+            if ($lookup -eq '-u') { $unsignedUsed = $true }
             continue
         }
 
@@ -306,6 +339,8 @@ function Get-ListdllsCommandState {
         UsedSwitchLookup = $usedSwitchLookup
         ValueContext     = $valueContext
         DllMode          = $dllMode
+        VerboseUsed      = $verboseUsed
+        UnsignedUsed     = $unsignedUsed
         ProcessTarget    = $processTarget
         HelpRequested    = $helpRequested
     }
@@ -335,11 +370,17 @@ function Get-ListdllsSwitchCompletions {
             continue
         }
 
-        if ($State.DllMode -and $token -eq '-u') {
+        # usage: listdlls [-r] [-v | -u] [processname|pid]
+        # usage: listdlls [-r] [-v] [-d dllname]
+        if ($token -eq '-u' -and ($State.DllMode -or $State.VerboseUsed)) {
             continue
         }
 
-        if ($State.ProcessTarget -and $token -eq '-d') {
+        if ($token -eq '-v' -and $State.UnsignedUsed) {
+            continue
+        }
+
+        if ($token -eq '-d' -and ($State.ProcessTarget -or $State.UnsignedUsed)) {
             continue
         }
 
@@ -362,12 +403,12 @@ function Complete-Listdlls {
     $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $safeCursor)
     $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    [object[]]$argumentTokens = if ($commandTokens.Count -gt 1) {
-        @($commandTokens | Select-Object -Skip 1)
-    } else {
-        @()
+    # Assign only in the non-empty branches: an empty @() flowing through an if-expression
+    # collapses to $null, and @($null) is a one-element array.
+    $argumentTokens = [object[]]@()
+    if ($commandTokens.Count -gt 1) {
+        $argumentTokens = [object[]]@($commandTokens | Select-Object -Skip 1)
     }
-    $argumentTokens = @($argumentTokens)
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
         Get-ListdllsCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
@@ -376,14 +417,12 @@ function Complete-Listdlls {
     }
 
     $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
-    [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 0) {
-        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
-    } else {
-        @()
+    $tokensBeforeCurrent = [object[]]@()
+    if ($hasTrailingSpace) {
+        $tokensBeforeCurrent = [object[]]@($argumentTokens)
+    } elseif ($argumentTokens.Count -gt 1) {
+        $tokensBeforeCurrent = [object[]]@($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
     }
-    $tokensBeforeCurrent = @($tokensBeforeCurrent)
 
     $state = Get-ListdllsCommandState -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -397,7 +436,7 @@ function Complete-Listdlls {
         return @(New-ListdllsLiteralValueResults -CurrentValue $currentWord -Placeholder $script:ListdllsCompletionCatalog.DllPlaceholder -ToolTip 'DLL name to search for.')
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
+    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/'))) {
         return @(Get-ListdllsSwitchCompletions -CurrentWord $currentWord -State $state -NoArgumentsYet:($tokensBeforeCurrent.Count -eq 0))
     }
 
@@ -411,8 +450,6 @@ function Complete-Listdlls {
             foreach ($item in @(Get-ListdllsProcessCompletions -CurrentWord '')) {
                 $results.Add($item)
             }
-
-            $results.Add((New-ListdllsCompletionResult -CompletionText $script:ListdllsCompletionCatalog.DllPlaceholder -ResultType 'ParameterValue' -ToolTip 'DLL name to search for with -d.'))
         }
 
         return @($results.ToArray())

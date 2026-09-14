@@ -7,8 +7,8 @@
 The implementation is static-first with light safe runtime hints:
 
 - it seeds the validated switch surface
-- it optionally parses `Listdlls /?` to refine descriptions
-- it adds local process-name and PID hints for the positional `processname|pid` slot
+- it optionally parses `Listdlls -accepteula -nobanner /?` (stdin closed, 5 s timeout) to refine descriptions
+- it adds local process-name hints for the positional `processname|pid` slot, and PID hints once the typed prefix is numeric
 - it uses a placeholder for the free-form `-d dllname` slot
 
 ## Registration and command names
@@ -33,18 +33,22 @@ The completer seeds these switches:
 - `-v`
 - `-u`
 - `-d`
+- `-accepteula`
+- `-nobanner`
 - `-?`
 - `/?`
 - `--help`
 
-It then safely captures `Listdlls /?` when available and uses the parsed text to improve switch tooltips.
+`-accepteula` and `-nobanner` are accepted by Listdlls v3.2 but never printed by its help, so they stay in the static catalog.
+
+It then safely captures `Listdlls -accepteula -nobanner /?` when available (stdin closed, bounded by a 5 s timeout) and uses the parsed text to improve switch tooltips.
 
 ### Positional process hints
 
 For the default `processname|pid` form, the completer uses `Get-Process` and a short-lived cache to surface:
 
-- process names
-- process IDs
+- process names, sorted, when the typed prefix is empty or non-numeric
+- process IDs, numerically sorted, only when the typed prefix is all digits (PIDs 0 and 4 are omitted because Listdlls cannot open them)
 
 ### DLL-name placeholder
 
@@ -60,13 +64,17 @@ That suppresses filesystem fallback without pretending to inspect module state.
 
 At `listdlls ` the completer offers:
 
-- relevant switches
-- local process names and PIDs
-- a DLL-name placeholder for the `-d` workflow
+- relevant switches (including `-?`, `/?` and `--help` while nothing else has been typed)
+- local process names (PIDs appear once you type a digit)
+
+The `<dll-name>` placeholder is only offered in the real `-d` value slot, since a DLL name is not a legal bare operand.
 
 ### Context-sensitive switch handling
 
-- once `-d` is in use, `-u` is hidden because it does not apply to the DLL-search form
+Modelled on the two usage forms `listdlls [-r] [-v | -u] [processname|pid]` and `listdlls [-r] [-v] [-d dllname]`:
+
+- `-v` and `-u` are mutually exclusive: once one is present the other is hidden
+- once `-d` or `-u` is in use, the other is hidden because `-u` does not apply to the DLL-search form
 - once a positional process target is supplied, `-d` is no longer suggested
 - help aliases are limited to the initial position
 
@@ -81,7 +89,7 @@ If you already started typing a value, the completer echoes that current token b
 ## Dependencies or external command expectations
 
 - `Get-Process` is used for local process hints
-- `Listdlls /?` is optionally parsed for help text refinement
+- `Listdlls -accepteula -nobanner /?` is optionally parsed for help text refinement (help output only; the call is bounded by a timeout and never prompts)
 - no local DLL enumeration is attempted
 
 ## Usage / loading example
