@@ -136,7 +136,8 @@ Important semantics handled by the parser:
   - suggests `,`, `:`, `;`, `|`, `\t`, and `[[:space:]]+`
 - `Assignment`
   - `-v`, `--assign`
-  - suggests `name=` and common awk variables such as `FS=`, `OFS=`, `RS=`, and `ORS=`
+  - suggests `name=` and the assignable gawk variables (`FS=`, `OFS=`, `RS=`, `ORS=`, `IGNORECASE=`, `BINMODE=`, `CONVFMT=`, `OFMT=`, `FIELDWIDTHS=`, `FPAT=`, `SUBSEP=`, `LINT=`, `PREC=`, `ROUNDMODE=`, `TEXTDOMAIN=`, `AWKPATH=`, `AWKLIBPATH=`)
+  - after the `=`, completes the value for variables with a known value set: separators for `FS`/`OFS`/`RS`/`ORS`, `0`/`1` for `IGNORECASE`, lint modes for `LINT`, `BINMODE` and `ROUNDMODE` modes, and paths for `AWKPATH`/`AWKLIBPATH`; the same applies to trailing `name=value` operands
 
 The completer also supports:
 
@@ -179,9 +180,9 @@ For `-l` / `--load`, the completer combines:
 
 - a seeded list of common gawk extensions including `filefuncs`, `fnmatch`, `fork`, `inplace`, `intdiv`, `ordchr`, `readdir`, `readfile`, `revoutput`, `revtwoway`, `rwarray`, and `time`
 - extension-library names discovered from `AWKLIBPATH`
-- extension-library names discovered near the resolved gawk executable, including sibling `lib`, `gawk`, and `extensions` directories
+- extension-library names discovered in the install's extension directory: the resolved executable (a scoop `.shim` target or symlink is followed first) is expected at `<prefix>\bin\gawk.exe`, and `<prefix>\lib\gawk` plus any `<prefix>\lib\gawk\ext-<API>` directory is scanned
 
-Discovered files are limited to local library files with extensions such as `.dll`, `.so`, `.dylib`, and `.bundle`.
+Discovered files are limited to local library files with extensions such as `.dll`, `.so`, `.dylib`, and `.bundle`; the executable's own `bin` directory is never scanned and names beginning with `lib`, `msys`, or `cyg` are skipped, so runtime DLLs are not offered as extensions.
 
 ## Dependencies or external command expectations
 

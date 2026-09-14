@@ -32,7 +32,28 @@ if (-not (Get-Variable -Name GawkCompletionCatalog -Scope Script -ErrorAction Ig
             @{ Text = 'BINMODE='; Tooltip = 'Binary/text file mode selection' }
             @{ Text = 'CONVFMT='; Tooltip = 'Numeric-to-string conversion format' }
             @{ Text = 'OFMT='; Tooltip = 'Default numeric output format' }
+            @{ Text = 'FIELDWIDTHS='; Tooltip = 'Fixed-width field specification' }
+            @{ Text = 'FPAT='; Tooltip = 'Regular expression describing field contents' }
+            @{ Text = 'SUBSEP='; Tooltip = 'Subscript separator for multi-dimensional arrays' }
+            @{ Text = 'LINT='; Tooltip = 'Lint mode: fatal, invalid, no-ext, or 1/0' }
+            @{ Text = 'PREC='; Tooltip = 'Arbitrary-precision working precision in bits' }
+            @{ Text = 'ROUNDMODE='; Tooltip = 'Arbitrary-precision rounding mode' }
+            @{ Text = 'TEXTDOMAIN='; Tooltip = 'Text domain for gettext translations' }
+            @{ Text = 'AWKPATH='; Tooltip = 'Search path for -f/-i source files' }
+            @{ Text = 'AWKLIBPATH='; Tooltip = 'Search path for -l extension libraries' }
         )
+        AssignmentValues        = @{
+            'FS'         = 'FieldSeparators'
+            'OFS'        = 'FieldSeparators'
+            'RS'         = 'FieldSeparators'
+            'ORS'        = 'FieldSeparators'
+            'IGNORECASE' = @('0', '1')
+            'BINMODE'    = @('0', '1', '2', '3', 'r', 'w', 'rw')
+            'LINT'       = 'LintValues'
+            'ROUNDMODE'  = @('N', 'U', 'D', 'Z', 'A')
+            'AWKPATH'    = 'Path'
+            'AWKLIBPATH' = 'Path'
+        }
     }
 }
 
@@ -357,6 +378,38 @@ function Get-GawkUniqueLongPrefixMaps {
     }
 }
 
+function Resolve-GawkRealExecutablePath {
+    param([string]$ExecutablePath)
+
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+        return $ExecutablePath
+    }
+
+    # A scoop shim is a launcher next to a '<name>.shim' file whose 'path = "..."'
+    # line names the real binary; a symlink carries its target directly.
+    $shimFile = [System.IO.Path]::ChangeExtension($ExecutablePath, '.shim')
+    if (Test-Path -LiteralPath $shimFile -PathType Leaf) {
+        foreach ($line in @(Get-Content -LiteralPath $shimFile -ErrorAction SilentlyContinue)) {
+            if ($line -match '^\s*path\s*=\s*"?([^"]+)"?\s*$') {
+                $target = $Matches[1].Trim()
+                if (Test-Path -LiteralPath $target -PathType Leaf) {
+                    return $target
+                }
+            }
+        }
+    }
+
+    $item = Get-Item -LiteralPath $ExecutablePath -ErrorAction SilentlyContinue
+    if ($item -and $item.PSObject.Properties['Target'] -and -not [string]::IsNullOrWhiteSpace($item.Target)) {
+        $target = [string]@($item.Target)[0]
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            return $target
+        }
+    }
+
+    $ExecutablePath
+}
+
 function Get-GawkDiscoveredLoadExtensions {
     param([string]$CommandName = 'gawk')
 
@@ -396,17 +449,26 @@ function Get-GawkDiscoveredLoadExtensions {
         }
     }
 
-    $executablePath = Get-GawkExecutablePath -CommandName $CommandName
+    # gawk installs its extensions under <prefix>\lib\gawk (Git for Windows) or
+    # <prefix>\lib\gawk\ext-<API> (scoop, MSYS2), where <prefix> is the parent of
+    # the bin directory holding the real gawk.exe. The bin directory itself is
+    # never scanned: it holds the msys/mingw runtime DLLs, not extensions.
+    $executablePath = Resolve-GawkRealExecutablePath -ExecutablePath (Get-GawkExecutablePath -CommandName $CommandName)
     if (-not [string]::IsNullOrWhiteSpace($executablePath)) {
         $exeDirectory = Split-Path -Parent $executablePath
-        foreach ($candidate in @(
-            $exeDirectory,
-            (Join-Path -Path $exeDirectory -ChildPath 'lib'),
-            (Join-Path -Path $exeDirectory -ChildPath 'gawk'),
-            (Join-Path -Path $exeDirectory -ChildPath 'extensions')
-        )) {
-            if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
-                [void]$candidateDirectories.Add($candidate)
+        $prefixDirectory = Split-Path -Parent $exeDirectory
+        $libRoots = @(
+            (Join-Path -Path $exeDirectory -ChildPath 'lib\gawk')
+            if (-not [string]::IsNullOrWhiteSpace($prefixDirectory)) { Join-Path -Path $prefixDirectory -ChildPath 'lib\gawk' }
+        )
+        foreach ($libRoot in $libRoots) {
+            if (-not (Test-Path -LiteralPath $libRoot -PathType Container)) {
+                continue
+            }
+
+            [void]$candidateDirectories.Add($libRoot)
+            foreach ($apiDirectory in @(Get-ChildItem -LiteralPath $libRoot -Directory -Filter 'ext-*' -ErrorAction SilentlyContinue)) {
+                [void]$candidateDirectories.Add($apiDirectory.FullName)
             }
         }
     }
@@ -417,6 +479,12 @@ function Get-GawkDiscoveredLoadExtensions {
             ForEach-Object {
                 $name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
                 if ([string]::IsNullOrWhiteSpace($name)) {
+                    return
+                }
+
+                # Runtime libraries (libgmp-10, msys-2.0, cygwin1) sit beside real
+                # extensions in some layouts and are never loadable with --load.
+                if ($name -match '^(lib|msys|cyg)') {
                     return
                 }
 
@@ -846,8 +914,27 @@ function Get-GawkAssignmentCompletions {
     )
 
     $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
-    if ($word -match '=') {
-        return @()
+    $equalsIndex = $word.IndexOf('=')
+    if ($equalsIndex -ge 0) {
+        # 'NAME=' is complete; offer the values the catalog knows for that variable.
+        $variableName = $word.Substring(0, $equalsIndex).Trim('"', "'").ToUpperInvariant()
+        $valueText = $word.Substring($equalsIndex + 1)
+        $valuePrefix = $AttachedPrefix + $word.Substring(0, $equalsIndex + 1)
+        $catalogValues = $script:GawkCompletionCatalog.AssignmentValues
+        if (-not $catalogValues.ContainsKey($variableName)) {
+            return @()
+        }
+
+        $valueSource = $catalogValues[$variableName]
+        if ($valueSource -is [string]) {
+            if ($valueSource -eq 'Path') {
+                return @(Get-GawkPathCompletions -InputText $valueText -AttachedPrefix $valuePrefix)
+            }
+
+            $valueSource = $script:GawkCompletionCatalog[$valueSource]
+        }
+
+        return @(Get-GawkSimpleValueCompletions -Values $valueSource -CurrentWord $valueText -AttachedPrefix $valuePrefix)
     }
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
@@ -1005,8 +1092,8 @@ function Get-GawkPositionalCompletions {
         )
     }
 
-    if ($State.AssignmentsAllowed -and ($CurrentWord -match '=')) {
-        return @()
+    if ($State.AssignmentsAllowed -and (Test-GawkAssignmentToken -Token $CurrentWord)) {
+        return @(Get-GawkAssignmentCompletions -CurrentWord $CurrentWord)
     }
 
     @(Get-GawkPathCompletions -InputText $CurrentWord)
