@@ -68,6 +68,8 @@ Command-path parsing resolves known aliases to their canonical npm command paths
 
 That state is then used to decide whether to suggest subcommands, options, option values, or positional values.
 
+Tokens are split at the cursor, so editing an earlier word (`npm instal| --json`) completes that word against the root command list instead of treating it as a consumed path segment. A partially quoted token (`npm install "lod`) is matched without its quotes and the results are re-quoted, because the engine hands the token over with the quote auto-closed.
+
 ### 4. Help-driven completion
 
 `Get-NpmHelpData` calls:
@@ -78,9 +80,11 @@ npm [path] --help
 
 and parses the resulting help text to discover:
 
-- subcommands,
+- subcommands, from the `Usage:` lines (including bracketed alternations such as `npm audit [fix|signatures]`) and from the `Subcommands:` block npm 11 prints for `trust` and `stage`,
 - options,
 - and value hints exposed in help output.
+
+The root path is parsed too: the `All commands:` block of `npm --help` is unioned with the static root list, so commands added in newer npm releases (`approve-scripts`, `deny-scripts`, `install-scripts`, `stage` on 11.19) appear without a script change. Help-derived subcommands are kept for every path, not only the ones seeded statically.
 
 This lets the completer stay closer to the installed npm version than a purely hard-coded table.
 
@@ -191,6 +195,8 @@ The script explicitly seeds these nested command paths:
 The completer adds several useful local-only value sources:
 
 - `npm run <TAB>` suggests script names from the nearest `package.json`
+- `npm version <TAB>` suggests the bump keywords `major`, `minor`, `patch`, `premajor`, `preminor`, `prepatch`, `prerelease`, and `from-git`
+- `npm help <TAB>` suggests every root command as a help topic
 - `--workspace` and `-w` suggest workspace names resolved from local workspaces
 - `npm config get|set|delete <TAB>` suggests config keys from `npm config ls -l`
 - `npm config set <TAB>` suggests `key=` forms
@@ -203,10 +209,16 @@ The script also supports `--option=value` completion. If the current token looks
 
 For npm config, the completer keeps lowercase `-l` distinct from uppercase `-L`: `npm config ls -l` remains the long-listing form used to discover local config keys, while `--location` and `-L` complete the supported location values `global`, `user`, and `project`.
 
+### Root options
+
+`npm --help` documents no flags, so the root option surface comes from a static table (`-h`, `-v`, `-g`, `--json`, `--loglevel`, `--registry`, `--prefix`, `--depth`, `--audit-level`, ...) unioned, when the word starts with `--`, with every config key reported by the cached `npm config ls -l` as `--<key>`. Root-level value options (`--loglevel`, `--depth`, `--prefix`, `--audit-level`, `--userconfig`, `--sbom-format`, ...) consume the next token instead of swallowing the command slot.
+
 ### Static value hints included in the script
 
 The script seeds several option and positional value hints, including:
 
+- `--loglevel` → `silent`, `error`, `warn`, `notice`, `http`, `info`, `verbose`, `silly`
+- `--audit-level` → `info`, `low`, `moderate`, `high`, `critical`, `none`
 - `--location` / `config --location` → `global`, `user`, `project`
 - `install --install-strategy` → `hoisted`, `nested`, `shallow`, `linked`
 - `install --omit` → `dev`, `optional`, `peer`

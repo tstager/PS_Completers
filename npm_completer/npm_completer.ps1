@@ -72,7 +72,16 @@ function Get-NpmCompletionCache {
                         'ls' = 'list'
                     }
                 }
+                StaticRootOptions       = @(
+                    '-h', '--help', '-v', '--version', '-l', '-g', '--global', '--json', '--long', '--parseable',
+                    '--loglevel', '--registry', '--prefix', '--cache', '--userconfig', '--globalconfig',
+                    '--no-audit', '--no-fund', '--silent', '--dry-run', '--workspaces', '--include-workspace-root',
+                    '--no-color', '--offline', '--prefer-offline', '--ignore-scripts', '--depth', '--audit-level',
+                    '--force', '-f', '--yes', '-y', '--no'
+                )
                 StaticOptionValues      = @{
+                    '--loglevel'                 = @('silent', 'error', 'warn', 'notice', 'http', 'info', 'verbose', 'silly')
+                    '--audit-level'              = @('info', 'low', 'moderate', 'high', 'critical', 'none')
                     '--location'                 = @('global', 'user', 'project')
                     'config|--location'          = @('global', 'user', 'project')
                     'install|--install-strategy' = @('hoisted', 'nested', 'shallow', 'linked')
@@ -83,6 +92,7 @@ function Get-NpmCompletionCache {
                     'search|--color'             = @('always')
                 }
                 StaticPositionalValues  = @{
+                    'version|0'           = @('major', 'minor', 'patch', 'premajor', 'preminor', 'prepatch', 'prerelease', 'from-git')
                     'access set|0'        = @('status=public', 'status=private', 'mfa=none', 'mfa=publish', 'mfa=automation')
                     'access grant|0'      = @('read-only', 'read-write')
                     'profile enable-2fa|0' = @('auth-only', 'auth-and-writes')
@@ -93,7 +103,14 @@ function Get-NpmCompletionCache {
                     '--access', '--allow-git', '--before', '--cache', '--call', '--cpu', '--editor', '--expect-result-count',
                     '--include', '--install-strategy', '--libc', '--location', '--min-release-age', '--omit', '--os',
                     '--otp', '--package', '--provenance-file', '--registry', '--script-shell', '--searchlimit',
-                    '--searchexclude', '--searchopts', '--tag', '--workspace', '-L', '-c', '-w'
+                    '--searchexclude', '--searchopts', '--tag', '--workspace', '-L', '-c', '-w',
+                    '--loglevel', '--depth', '--audit-level', '--preid', '--prefix', '--userconfig', '--globalconfig',
+                    '--sbom-format', '--sbom-type', '--expires', '--packages', '--scopes', '--orgs', '--cidr', '--password',
+                    '--token-description', '--orgs-permission', '--packages-and-scopes-permission',
+                    '--min-release-age-exclude', '--allow-directory', '--allow-file', '--allow-remote', '--allow-scripts',
+                    '--viewer', '--fetch-retries', '--fetch-timeout', '--maxsockets', '--proxy', '--https-proxy',
+                    '--noproxy', '--cafile', '--tag-version-prefix', '--auth-type', '--init-author-name',
+                    '--init-author-email', '--init-author-url', '--init-license', '--init-version', '--init-module'
                 )
                 WorkspaceCacheTtlSeconds = 30
                 NodeModulesCacheTtlSeconds = 30
@@ -319,7 +336,7 @@ function Get-NpmNormalizedHelpLines {
     $text = $text -replace '[\x00-\x08\x0B-\x1F\x7F]', "`n"
     $text = [regex]::Replace(
         $text,
-        '(?<!\r?\n)(?=Usage:|Options:|All commands:|Specify configs|More configuration info:|Configuration fields:|Run "|alias:|aliases:)',
+        '(?<!\r?\n)(?=Usage:|Options:|Subcommands:|All commands:|Specify configs|More configuration info:|Configuration fields:|Run "|alias:|aliases:)',
         "`n"
     )
 
@@ -425,6 +442,29 @@ function Add-NpmUsageCommands {
         return
     }
 
+    # A bracketed alternation right after the path ('[fix|signatures]',
+    # '[<newversion> | major | minor]') lists literal subcommands unless a
+    # <placeholder> is among the alternatives, in which case they are values.
+    $rest = ($remaining -join ' ')
+    if ($rest -match '^[\[(](?<group>[^\])]+)[\])]') {
+        $group = $matches['group']
+        if ($group -match '<') {
+            return
+        }
+
+        $alternatives = @(
+            $group -split '\|' |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -match '^[A-Za-z][A-Za-z0-9-]*$' }
+        )
+
+        if ($alternatives.Count -gt 0) {
+            $HelpData.Commands = Get-NpmUniqueStrings -Items (@($HelpData.Commands) + $alternatives)
+        }
+
+        return
+    }
+
     $nextToken = $remaining[0].Trim('[', ']', '(', ')')
     if ($nextToken -match '^[A-Za-z][A-Za-z0-9-]*$') {
         $HelpData.Commands = Get-NpmUniqueStrings -Items (@($HelpData.Commands) + @($nextToken))
@@ -492,18 +532,54 @@ function Get-NpmHelpData {
     }
 
     $helpData = New-NpmHelpData
-    if (@($Path).Count -eq 0) {
-        (Get-NpmCompletionCache).HelpDataByPath[$cacheKey] = $helpData
-        return $helpData
-    }
-
     $lines = Get-NpmNormalizedHelpLines -Arguments $Path
 
     $inUsage = $false
     $inOptions = $false
+    $inSubcommands = $false
+    $inAllCommands = $false
 
     foreach ($line in @($lines)) {
         $trimmed = $line.Trim()
+
+        if ($trimmed -match '^Subcommands:\s*$') {
+            $inUsage = $false
+            $inOptions = $false
+            $inSubcommands = $true
+            continue
+        }
+
+        if ($trimmed -match '^All commands:\s*$') {
+            $inUsage = $false
+            $inOptions = $false
+            $inAllCommands = $true
+            continue
+        }
+
+        if ($inAllCommands) {
+            if ($trimmed -match '^(Specify configs|More configuration info:|Configuration fields:|npm@)') {
+                $inAllCommands = $false
+            } else {
+                $names = @(
+                    $trimmed -split ',' |
+                        ForEach-Object { $_.Trim() } |
+                        Where-Object { $_ -match '^[a-z][a-z0-9-]*$' }
+                )
+                $helpData.Commands = Get-NpmUniqueStrings -Items (@($helpData.Commands) + $names)
+                continue
+            }
+        }
+
+        if ($inSubcommands) {
+            if ($trimmed -match '^(Run "|Options:|Usage:|alias:|aliases:)') {
+                $inSubcommands = $false
+            } elseif ($line -match '^\s{1,3}(?<name>[a-z][a-z0-9-]*)\s*$') {
+                $helpData.Commands = Get-NpmUniqueStrings -Items (@($helpData.Commands) + @($matches['name']))
+                continue
+            } else {
+                continue
+            }
+        }
 
         if ($trimmed -match '^(?:alias|aliases):\s*(?<aliases>.+)$') {
             $aliases = @(
@@ -538,7 +614,7 @@ function Get-NpmHelpData {
             continue
         }
 
-        if ($trimmed -match '^(Run "|alias:|aliases:|Specify configs|More configuration info:|Configuration fields:|All commands:)') {
+        if ($trimmed -match '^(Run "|alias:|aliases:|Specify configs|More configuration info:|Configuration fields:|All commands:|Subcommands:)') {
             $inUsage = $false
             $inOptions = $false
         }
@@ -608,10 +684,6 @@ function Get-NpmCanonicalSubcommands {
         @((Get-NpmCompletionCache).StaticTree[$cacheKey])
     } else {
         @()
-    }
-
-    if (@($Path).Count -gt 0 -and -not (Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
-        return $staticCommands
     }
 
     $helpData = Get-NpmHelpData -Path $Path
@@ -1062,10 +1134,24 @@ function Get-NpmCommandState {
 }
 
 function Get-NpmOptionSuggestions {
-    param([string[]]$Path)
+    param(
+        [string[]]$Path,
+        [string]$WordToComplete
+    )
 
     $helpData = Get-NpmHelpData -Path $Path
-    foreach ($option in @(Get-NpmUniqueStrings -Items $helpData.Options -CaseSensitive | Sort-Object -CaseSensitive)) {
+    $options = @($helpData.Options)
+
+    if (@($Path).Count -eq 0) {
+        # `npm --help` documents no flags, so the root surface comes from a
+        # static table plus every config key (`--<key>`) npm reports locally.
+        $options += @((Get-NpmCompletionCache).StaticRootOptions)
+        if ($WordToComplete -like '--*') {
+            $options += @(Get-NpmConfigKeys | ForEach-Object { '--{0}' -f $_ })
+        }
+    }
+
+    foreach ($option in @(Get-NpmUniqueStrings -Items $options -CaseSensitive | Sort-Object -CaseSensitive)) {
         New-NpmSuggestionItem -CompletionText $option -ToolTip ('npm option {0}' -f $option) -ResultType 'ParameterName'
     }
 }
@@ -1148,6 +1234,15 @@ function Get-NpmPositionalSuggestions {
     if ((Get-NpmCompletionCache).StaticPositionalValues.ContainsKey($staticPositionalKey)) {
         foreach ($value in @((Get-NpmCompletionCache).StaticPositionalValues[$staticPositionalKey])) {
             $item = New-NpmSuggestionItem -CompletionText $value -ToolTip ('npm {0} value' -f $pathKey)
+            if ($item) {
+                [void]$items.Add($item)
+            }
+        }
+    }
+
+    if ($pathKey -eq 'help' -and $positionIndex -eq 0) {
+        foreach ($topic in @(Get-NpmCanonicalSubcommands -Path @())) {
+            $item = New-NpmSuggestionItem -CompletionText $topic -ToolTip 'npm help topic'
             if ($item) {
                 [void]$items.Add($item)
             }
@@ -1273,41 +1368,72 @@ function ConvertTo-NpmCompletionResults {
     @($results.ToArray())
 }
 
+function Add-NpmResultQuote {
+    param(
+        [object[]]$Results,
+        [string]$Quote
+    )
+
+    foreach ($result in @($Results)) {
+        if ($null -eq $result) {
+            continue
+        }
+
+        if ([string]::IsNullOrEmpty($Quote)) {
+            $result
+            continue
+        }
+
+        New-NpmCompletionResult -CompletionText ($Quote + $result.CompletionText + $Quote) -ResultType $result.ResultType -ToolTip $result.ToolTip
+    }
+}
+
 function Complete-NpmNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $elements = @(
-        $commandAst.CommandElements |
-            ForEach-Object { Get-NpmTokenText -Element $_ } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    )
-
-    if ($elements.Count -eq 0) {
+    if ($commandAst.CommandElements.Count -eq 0) {
         return
     }
 
-    $prefixLength = [Math]::Max(0, [Math]::Min($cursorPosition - $commandAst.Extent.StartOffset, $commandAst.Extent.Text.Length))
-    $linePrefix = $commandAst.Extent.Text.Substring(0, $prefixLength)
-    $hasTrailingSpace = ($cursorPosition -gt $commandAst.Extent.EndOffset) -or ($linePrefix -match '\s$')
+    # Split on the cursor: elements ending before it precede the current
+    # word, the element the cursor touches is the word, and anything after
+    # the cursor is ignored.
+    $tokensBeforeCurrent = New-Object System.Collections.Generic.List[string]
+    $currentToken = ''
+    foreach ($element in @($commandAst.CommandElements)) {
+        $extent = $element.Extent
+        $text = Get-NpmTokenText -Element $element
+        if ($extent.EndOffset -lt $cursorPosition) {
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                [void]$tokensBeforeCurrent.Add($text)
+            }
+            continue
+        }
 
-    if ([string]::IsNullOrEmpty($wordToComplete) -and $hasTrailingSpace) {
-        $tokensBeforeCurrent = @($elements)
-        $currentToken = ''
+        if ($extent.StartOffset -lt $cursorPosition) {
+            $currentToken = if ([string]::IsNullOrEmpty($wordToComplete)) { $text } else { $wordToComplete }
+        }
+
+        break
+    }
+
+    if ($tokensBeforeCurrent.Count -eq 0) {
+        $tokensBeforeCurrent = @(Get-NpmTokenText -Element $commandAst.CommandElements[0])
+        if ($commandAst.CommandElements.Count -eq 1 -and $cursorPosition -le $commandAst.CommandElements[0].Extent.EndOffset) {
+            return
+        }
     } else {
-        $tokensBeforeCurrent = if ($elements.Count -gt 1) {
-            @($elements[0..($elements.Count - 2)])
-        } else {
-            @()
-        }
+        $tokensBeforeCurrent = @($tokensBeforeCurrent.ToArray())
+    }
 
-        if (@($tokensBeforeCurrent).Count -eq 0 -and $elements.Count -gt 0) {
-            $tokensBeforeCurrent = @($elements[0])
-        }
-
-        $currentToken = if ([string]::IsNullOrEmpty($wordToComplete)) {
-            $elements[-1]
-        } else {
-            $wordToComplete
+    # The engine hands a partially typed quoted token over with the quote
+    # auto-closed ('"lod"'); match on the bare text and re-quote the results.
+    $quoteChar = ''
+    if ($currentToken.Length -gt 0 -and ($currentToken[0] -eq '"' -or $currentToken[0] -eq "'")) {
+        $quoteChar = [string]$currentToken[0]
+        $currentToken = $currentToken.Substring(1)
+        if ($currentToken.EndsWith($quoteChar)) {
+            $currentToken = $currentToken.Substring(0, $currentToken.Length - 1)
         }
     }
 
@@ -1324,18 +1450,18 @@ function Complete-NpmNative {
             }
         }
 
-        ConvertTo-NpmCompletionResults -Items $suggestions -Prefix ('{0}={1}' -f $optionName, $valuePrefix)
+        Add-NpmResultQuote -Results (ConvertTo-NpmCompletionResults -Items $suggestions -Prefix ('{0}={1}' -f $optionName, $valuePrefix)) -Quote $quoteChar
         return
     }
 
     if ($null -ne $state.ExpectingValueOption) {
         $valueSuggestions = Get-NpmValueSuggestionsForOption -Path $state.Path -Option $state.ExpectingValueOption
-        ConvertTo-NpmCompletionResults -Items $valueSuggestions -Prefix $currentToken
+        Add-NpmResultQuote -Results (ConvertTo-NpmCompletionResults -Items $valueSuggestions -Prefix $currentToken) -Quote $quoteChar
         return
     }
 
     if ([string]::IsNullOrEmpty($currentToken) -or $currentToken.StartsWith('-')) {
-        foreach ($optionSuggestion in @(Get-NpmOptionSuggestions -Path $state.Path)) {
+        foreach ($optionSuggestion in @(Get-NpmOptionSuggestions -Path $state.Path -WordToComplete $currentToken)) {
             if ($null -ne $optionSuggestion) {
                 [void]$suggestions.Add($optionSuggestion)
             }
@@ -1372,7 +1498,7 @@ function Complete-NpmNative {
         }
     }
 
-    ConvertTo-NpmCompletionResults -Items $suggestions -Prefix $currentToken
+    Add-NpmResultQuote -Results (ConvertTo-NpmCompletionResults -Items $suggestions -Prefix $currentToken) -Quote $quoteChar
 }
 
 Register-ArgumentCompleter -Native -CommandName @('npm', 'npm.ps1', 'npm.cmd', 'npm.exe') -ScriptBlock {
