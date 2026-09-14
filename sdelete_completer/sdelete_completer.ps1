@@ -5,8 +5,9 @@ Set-StrictMode -Version 2.0
 
 if (-not (Get-Variable -Name SDeleteCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SDeleteCompletionCatalog = @{
-        PassHints = @('1', '3', '7', '10')
-        Switches  = @(
+        PassHints  = @('1', '3', '7', '10')
+        DriveCache = $null
+        Switches   = @(
             @{ Token = '-c'; Description = 'Clean free space.'; TakesValue = $false; Modes = @('free', 'root') }
             @{ Token = '-f'; Description = 'Force bare-letter arguments to be treated as file or directory paths.'; TakesValue = $false; Modes = @('delete', 'root') }
             @{ Token = '-p'; Description = 'Specifies number of overwrite passes.'; TakesValue = $true; ValueKind = 'Passes'; Modes = @('delete', 'free', 'root') }
@@ -15,6 +16,7 @@ if (-not (Get-Variable -Name SDeleteCompletionCatalog -Scope Script -ErrorAction
             @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false; Modes = @('delete', 'root') }
             @{ Token = '-z'; Description = 'Zero free space.'; TakesValue = $false; Modes = @('free', 'root') }
             @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
+            @{ Token = '-accepteula'; Description = 'Accept the Sysinternals license agreement (suppresses the first-run dialog).'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
             @{ Token = '/?'; Description = 'Show SDelete help.'; TakesValue = $false; Modes = @('delete', 'free', 'root') }
         )
     }
@@ -70,31 +72,6 @@ function ConvertTo-SDeleteQuotedValue {
     }
 
     $Value
-}
-
-function Get-SDeleteCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
 }
 
 function Get-SDeleteTokenState {
@@ -162,22 +139,6 @@ function Get-SDeleteTokenState {
     }
 }
 
-function Get-SDeleteArgumentTokens {
-    param(
-        [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
-    )
-
-    $tokens = @()
-    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
-        if ($element.Extent.EndOffset -lt $CursorPosition) {
-            $tokens += $element.Extent.Text
-        }
-    }
-
-    $tokens
-}
-
 function Get-SDeleteState {
     param([string[]]$TokensBeforeCurrent)
 
@@ -185,6 +146,7 @@ function Get-SDeleteState {
     $positionals = New-Object System.Collections.Generic.List[string]
     $pendingValueKind = $null
     $helpRequested = $false
+    $passValue = $null
 
     foreach ($token in $TokensBeforeCurrent) {
         $cleanToken = Remove-SDeleteOuterQuotes -Value $token
@@ -193,7 +155,10 @@ function Get-SDeleteState {
         }
 
         if ($pendingValueKind) {
-            $positionals.Add($cleanToken)
+            if ($pendingValueKind -eq 'Passes') {
+                $passValue = $cleanToken
+            }
+
             $pendingValueKind = $null
             continue
         }
@@ -220,6 +185,7 @@ function Get-SDeleteState {
         Positionals       = @($positionals)
         PendingValueKind  = $pendingValueKind
         HelpRequested     = $helpRequested
+        PassValue         = $passValue
         Mode              = $mode
     }
 }
@@ -279,7 +245,7 @@ function Get-SDeleteDeletePathCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
@@ -324,14 +290,26 @@ function Get-SDeletePassCompletions {
     @($results.ToArray())
 }
 
+function Get-SDeleteDriveLetterCache {
+    if ($null -eq $script:SDeleteCompletionCatalog.DriveCache) {
+        $script:SDeleteCompletionCatalog.DriveCache = @(
+            Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name.Length -eq 1 } |
+                Sort-Object -Property Name |
+                ForEach-Object { $_.Name + ':' }
+        )
+    }
+
+    @($script:SDeleteCompletionCatalog.DriveCache)
+}
+
 function Get-SDeleteFreeSpaceTargetCompletions {
     param([string]$CurrentWord)
 
     $cleanCurrent = Remove-SDeleteOuterQuotes -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
-    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Sort-Object -Property Name)) {
-        $candidate = $drive.Name + ':'
+    foreach ($candidate in (Get-SDeleteDriveLetterCache)) {
         if ($candidate.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
             $results.Add((New-SDeleteCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Free-space cleaning target drive ' + $candidate)))
         }
@@ -373,13 +351,16 @@ function Complete-SDelete {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-SDeleteCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $line = $commandAst.ToString()
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
 
-    $state = Get-SDeleteState -TokensBeforeCurrent (Get-SDeleteArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
+    $tokenState = Get-SDeleteTokenState -Line $line -CursorPosition $relativeCursor
+    $currentWord = $tokenState.CurrentToken
+
+    $state = Get-SDeleteState -TokensBeforeCurrent @($tokenState.TokensBeforeCurrent | Select-Object -Skip 1)
 
     if ($state.HelpRequested) {
         return @(
@@ -396,8 +377,10 @@ function Complete-SDelete {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($switchItem in @(Get-SDeleteSwitchCompletions -CurrentWord '' -State $state)) {
-        $results.Add($switchItem)
+    if ([string]::IsNullOrEmpty((Remove-SDeleteOuterQuotes -Value $currentWord))) {
+        foreach ($switchItem in @(Get-SDeleteSwitchCompletions -CurrentWord '' -State $state)) {
+            $results.Add($switchItem)
+        }
     }
 
     if ($state.Mode -eq 'free') {
@@ -409,7 +392,9 @@ function Complete-SDelete {
     }
 
     if (-not $state.UsedSwitches.ContainsKey('-f') -and (Remove-SDeleteOuterQuotes -Value $currentWord) -match '^[A-Za-z]$') {
-        return @(Get-SDeleteAmbiguousLetterResults -CurrentWord $currentWord)
+        foreach ($item in @(Get-SDeleteAmbiguousLetterResults -CurrentWord $currentWord)) {
+            $results.Add($item)
+        }
     }
 
     foreach ($item in @(Get-SDeleteDeletePathCompletions -InputPath $currentWord)) {

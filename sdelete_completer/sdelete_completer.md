@@ -10,7 +10,8 @@ The implementation is intentionally risk-bounded:
 - it never invokes destructive actions
 - it distinguishes delete mode from free-space-cleaning mode
 - it returns numeric hints for `-p`
-- and it avoids suggesting ambiguous bare-letter path operands that could be interpreted as disk targets
+- it offers the suite-wide `-accepteula` switch alongside the eight switches SDelete prints in its own help
+- and it warns about ambiguous bare-letter path operands that could be interpreted as disk targets
 
 ## Registration and command names
 
@@ -47,9 +48,13 @@ The completer scans tokens and selects:
 
 Delete mode offers path completion plus delete-oriented switches such as `-r`, `-s`, and `-f`.
 
+Switch names are only added to an operand slot when the word under the cursor is empty. Once the user has typed any non-empty operand text the completer returns operand matches alone, so `sdelete no<TAB>` completes `notes.md` instead of replacing it with `-c`.
+
+Tokenization is quote-state aware, so an unterminated quote is handled: `sdelete "Program Files\<TAB>` completes inside that directory rather than losing the path context.
+
 Free-space mode offers:
 
-- drive-letter targets like `D:`
+- drive-letter targets like `D:`, taken from single-letter filesystem drives and cached for the session
 - sample physical disk numbers like `0`
 - placeholders such as `<drive:>` and `<physical-disk-number>`
 - mode-compatible switches only
@@ -63,11 +68,11 @@ Free-space mode offers:
 - `7`
 - `10`
 
-If the user already typed a custom number, the completer echoes that token back instead of falling through to filesystem suggestions.
+If the user already typed a custom number, the completer echoes that token back instead of falling through to filesystem suggestions. The consumed pass count is not treated as a positional operand, so `-c` and `-z` stay available after `sdelete -p 3`.
 
 ### Ambiguous bare-letter safety
 
-In delete mode, a single bare letter can be confused with disk targeting. When the user types an ambiguous bare-letter token without `-f`, the completer returns an explanatory result instead of inventing a risky path suggestion.
+In delete mode, a single bare letter can be confused with disk targeting. When the user types an ambiguous bare-letter token without `-f`, the completer returns an explanatory result first and then the real path matches for that letter, so the warning is visible without blocking Tab from reaching an unambiguous path such as `ab.txt`.
 
 ## Usage examples
 
@@ -83,7 +88,7 @@ sdelete -f A<TAB>
 
 - No SDelete execution is required during completion
 - Path completion depends on local filesystem access
-- Drive suggestions come from local PowerShell filesystem drives
+- Drive suggestions come from local single-letter PowerShell filesystem drives; named PSDrives such as `Temp:` are excluded because SDelete cannot accept them
 
 ## Limitations / notes
 
