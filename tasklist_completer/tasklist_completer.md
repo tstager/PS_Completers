@@ -37,7 +37,7 @@ On first use, the script initializes `$script:TasklistCompletionCatalog` by:
 
 ### Token-state parsing
 
-The completer does not rely only on PowerShell's current word. It tokenizes the command line up to the cursor, tracks whether the cursor is inside quotes, and determines:
+The completer does not rely only on PowerShell's current word. It tokenizes the command line up to the cursor (rebased to the command's start offset, so `cd foo; tasklist /F` behaves like `tasklist /F`), tracks whether the cursor is inside quotes, and determines:
 
 - argument tokens
 - the current token
@@ -94,11 +94,13 @@ Filter names and valid operators are sourced from `tasklist.exe /?`.
 
 For selected filters, the script gathers live values and caches them for a short period:
 
-- `IMAGENAME`, `PID`, `SESSION`, `SESSIONNAME` from `tasklist.exe /FO CSV /NH` (15-second cache)
-- `USERNAME` from `Get-Process -IncludeUserName` plus the current `USERDOMAIN\USERNAME` (30-second cache)
+- `IMAGENAME`, `PID`, `SESSION`, `SESSIONNAME` from `tasklist.exe /FO CSV /NH` (15-second cache); `PID` and `SESSION` are sorted numerically
+- `USERNAME` from the current `USERDOMAIN\USERNAME`, the well-known `NT AUTHORITY\SYSTEM`, `LOCAL SERVICE` and `NETWORK SERVICE` principals, plus whatever `Get-Process -IncludeUserName` can see (other accounts appear only when elevated; 30-second cache)
 - `SERVICES` from `Get-Service` (60-second cache)
 - `WINDOWTITLE` from `Get-Process` main window titles (10-second cache)
-- `MODULES` from `Get-Process -Module` (30-second cache)
+- `MODULES` from `tasklist.exe /M /FO CSV /NH` (60-second cache), narrowed on the typed prefix and capped at 500 entries; this replaces `Get-Process -Module`, which took seconds and left access-denied records in `$Error`
+
+Every `tasklist.exe` call is read-only, runs with stdin closed and is bounded by a 5-second timeout.
 
 The `STATUS` filter uses documented values, and `CPUTIME` / `MEMUSAGE` use small built-in sample values.
 
@@ -125,6 +127,7 @@ This completer expects:
 - `tasklist.exe` or `tasklist` to be available, otherwise it returns no completions
 - `tasklist.exe /?` to initialize switch and filter metadata
 - `tasklist.exe /FO CSV /NH` for runtime process/session snapshots
+- `tasklist.exe /M /FO CSV /NH` for module names
 - `Get-Process`, `Get-Service`, and local process inspection for runtime-backed filter values
 
 ## Usage / loading example

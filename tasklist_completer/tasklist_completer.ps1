@@ -27,7 +27,8 @@ if (-not (Get-Variable -Name TasklistCompletionCatalog -Scope Script -ErrorActio
         WindowTitlesTtlSeconds = 10
         ModuleNames           = @()
         ModuleNamesUpdated    = $null
-        ModuleNamesTtlSeconds = 30
+        ModuleNamesTtlSeconds = 60
+        MaxFilterValues       = 500
     }
 }
 
@@ -43,12 +44,52 @@ function Test-TasklistCommandAvailable {
     $false
 }
 
-function Invoke-TasklistHelpText {
-    if (-not (Get-Command -Name tasklist.exe -ErrorAction SilentlyContinue)) {
+function Invoke-TasklistCommandText {
+    # Read-only tasklist.exe invocations only (help and listings): stdin closed, output read
+    # asynchronously, bounded by a timeout, and never recorded in $Error.
+    param([string[]]$Arguments)
+
+    $command = Get-Command -Name tasklist.exe -ErrorAction Ignore
+    if (-not $command) {
         return @()
     }
 
-    @(& tasklist.exe '/?' 2>$null)
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $command.Source
+        foreach ($argument in $Arguments) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [Console]::OutputEncoding
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                $process.Kill()
+                return @()
+            }
+
+            $null = $errorTask.Result
+            return @($outputTask.Result -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        Write-Debug "tasklist.exe $($Arguments -join ' ') failed: $($_.Exception.Message)"
+        @()
+    }
+}
+
+function Invoke-TasklistHelpText {
+    Invoke-TasklistCommandText -Arguments @('/?')
 }
 
 function New-TasklistCompletionResult {
@@ -320,8 +361,8 @@ function Update-TasklistRuntimeSnapshotCache {
         }
     }
 
-    $csvLines = @(& tasklist.exe '/FO' 'CSV' '/NH' 2>$null)
-    if (-not $csvLines -or $csvLines.Count -eq 0) {
+    $csvLines = @(Invoke-TasklistCommandText -Arguments @('/FO', 'CSV', '/NH'))
+    if ($csvLines.Count -eq 0) {
         $script:TasklistCompletionCatalog.RuntimeSnapshot = @()
         $script:TasklistCompletionCatalog.RuntimeSnapshotUpdated = Get-Date
         return
@@ -348,16 +389,24 @@ function Update-TasklistUserNameCache {
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $userNames = [System.Collections.Generic.List[string]]::new()
 
-    foreach ($process in @(Get-Process -IncludeUserName -ErrorAction SilentlyContinue)) {
-        if ($process.UserName -and $process.UserName -ne 'N/A' -and $nameSet.Add($process.UserName)) {
-            $userNames.Add($process.UserName)
-        }
-    }
-
+    # Get-Process -IncludeUserName only sees other accounts when elevated, so always seed
+    # the current user and the well-known service principals that own most of the table.
     if ($env:USERDOMAIN -and $env:USERNAME) {
         $currentUserName = "$($env:USERDOMAIN)\$($env:USERNAME)"
         if ($nameSet.Add($currentUserName)) {
             $userNames.Add($currentUserName)
+        }
+    }
+
+    foreach ($wellKnown in @('NT AUTHORITY\SYSTEM', 'NT AUTHORITY\LOCAL SERVICE', 'NT AUTHORITY\NETWORK SERVICE')) {
+        if ($nameSet.Add($wellKnown)) {
+            $userNames.Add($wellKnown)
+        }
+    }
+
+    foreach ($process in @(Get-Process -IncludeUserName -ErrorAction Ignore)) {
+        if ($process.UserName -and $process.UserName -ne 'N/A' -and $nameSet.Add($process.UserName)) {
+            $userNames.Add($process.UserName)
         }
     }
 
@@ -413,13 +462,28 @@ function Update-TasklistModuleNameCache {
         }
     }
 
-    $moduleNames = @(
-        Get-Process -Module -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty ModuleName |
-            Sort-Object -Unique
+    # 'tasklist /M /FO CSV /NH' lists every process with its modules in one read-only call
+    # (~0.7 s here versus ~3.5 s and hundreds of access-denied records for Get-Process -Module).
+    $moduleSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $rows = @(
+        Invoke-TasklistCommandText -Arguments @('/M', '/FO', 'CSV', '/NH') |
+            ConvertFrom-Csv -Header @('ImageName', 'PID', 'Modules')
     )
 
-    $script:TasklistCompletionCatalog.ModuleNames = @($moduleNames)
+    foreach ($row in $rows) {
+        if ([string]::IsNullOrWhiteSpace($row.Modules) -or $row.Modules -eq 'N/A') {
+            continue
+        }
+
+        foreach ($moduleName in ($row.Modules -split ',')) {
+            $trimmed = $moduleName.Trim()
+            if ($trimmed) {
+                $null = $moduleSet.Add($trimmed)
+            }
+        }
+    }
+
+    $script:TasklistCompletionCatalog.ModuleNames = @($moduleSet | Sort-Object)
     $script:TasklistCompletionCatalog.ModuleNamesUpdated = Get-Date
 }
 
@@ -606,8 +670,8 @@ function Get-TasklistFilterValueItems {
             @(
                 $script:TasklistCompletionCatalog.RuntimeSnapshot |
                     ForEach-Object { [string]$_.PID } |
-                    Where-Object { $_ } |
-                    Sort-Object -Unique |
+                    Where-Object { $_ -match '^\d+$' } |
+                    Sort-Object -Property { [int]$_ } -Unique |
                     ForEach-Object {
                         New-TasklistValueItem -CompletionText $_ -ToolTip "Process ID $_"
                     }
@@ -618,8 +682,8 @@ function Get-TasklistFilterValueItems {
             @(
                 $script:TasklistCompletionCatalog.RuntimeSnapshot |
                     ForEach-Object { [string]$_.SessionId } |
-                    Where-Object { $_ } |
-                    Sort-Object -Unique |
+                    Where-Object { $_ -match '^\d+$' } |
+                    Sort-Object -Property { [int]$_ } -Unique |
                     ForEach-Object {
                         New-TasklistValueItem -CompletionText $_ -ToolTip "Session ID $_"
                     }
@@ -666,8 +730,13 @@ function Get-TasklistFilterValueItems {
         }
         'MODULES' {
             Update-TasklistModuleNameCache
+            # Thousands of DLL names are loaded on a typical box; narrow on the typed prefix
+            # and cap the list so the menu stays usable.
+            $modulePrefix = if ($null -eq $TypedValue) { '' } else { $TypedValue }
             @(
                 $script:TasklistCompletionCatalog.ModuleNames |
+                    Where-Object { $_.StartsWith($modulePrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
+                    Select-Object -First $script:TasklistCompletionCatalog.MaxFilterValues |
                     ForEach-Object {
                         New-TasklistValueItem -CompletionText $_ -ToolTip "Module name $_"
                     }
@@ -870,8 +939,10 @@ function Complete-Tasklist {
 
     Initialize-TasklistCompletionCatalog
 
-    $completionLine = $commandAst.Extent.Text + (' ' * [Math]::Max(0, $cursorPosition - $commandAst.Extent.Text.Length))
-    $tokenState = Get-TasklistTokenState -Line $completionLine -CursorPosition $cursorPosition
+    # $cursorPosition is line-absolute; the extent text is command-relative.
+    $relativeCursor = [Math]::Max(0, $cursorPosition - $commandAst.Extent.StartOffset)
+    $completionLine = $commandAst.Extent.Text + (' ' * [Math]::Max(0, $relativeCursor - $commandAst.Extent.Text.Length))
+    $tokenState = Get-TasklistTokenState -Line $completionLine -CursorPosition $relativeCursor
     $currentWord = $tokenState.CurrentToken
     $tokensBeforeCurrent = @($tokenState.TokensBeforeCurrent)
     $hasTrailingDelimiter = [bool]$tokenState.HasTrailingDelimiter
