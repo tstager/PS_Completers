@@ -58,19 +58,25 @@ Before a mode is chosen, completion focuses on mode tokens and `--help`.
 
 After a mode is chosen, the completer offers:
 
-- common options such as `-f`, `-b`, `-v`, `-w`
-- create/update options such as `--format`, `--exclude`, `--mtime`, `-C`, `-z`, `-j`, `-J`
-- extract options such as `-k`, `-m`, `-O`, `-p`
+- common options such as `-f`, `-b`, `-v`, `-w`, `-C`, `--exclude`, `--include`, `-T`, `-X`, `--strip-components`, `--newer*`/`--older*`, `--uid`/`--gid`/`--uname`/`--gname`, `--options`, `--passphrase`
+- create/update options such as `--format`, `--posix`, `--mtime`, `--clamp-mtime`, `-L`, `--one-file-system`, `--owner`/`--group`
+- compression options (`-z`, `-j`, `-J`, `--lzma`, `--zstd`, `--lz4`, `--lzop`, `-Z`, `-I`) in create, list, and extract mode, where `bsdtar` accepts them
+- extract options such as `-k`, `-m`, `-O`, `-p`, `-U`, `--acls`/`--xattrs`/`--fflags`
+
+Every option's mode set was verified against the live `bsdtar 3.8.8` binary (`tar -<mode> <option> -f nonexist.tar` fails on the archive, not on the option), so options appear only in the modes that accept them. `--help` and `--version` are offered in every slot.
 
 ### Value-aware completion
 
 The completer routes to specific value completion for:
 
-- `-f` / `--file` → archive path
+- `-f` / `--file`, `-T`, `-X`, `--newer-than`, `--older-than` → file path
 - `-C` / `--directory` → directory path
-- `--format` → `ustar`, `pax`, `cpio`, `shar`
-- `--mtime` → date/timestamp hints
+- `--format` → the 18 formats this libarchive build accepts (`ustar`, `pax`, `paxr`, `cpio`, `odc`, `newc`, `shar`, `shardump`, `gnutar`, `v7tar`, `bsdtar`, `mtree`, `zip`, `7zip`, `iso9660`, `xar`, `raw`, `warc`)
+- `--mtime`, `--newer`, `--older`, `--newer-mtime`, `--older-mtime` → date hints in the forms `bsdtar` parses (`yyyy-MM-dd`, `"yyyy-MM-dd HH:mm:ss"`, `@<unix-epoch>`), computed at completion time
+- `--strip-components` → `1`, `2`, `3`; `-I` → common compression program names
 - `--exclude` / `--include` → pattern hints plus path suggestions
+
+A quoted path that is still open (`tar -c -f "C:\Program Fi<Tab>`) is tokenized as one value and completes inside the quoted directory.
 
 It also understands compact forms such as `-cf`, `-xf`, and attached-value prefixes well enough to complete the value after the short option.
 
@@ -107,4 +113,4 @@ tar -x -f archive.tar <TAB>
 
 - The completer targets the local Windows `bsdtar` help surface, not GNU tar.
 - List/extract pattern completion uses generic wildcard hints rather than enumerating archive contents.
-- The script includes useful long-option aliases from `bsdtar` documentation, but it does not attempt to expose the entire upstream manpage surface.
+- The catalog covers the options verified against the installed `bsdtar 3.8.8`; macOS-only options (`--mac-metadata`, `--hfsCompression`, `--nodump`) and `-s` (rejected by this build) are deliberately left out.

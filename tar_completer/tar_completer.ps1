@@ -14,10 +14,13 @@ if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction Ign
         OptionByAlias     = @{}
         ShortOptionByChar = @{}
         ShortValueByChar  = @{}
-        FormatValues      = @('ustar', 'pax', 'cpio', 'shar')
+        FormatValues      = @('ustar', 'pax', 'paxr', 'cpio', 'odc', 'newc', 'shar', 'shardump', 'gnutar', 'v7tar', 'bsdtar', 'mtree', 'zip', '7zip', 'iso9660', 'xar', 'raw', 'warc')
         BlockSizeHints    = @('1', '10', '20', '64', '128')
-        MtimeHints        = @()
+        StripCountHints   = @('1', '2', '3')
+        CompressProgramHints = @('gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'lzop')
         DefaultPatterns   = @('*', '*/*', '*.txt', '*.log')
+        StandaloneEntries = @()
+        TokenPattern      = '"[^"]*"|''[^'']*''|"[^"]*$|''[^'']*$|\S+'
     }
 }
 
@@ -162,7 +165,7 @@ function Initialize-TarCompletionCatalog {
             Canonical   = '-C'
             Aliases     = @('-C', '--cd', '--directory')
             ShortName   = 'C'
-            Modes       = @('c', 'r', 'u', 'x')
+            Modes       = $script:TarCompletionCatalog.AllModes
             Description = 'Change to a directory before processing later files or before extracting.'
             ValueKind   = 'DirectoryPath'
         }
@@ -170,35 +173,86 @@ function Initialize-TarCompletionCatalog {
             Canonical   = '-a'
             Aliases     = @('-a', '--auto-compress')
             ShortName   = 'a'
-            Modes       = @('c')
+            Modes       = @('c', 'x')
             Description = 'Choose compression from the archive file suffix.'
         }
         @{
             Canonical   = '-z'
-            Aliases     = @('-z', '--gzip')
+            Aliases     = @('-z', '--gzip', '--gunzip')
             ShortName   = 'z'
-            Modes       = @('c')
-            Description = 'Compress the archive with gzip.'
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with gzip (or read a gzip archive).'
         }
         @{
             Canonical   = '-j'
-            Aliases     = @('-j', '--bzip', '--bzip2', '--bunzip2')
+            Aliases     = @('-j', '-y', '--bzip', '--bzip2', '--bunzip2')
             ShortName   = 'j'
-            Modes       = @('c')
-            Description = 'Compress the archive with bzip2.'
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with bzip2 (or read a bzip2 archive).'
         }
         @{
             Canonical   = '-J'
             Aliases     = @('-J', '--xz')
             ShortName   = 'J'
-            Modes       = @('c')
-            Description = 'Compress the archive with xz.'
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with xz (or read an xz archive).'
         }
         @{
             Canonical   = '--lzma'
             Aliases     = @('--lzma')
-            Modes       = @('c')
-            Description = 'Compress the archive with lzma.'
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with lzma (or read an lzma archive).'
+        }
+        @{
+            Canonical   = '--zstd'
+            Aliases     = @('--zstd')
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with zstd (or read a zstd archive).'
+        }
+        @{
+            Canonical   = '--lz4'
+            Aliases     = @('--lz4')
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with lz4 (or read an lz4 archive).'
+        }
+        @{
+            Canonical   = '--lzop'
+            Aliases     = @('--lzop')
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with lzop (or read an lzop archive).'
+        }
+        @{
+            Canonical   = '--lrzip'
+            Aliases     = @('--lrzip')
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with lrzip (or read an lrzip archive).'
+        }
+        @{
+            Canonical   = '-Z'
+            Aliases     = @('-Z', '--compress', '--uncompress')
+            ShortName   = 'Z'
+            Modes       = @('c', 't', 'x')
+            Description = 'Compress the archive with compress (or read a .Z archive).'
+        }
+        @{
+            Canonical   = '--uuencode'
+            Aliases     = @('--uuencode')
+            Modes       = @('c', 't', 'x')
+            Description = 'Filter the archive through uuencode.'
+        }
+        @{
+            Canonical   = '--b64encode'
+            Aliases     = @('--b64encode')
+            Modes       = @('c', 't', 'x')
+            Description = 'Filter the archive through base64 encoding.'
+        }
+        @{
+            Canonical   = '-I'
+            Aliases     = @('-I', '--use-compress-program')
+            ShortName   = 'I'
+            Modes       = @('c', 't', 'x')
+            Description = 'Pipe the archive through an external compression program.'
+            ValueKind   = 'CompressProgram'
         }
         @{
             Canonical   = '--format'
@@ -208,11 +262,52 @@ function Initialize-TarCompletionCatalog {
             ValueKind   = 'Format'
         }
         @{
+            Canonical   = '--posix'
+            Aliases     = @('--posix')
+            Modes       = @('c', 'r', 'u')
+            Description = 'Synonym for --format pax.'
+        }
+        @{
             Canonical   = '--exclude'
             Aliases     = @('--exclude')
             Modes       = $script:TarCompletionCatalog.AllModes
             Description = 'Skip files or archive entries that match a pattern.'
             ValueKind   = 'Pattern'
+        }
+        @{
+            Canonical   = '--include'
+            Aliases     = @('--include')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Process only files or archive entries that match a pattern.'
+            ValueKind   = 'Pattern'
+        }
+        @{
+            Canonical   = '-T'
+            Aliases     = @('-T', '--files-from')
+            ShortName   = 'T'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Read names to process from a file, one per line.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '-X'
+            Aliases     = @('-X', '--exclude-from')
+            ShortName   = 'X'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Read exclusion patterns from a file, one per line.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '--exclude-vcs'
+            Aliases     = @('--exclude-vcs')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Skip version control system files and directories.'
+        }
+        @{
+            Canonical   = '--null'
+            Aliases     = @('--null')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Names read with -T are NUL-terminated instead of newline-terminated.'
         }
         @{
             Canonical   = '--mtime'
@@ -226,6 +321,282 @@ function Initialize-TarCompletionCatalog {
             Aliases     = @('--clamp-mtime')
             Modes       = @('c', 'r', 'u')
             Description = 'Only apply --mtime when a file is newer than the requested time.'
+        }
+        @{
+            Canonical   = '--newer'
+            Aliases     = @('--newer', '--newer-ctime')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries newer than the given date (ctime).'
+            ValueKind   = 'DateTime'
+        }
+        @{
+            Canonical   = '--newer-mtime'
+            Aliases     = @('--newer-mtime')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries whose modification time is newer than the given date.'
+            ValueKind   = 'DateTime'
+        }
+        @{
+            Canonical   = '--newer-than'
+            Aliases     = @('--newer-than', '--newer-ctime-than')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries newer than the given file.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '--newer-mtime-than'
+            Aliases     = @('--newer-mtime-than')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries modified more recently than the given file.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '--older'
+            Aliases     = @('--older', '--older-ctime')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries older than the given date (ctime).'
+            ValueKind   = 'DateTime'
+        }
+        @{
+            Canonical   = '--older-mtime'
+            Aliases     = @('--older-mtime')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries whose modification time is older than the given date.'
+            ValueKind   = 'DateTime'
+        }
+        @{
+            Canonical   = '--older-than'
+            Aliases     = @('--older-than', '--older-ctime-than')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries older than the given file.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '--older-mtime-than'
+            Aliases     = @('--older-mtime-than')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Only include entries modified less recently than the given file.'
+            ValueKind   = 'ArchivePath'
+        }
+        @{
+            Canonical   = '--strip-components'
+            Aliases     = @('--strip-components')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Remove the given number of leading path elements from entry names.'
+            ValueKind   = 'StripCount'
+        }
+        @{
+            Canonical   = '-P'
+            Aliases     = @('-P', '--absolute-paths', '--insecure')
+            ShortName   = 'P'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Preserve absolute path names and .. components.'
+        }
+        @{
+            Canonical   = '-n'
+            Aliases     = @('-n', '--norecurse', '--no-recursion')
+            ShortName   = 'n'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Do not recurse into directories.'
+        }
+        @{
+            Canonical   = '-q'
+            Aliases     = @('-q', '--fast-read')
+            ShortName   = 'q'
+            Modes       = @('t', 'x')
+            Description = 'Stop after the first archive entry that matches each pattern.'
+        }
+        @{
+            Canonical   = '-L'
+            Aliases     = @('-L', '--dereference')
+            ShortName   = 'L'
+            Modes       = @('c', 'r', 'u')
+            Description = 'Archive the target of symbolic links instead of the link itself.'
+        }
+        @{
+            Canonical   = '-U'
+            Aliases     = @('-U', '--unlink', '--unlink-first')
+            ShortName   = 'U'
+            Modes       = @('x')
+            Description = 'Unlink files before creating them when extracting.'
+        }
+        @{
+            Canonical   = '-B'
+            Aliases     = @('-B', '--read-full-blocks')
+            ShortName   = 'B'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Ignored for compatibility with other tar implementations.'
+        }
+        @{
+            Canonical   = '-S'
+            Aliases     = @('-S')
+            ShortName   = 'S'
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Extract files as sparse files.'
+        }
+        @{
+            Canonical   = '--one-file-system'
+            Aliases     = @('--one-file-system')
+            Modes       = @('c', 'r', 'u')
+            Description = 'Do not cross mount points.'
+        }
+        @{
+            Canonical   = '--ignore-zeros'
+            Aliases     = @('--ignore-zeros')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Continue reading past zero blocks (concatenated archives).'
+        }
+        @{
+            Canonical   = '--numeric-owner'
+            Aliases     = @('--numeric-owner')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Use numeric user and group IDs instead of names.'
+        }
+        @{
+            Canonical   = '--no-same-owner'
+            Aliases     = @('--no-same-owner')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Do not restore file ownership when extracting.'
+        }
+        @{
+            Canonical   = '--same-owner'
+            Aliases     = @('--same-owner')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Restore file ownership when extracting.'
+        }
+        @{
+            Canonical   = '--no-same-permissions'
+            Aliases     = @('--no-same-permissions')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Do not restore full permissions when extracting.'
+        }
+        @{
+            Canonical   = '--keep-newer-files'
+            Aliases     = @('--keep-newer-files')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Do not overwrite existing files that are newer than the archive entry.'
+        }
+        @{
+            Canonical   = '--safe-writes'
+            Aliases     = @('--safe-writes')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Extract to a temporary file and rename it into place atomically.'
+        }
+        @{
+            Canonical   = '--no-safe-writes'
+            Aliases     = @('--no-safe-writes')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Do not use atomic writes when extracting.'
+        }
+        @{
+            Canonical   = '--acls'
+            Aliases     = @('--acls')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Archive or extract POSIX.1e or NFSv4 ACLs.'
+        }
+        @{
+            Canonical   = '--no-acls'
+            Aliases     = @('--no-acls')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Do not archive or extract ACLs.'
+        }
+        @{
+            Canonical   = '--xattrs'
+            Aliases     = @('--xattrs')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Archive or extract extended file attributes.'
+        }
+        @{
+            Canonical   = '--no-xattrs'
+            Aliases     = @('--no-xattrs')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Do not archive or extract extended file attributes.'
+        }
+        @{
+            Canonical   = '--fflags'
+            Aliases     = @('--fflags')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Archive or extract platform-specific file flags.'
+        }
+        @{
+            Canonical   = '--no-fflags'
+            Aliases     = @('--no-fflags')
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Do not archive or extract platform-specific file flags.'
+        }
+        @{
+            Canonical   = '--totals'
+            Aliases     = @('--totals')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Print the total bytes written after the archive is created.'
+        }
+        @{
+            Canonical   = '--uid'
+            Aliases     = @('--uid')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Use the given user ID for archived or extracted entries.'
+            ValueKind   = 'Id'
+        }
+        @{
+            Canonical   = '--gid'
+            Aliases     = @('--gid')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Use the given group ID for archived or extracted entries.'
+            ValueKind   = 'Id'
+        }
+        @{
+            Canonical   = '--uname'
+            Aliases     = @('--uname')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Use the given user name for archived or extracted entries.'
+            ValueKind   = 'Name'
+        }
+        @{
+            Canonical   = '--gname'
+            Aliases     = @('--gname')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Use the given group name for archived or extracted entries.'
+            ValueKind   = 'Name'
+        }
+        @{
+            Canonical   = '--owner'
+            Aliases     = @('--owner')
+            Modes       = @('c', 'r', 'u')
+            Description = 'Override the owner (name or name:id) of added entries.'
+            ValueKind   = 'Name'
+        }
+        @{
+            Canonical   = '--group'
+            Aliases     = @('--group')
+            Modes       = @('c', 'r', 'u')
+            Description = 'Override the group (name or name:id) of added entries.'
+            ValueKind   = 'Name'
+        }
+        @{
+            Canonical   = '--options'
+            Aliases     = @('--options')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Pass module-specific options (module:key=value, comma separated).'
+            ValueKind   = 'Options'
+        }
+        @{
+            Canonical   = '--passphrase'
+            Aliases     = @('--passphrase')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Passphrase for encrypted zip archives.'
+            ValueKind   = 'Passphrase'
+        }
+        @{
+            Canonical   = '--read-sparse'
+            Aliases     = @('--read-sparse')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Read sparse file holes efficiently when archiving.'
+        }
+        @{
+            Canonical   = '--no-read-sparse'
+            Aliases     = @('--no-read-sparse')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Description = 'Read sparse files as regular files when archiving.'
         }
         @{
             Canonical   = '-k'
@@ -243,17 +614,38 @@ function Initialize-TarCompletionCatalog {
         }
         @{
             Canonical   = '-O'
-            Aliases     = @('-O')
+            Aliases     = @('-O', '--to-stdout')
             ShortName   = 'O'
-            Modes       = @('x')
+            Modes       = @('t', 'x')
             Description = 'Write extracted entries to stdout instead of restoring them to disk.'
         }
         @{
             Canonical   = '-p'
-            Aliases     = @('-p')
+            Aliases     = @('-p', '--preserve-permissions', '--same-permissions')
             ShortName   = 'p'
             Modes       = @('x')
             Description = 'Restore permissions, owner data, ACLs, and file flags when extracting.'
+        }
+        @{
+            Canonical   = '-o'
+            Aliases     = @('-o')
+            ShortName   = 'o'
+            Modes       = @('c', 'r', 'u', 'x')
+            Description = 'Create: use the ustar format; extract: do not restore owner (--no-same-owner).'
+        }
+        @{
+            Canonical   = '--help'
+            Aliases     = @('--help')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Standalone  = $true
+            Description = 'Show the bsdtar usage summary and exit.'
+        }
+        @{
+            Canonical   = '--version'
+            Aliases     = @('--version')
+            Modes       = $script:TarCompletionCatalog.AllModes
+            Standalone  = $true
+            Description = 'Show the bsdtar and libarchive version and exit.'
         }
     )
 
@@ -271,6 +663,7 @@ function Initialize-TarCompletionCatalog {
     }
 
     $optionEntries = @()
+    $standaloneEntries = @()
     $optionByAlias = @{}
     $shortOptionByChar = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)
     $shortValueByChar = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)
@@ -287,6 +680,9 @@ function Initialize-TarCompletionCatalog {
             }
             $optionEntries += $entry
             $optionByAlias[$alias.ToLowerInvariant()] = $entry
+            if ($optionSpec.ContainsKey('Standalone')) {
+                $standaloneEntries += $entry
+            }
         }
 
         if ($specObject.PSObject.Properties.Name -contains 'ShortName') {
@@ -300,25 +696,29 @@ function Initialize-TarCompletionCatalog {
         }
     }
 
-    $now = Get-Date
-    $mtimeHints = @(
-        $now.ToString('yyyy-MM-dd')
-        $now.ToString('yyyy-MM-ddTHH:mm:ss')
-        $now.ToString('o')
-        $now.AddDays(-1).ToString('yyyy-MM-dd')
-        $now.AddDays(-7).ToString('yyyy-MM-dd')
-        '2024-01-01'
-        '2024-01-01T00:00:00'
-    ) | Sort-Object -Unique
-
     $script:TarCompletionCatalog.ModeEntries = @($modeEntries)
     $script:TarCompletionCatalog.ModeByAlias = $modeByAlias
     $script:TarCompletionCatalog.OptionEntries = @($optionEntries)
+    $script:TarCompletionCatalog.StandaloneEntries = @($standaloneEntries)
     $script:TarCompletionCatalog.OptionByAlias = $optionByAlias
     $script:TarCompletionCatalog.ShortOptionByChar = $shortOptionByChar
     $script:TarCompletionCatalog.ShortValueByChar = $shortValueByChar
-    $script:TarCompletionCatalog.MtimeHints = @($mtimeHints)
     $script:TarCompletionCatalog.Initialized = $true
+}
+
+function Get-TarDateHintList {
+    # Computed per completion so "today" stays today; only forms bsdtar's date parser accepts
+    # (ISO 'T'-separated and round-trip timestamps are rejected with "bad date string").
+    $now = Get-Date
+    @(
+        $now.ToString('yyyy-MM-dd')
+        $now.ToString('yyyy-MM-dd HH:mm:ss')
+        $now.AddDays(-1).ToString('yyyy-MM-dd')
+        $now.AddDays(-7).ToString('yyyy-MM-dd')
+        '2024-01-01'
+        '2024-01-01 00:00:00'
+        '@' + [System.DateTimeOffset]::new($now).ToUnixTimeSeconds()
+    )
 }
 
 function Get-TarCurrentToken {
@@ -338,7 +738,7 @@ function Get-TarCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, $script:TarCompletionCatalog.TokenPattern) | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -819,11 +1219,35 @@ function Invoke-TarValueCompletion {
             break
         }
         'DateTime' {
-            Get-TarSimpleValueResults -Values $script:TarCompletionCatalog.MtimeHints -CurrentValue $CurrentValue -ToolTipPrefix 'Modification time' -Prefix $Prefix
+            Get-TarSimpleValueResults -Values (Get-TarDateHintList) -CurrentValue $CurrentValue -ToolTipPrefix 'Date' -Prefix $Prefix
             break
         }
         'BlockSize' {
             Get-TarSimpleValueResults -Values $script:TarCompletionCatalog.BlockSizeHints -CurrentValue $CurrentValue -ToolTipPrefix '512-byte record count' -Prefix $Prefix
+            break
+        }
+        'StripCount' {
+            Get-TarSimpleValueResults -Values $script:TarCompletionCatalog.StripCountHints -CurrentValue $CurrentValue -ToolTipPrefix 'Leading path elements to strip' -Prefix $Prefix
+            break
+        }
+        'CompressProgram' {
+            Get-TarSimpleValueResults -Values $script:TarCompletionCatalog.CompressProgramHints -CurrentValue $CurrentValue -ToolTipPrefix 'Compression program' -Prefix $Prefix
+            break
+        }
+        'Id' {
+            Get-TarSimpleValueResults -Values @('0', '1000', '<id>') -CurrentValue $CurrentValue -ToolTipPrefix 'Numeric ID' -Prefix $Prefix
+            break
+        }
+        'Name' {
+            Get-TarSimpleValueResults -Values @('<name>') -CurrentValue $CurrentValue -ToolTipPrefix 'Name' -Prefix $Prefix
+            break
+        }
+        'Options' {
+            Get-TarSimpleValueResults -Values @('<module:key=value>') -CurrentValue $CurrentValue -ToolTipPrefix 'Module option' -Prefix $Prefix
+            break
+        }
+        'Passphrase' {
+            Get-TarSimpleValueResults -Values @('<passphrase>') -CurrentValue $CurrentValue -ToolTipPrefix 'Passphrase' -Prefix $Prefix
             break
         }
         'Pattern' {
@@ -898,7 +1322,7 @@ function Complete-Tar {
     $line = $commandAst.ToString()
     $prefixLength = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $prefixLength)
-    $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $tokens = @([regex]::Matches($linePrefix, $script:TarCompletionCatalog.TokenPattern) | ForEach-Object { $_.Value })
     $hasTrailingSpace = ($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
     $currentToken = if ($hasTrailingSpace) { '' } else { Get-TarCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
@@ -936,6 +1360,13 @@ function Complete-Tar {
 
     if (-not $state.Mode) {
         Get-TarModeCompletionResults -CurrentValue $currentToken
+        if ($currentToken.StartsWith('-')) {
+            foreach ($entry in $script:TarCompletionCatalog.StandaloneEntries) {
+                if (Test-TarStartsWith -Value $entry.CompletionText -Prefix $currentToken) {
+                    New-TarCompletionResult -CompletionText $entry.CompletionText -ResultType 'ParameterName' -ToolTip $entry.Description
+                }
+            }
+        }
         return
     }
 
