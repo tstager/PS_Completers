@@ -56,7 +56,8 @@ The script exposes the locally validated AccessChk switch surface:
 The completer keeps `-f` and `-t` value-aware:
 
 - `-f` becomes a comma-separated account filter unless process mode `-p` is already active
-- `-t` suggests object types after `-o`, but remains a plain switch after `-p`
+- `-t` suggests object types (with or without `-o`), but remains a plain switch after `-p`
+- inside a mode value slot (`-c <TAB>`, `-p <TAB>`, ...) only values are offered; switches return once you type `-`
 
 ### Mode-aware value and positional completion
 

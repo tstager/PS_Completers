@@ -193,7 +193,7 @@ function Get-AccessChkArgumentsFromTokenState {
 function Get-AccessChkUniqueCompletions {
     param([object[]]$Results)
 
-    $seen = @{}
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $unique = New-Object System.Collections.Generic.List[object]
 
     foreach ($result in $Results) {
@@ -201,11 +201,10 @@ function Get-AccessChkUniqueCompletions {
             continue
         }
 
-        if ($seen.ContainsKey($result.CompletionText)) {
+        if (-not $seen.Add($result.CompletionText)) {
             continue
         }
 
-        $seen[$result.CompletionText] = $true
         [void]$unique.Add($result)
     }
 
@@ -391,7 +390,7 @@ function Get-AccessChkRegistryCompletions {
         }
 
         try {
-            $children = @(Get-ChildItem -LiteralPath $providerParent -ErrorAction Stop)
+            $children = @(Get-ChildItem -LiteralPath $providerParent -ErrorAction Ignore)
         } catch {
             $children = @()
         }
@@ -467,7 +466,7 @@ function Get-AccessChkCommandState {
         }
 
         if ($lookup -eq '-t') {
-            if ($mode -eq '-o') {
+            if ($mode -ne '-p') {
                 if ($index -eq ($ArgumentsBeforeCurrent.Count - 1)) {
                     $valueContext = '-t'
                     break
@@ -513,10 +512,11 @@ function Complete-AccessChk {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
+    $relativeCursor = $CursorPosition - $CommandAst.Extent.StartOffset
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
-    $tokenState = Get-AccessChkTokenState -Line $line -CursorPosition $CursorPosition
+    $tokenState = Get-AccessChkTokenState -Line $line -CursorPosition $relativeCursor
     $argumentsState = Get-AccessChkArgumentsFromTokenState -TokenState $tokenState
     $state = Get-AccessChkCommandState -ArgumentsBeforeCurrent $argumentsState.ArgumentsBeforeCurrent
     $currentWord = $argumentsState.CurrentArgument
@@ -534,47 +534,49 @@ function Complete-AccessChk {
     if (-not $currentWord.StartsWith('-') -and -not $currentWord.StartsWith('/')) {
         switch ($state.Mode) {
             '-a' {
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.AccountRights -ToolTip 'Account right name or * for all rights.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.AccountRights -ToolTip 'Account right name or * for all rights.'))
             }
             '-c' {
                 Update-AccessChkServiceCache
                 $serviceValues = @('*', 'scmanager') + $script:AccessChkCompletionCatalog.ServiceCache
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $serviceValues -ToolTip 'Service name, scmanager, or * for all services.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $serviceValues -ToolTip 'Service name, scmanager, or * for all services.'))
             }
             '-h' {
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.ShareNames -ToolTip 'Share name or * for all shares.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.ShareNames -ToolTip 'Share name or * for all shares.'))
             }
             '-k' {
-                $results.AddRange((Get-AccessChkRegistryCompletions -CurrentWord $currentWord))
+                $results.AddRange(@(Get-AccessChkRegistryCompletions -CurrentWord $currentWord))
             }
             '-m' {
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.EventLogNames -ToolTip 'Event log name or * for all event logs.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.EventLogNames -ToolTip 'Event log name or * for all event logs.'))
             }
             '-o' {
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.ObjectRoots -ToolTip 'Object Manager namespace path.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.ObjectRoots -ToolTip 'Object Manager namespace path.'))
             }
             '-p' {
                 Update-AccessChkProcessCache
                 $processValues = @('*') + $script:AccessChkCompletionCatalog.ProcessCache + @('<process-or-pid>')
-                $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $processValues -ToolTip 'Process name, PID, or * for all processes.'))
+                $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $processValues -ToolTip 'Process name, PID, or * for all processes.'))
             }
             default {
                 if ($state.Positionals.Count -eq 0) {
-                    $results.AddRange((Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.AccountSamples -ToolTip 'User or group name for effective-permission calculation.'))
-                    $results.AddRange((Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
+                    $results.AddRange(@(Get-AccessChkStaticValueResults -CurrentValue $currentWord -Values $script:AccessChkCompletionCatalog.AccountSamples -ToolTip 'User or group name for effective-permission calculation.'))
+                    $results.AddRange(@(Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
                 } elseif (($state.Positionals.Count -eq 1) -and -not (Test-AccessChkPathLikeValue -Value $state.Positionals[0])) {
-                    $results.AddRange((Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
+                    $results.AddRange(@(Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
                 } else {
-                    $results.AddRange((Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
+                    $results.AddRange(@(Get-AccessChkPathCompletions -CurrentWord $currentWord -ToolTip 'File system path, named pipe path, or other securable object path.' -Placeholder '<path>'))
                 }
             }
         }
     }
 
-    $wantsSwitches = [string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-') -or $currentWord.StartsWith('/')
+    # An empty word directly inside a mode value slot (-c, -p, ...) is a value, not an option.
+    $wantsSwitches = $currentWord.StartsWith('-') -or $currentWord.StartsWith('/') -or
+        ([string]::IsNullOrEmpty($currentWord) -and -not $state.Mode)
     if ($wantsSwitches) {
         foreach ($switchSpec in $script:AccessChkCompletionCatalog.Switches) {
-            if (-not $switchSpec.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $switchSpec.Token.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                 continue
             }
 
