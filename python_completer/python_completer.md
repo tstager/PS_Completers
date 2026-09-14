@@ -48,13 +48,14 @@ Modeled `-X` values include:
 ## Completion behavior
 
 - Root switches are emitted as `CompletionResultType = ParameterName`.
+- Switch matching is case-sensitive, as python's own option parser is: `-B`, `-I`, `-S`, `-V`, and `-X` are distinct from `-b`, `-i`, `-s`, `-v`, and `-x`, and `-x` takes no value.
 - `--check-hash-based-pycs` completes `always`, `default`, and `never`.
 - `-X` completes static xoption names and helpful `name=value` forms without invoking Python.
 - `-X tracemalloc=` and similar `=` partials stay in xoption mode instead of falling back to filesystem completion.
-- `-W` returns a placeholder filter form: `<action:message:category:module:lineno>`.
+- `-W` completes the action keywords (`default`, `error`, `always`, `all`, `module`, `once`, `ignore`), completes the standard warning category names after the second colon (`ignore::Dep` -> `ignore::DeprecationWarning`), and otherwise falls back to the placeholder `<action:message:category:module:lineno>`.
 - `-c` returns `<command-string>`.
 - `-m` returns `<module>`.
-- The first positional script operand uses filesystem completion and is not limited to `.py`.
+- The first positional script operand uses filesystem completion (also from an empty word, alongside the switches) and is not limited to `.py`.
 - The first positional operand also exposes `-` as the stdin sentinel.
 - After `-c`, `-m`, or a script/stdin program operand takes over, the completer stops offering root switches and falls back to placeholders or path-like argument completion only.
 

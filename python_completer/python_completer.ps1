@@ -27,10 +27,16 @@ function New-PythonCompletionResult {
 function Test-PythonStartsWith {
     param(
         [string]$Candidate,
-        [string]$Prefix
+        [string]$Prefix,
+        [switch]$CaseSensitive
     )
 
-    [string]::IsNullOrEmpty($Prefix) -or $Candidate.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)
+    if ([string]::IsNullOrEmpty($Prefix)) {
+        return $true
+    }
+
+    $comparison = if ($CaseSensitive) { [System.StringComparison]::Ordinal } else { [System.StringComparison]::OrdinalIgnoreCase }
+    $Candidate.StartsWith($Prefix, $comparison)
 }
 
 function New-PythonOptionSpec {
@@ -84,7 +90,7 @@ function Get-PythonOptionSpecs {
         New-PythonOptionSpec @('-u') 'Force stdout and stderr to be unbuffered.'
         New-PythonOptionSpec @('-v') 'Verbose import tracing.'
         New-PythonOptionSpec @('-V', '--version') 'Print the Python version number and exit.'
-        New-PythonOptionSpec @('-W') 'Warning control.' 'WarningFilter'
+        New-PythonOptionSpec -Tokens @('-W') -Description 'Warning control (action:message:category:module:lineno).' -ValueKind 'WarningFilter'
         New-PythonOptionSpec @('-x') 'Skip the first line of the source.'
         New-PythonOptionSpec @('-X') 'Set an implementation-specific option.' 'XOption'
         New-PythonOptionSpec @('--check-hash-based-pycs') 'Control validation behavior for hash-based .pyc files.' 'HashPycsMode'
@@ -95,7 +101,8 @@ function Get-PythonOptionSpecs {
 }
 
 function Get-PythonOptionMap {
-    $map = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    # python's option parser is case-sensitive (-x and -X, -b and -B are different options).
+    $map = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
 
     foreach ($spec in Get-PythonOptionSpecs) {
         foreach ($token in $spec.Tokens) {
@@ -277,6 +284,11 @@ function Get-PythonCompletionContext {
             continue
         }
 
+        if ($argument.StartsWith('-', [System.StringComparison]::Ordinal) -and $argument.Length -gt 1) {
+            # Unknown or clustered switch: it is not the program operand.
+            continue
+        }
+
         $terminalMode = 'ScriptTail'
     }
 
@@ -287,9 +299,13 @@ function Get-PythonCompletionContext {
 }
 
 function Get-PythonUniqueResults {
-    param([object[]]$Results)
+    param(
+        [object[]]$Results,
+        [switch]$CaseSensitive
+    )
 
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $comparer = if ($CaseSensitive) { [System.StringComparer]::Ordinal } else { [System.StringComparer]::OrdinalIgnoreCase }
+    $seen = [System.Collections.Generic.HashSet[string]]::new($comparer)
     $unique = New-Object System.Collections.Generic.List[object]
 
     foreach ($result in @($Results)) {
@@ -311,10 +327,53 @@ function Get-PythonOptionCompletions {
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($spec in Get-PythonOptionSpecs) {
         foreach ($token in $spec.Tokens) {
-            if (Test-PythonStartsWith -Candidate $token -Prefix $CurrentWord) {
+            if (Test-PythonStartsWith -Candidate $token -Prefix $CurrentWord -CaseSensitive) {
                 [void]$results.Add((New-PythonCompletionResult -CompletionText $token -ResultType 'ParameterName' -ToolTip $spec.Description))
             }
         }
+    }
+
+    @(Get-PythonUniqueResults -Results $results.ToArray() -CaseSensitive)
+}
+
+function Get-PythonWarningFilterCompletions {
+    param([string]$CurrentWord)
+
+    $actions = @(
+        @{ Name = 'default'; Description = 'Print the first occurrence of matching warnings for each location.' }
+        @{ Name = 'error';   Description = 'Turn matching warnings into exceptions.' }
+        @{ Name = 'always';  Description = 'Always print matching warnings.' }
+        @{ Name = 'all';     Description = 'Alias for always.' }
+        @{ Name = 'module';  Description = 'Print the first occurrence of matching warnings for each module.' }
+        @{ Name = 'once';    Description = 'Print only the first occurrence of matching warnings.' }
+        @{ Name = 'ignore';  Description = 'Never print matching warnings.' }
+    )
+    $categories = @(
+        'Warning', 'DeprecationWarning', 'PendingDeprecationWarning', 'UserWarning', 'SyntaxWarning',
+        'RuntimeWarning', 'FutureWarning', 'ImportWarning', 'UnicodeWarning', 'BytesWarning',
+        'ResourceWarning', 'EncodingWarning'
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $fields = @($CurrentWord.Split([char]':'))
+
+    if ($fields.Count -eq 1) {
+        foreach ($action in $actions) {
+            if (Test-PythonStartsWith -Candidate $action.Name -Prefix $CurrentWord) {
+                [void]$results.Add((New-PythonCompletionResult -CompletionText $action.Name -ResultType 'ParameterValue' -ToolTip $action.Description))
+            }
+        }
+    } elseif ($fields.Count -eq 3) {
+        $prefix = ($fields[0], $fields[1]) -join ':'
+        foreach ($category in $categories) {
+            if (Test-PythonStartsWith -Candidate $category -Prefix $fields[2]) {
+                [void]$results.Add((New-PythonCompletionResult -CompletionText "${prefix}:$category" -ResultType 'ParameterValue' -ToolTip "Warning category $category" -ListItemText $category))
+            }
+        }
+    }
+
+    if ($results.Count -eq 0) {
+        return @(Get-PythonPlaceholderCompletions -CurrentWord $CurrentWord -Placeholder '<action:message:category:module:lineno>' -ToolTip 'Warning filter for -W.')
     }
 
     @(Get-PythonUniqueResults -Results $results.ToArray())
@@ -457,13 +516,14 @@ function Get-PythonFirstPositionalCompletions {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and -not $CurrentWord.StartsWith('-')) {
+    if (-not $CurrentWord.StartsWith('-')) {
+        # The script operand is python's dominant invocation, so list files from an empty word too.
         foreach ($item in @(Get-PythonPathResults -CurrentWord $CurrentWord -Placeholder '<script-or-path>')) {
             [void]$results.Add($item)
         }
     }
 
-    @(Get-PythonUniqueResults -Results $results.ToArray())
+    @(Get-PythonUniqueResults -Results $results.ToArray() -CaseSensitive)
 }
 
 function Get-PythonTailCompletions {
@@ -500,7 +560,7 @@ function Complete-Python {
         switch ($context.PendingValueKind) {
             'HashPycsMode'  { return @(Get-PythonClosedValueCompletions -Values @('always', 'default', 'never') -CurrentWord $currentWord -ToolTip 'Value for --check-hash-based-pycs.') }
             'XOption'       { return @(Get-PythonXOptionCompletions -CurrentWord $currentWord) }
-            'WarningFilter' { return @(Get-PythonPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<action:message:category:module:lineno>' -ToolTip 'Warning filter for -W.') }
+            'WarningFilter' { return @(Get-PythonWarningFilterCompletions -CurrentWord $currentWord) }
             'ModuleName'    { return @(Get-PythonPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<module>' -ToolTip 'Module name for python -m.') }
             'CommandString' { return @(Get-PythonPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<command-string>' -ToolTip 'Command string for python -c.') }
         }
