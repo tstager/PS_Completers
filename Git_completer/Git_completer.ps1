@@ -11,13 +11,25 @@ function Complete-GitNative {
     }
 
     $line = $commandAst.ToString()
-    $tokens = @([regex]::Matches($line, '\S+') | ForEach-Object { $_.Value })
+
+    # $cursorPosition indexes the whole input line while $line is command-relative, and only the
+    # tokens that start before the cursor may be considered: otherwise mid-line completion treats
+    # the word under the cursor as an already-chosen subcommand.
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    $isPastCommandEnd = $relativeCursor -gt $line.Length
+    $boundedCursor = [Math]::Min([Math]::Max($relativeCursor, 0), $line.Length)
+
+    $tokens = @(
+        [regex]::Matches($line, '\S+') |
+            Where-Object { $_.Index -lt $boundedCursor } |
+            ForEach-Object { $_.Value }
+    )
 
     if ($tokens.Count -eq 0) {
         return
     }
 
-    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
+    $hasTrailingSpace = $isPastCommandEnd -or ($line.Substring(0, $boundedCursor) -match '\s$')
     if ($hasTrailingSpace) {
         $argIndex = $tokens.Count - 1
     }
@@ -70,22 +82,32 @@ function Complete-GitNative {
         )
 
         [System.Management.Automation.CompletionCompleters]::CompleteFilename($pathPrefix) |
-            Where-Object {
-                -not $DirectoriesOnly -or (Test-Path -LiteralPath $_.CompletionText -PathType Container)
-            } |
             ForEach-Object {
+                # CompleteFilename quotes a path that needs it; the quotes have to come off before
+                # the option prefix is attached, or they land in the middle of the token and git
+                # receives a literal quote inside the path.
+                $rawPath = $_.CompletionText.Trim([char[]]@([char]39, [char]34))
+
+                if ($DirectoriesOnly -and -not (Test-Path -LiteralPath $rawPath -PathType Container)) {
+                    return
+                }
+
                 if ([string]::IsNullOrEmpty($completionPrefix)) {
                     $_
+                    return
                 }
-                else {
-                    $completionText = "$completionPrefix$($_.CompletionText)"
-                    [System.Management.Automation.CompletionResult]::new(
-                        $completionText,
-                        $completionText,
-                        'ParameterValue',
-                        $completionText
-                    )
+
+                $completionText = "$completionPrefix$rawPath"
+                if ($completionText -match '\s') {
+                    $completionText = "'" + $completionText.Replace("'", "''") + "'"
                 }
+
+                [System.Management.Automation.CompletionResult]::new(
+                    $completionText,
+                    $completionText,
+                    'ParameterValue',
+                    $completionText
+                )
             }
     }
 
@@ -132,8 +154,208 @@ function Complete-GitNative {
         '--no-pager'
     )
 
+    $globalGitFlagsWithValues = @(
+        '-C',
+        '-c',
+        '--git-dir',
+        '--work-tree',
+        '--namespace',
+        '--exec-path',
+        '--config-env'
+    )
+
+    $globalGitDirectoryFlags = @('-C', '--git-dir', '--work-tree')
+
     if (-not (Get-Variable -Name GitHelpMetadataCache -Scope Global -ErrorAction Ignore)) {
         $global:GitHelpMetadataCache = @{}
+    }
+
+    # One local handle to the session cache; the hashtable is shared by reference.
+    $metadataCache = $global:GitHelpMetadataCache
+
+    $getGitAliases = {
+        if ($metadataCache.ContainsKey('<aliases>')) {
+            return $metadataCache['<aliases>']
+        }
+
+        $aliases = @{}
+        foreach ($configLine in @(git config --get-regexp '^alias\.' 2>$null)) {
+            if ($configLine -match '^alias\.(?<name>\S+)\s+(?<body>.*)$') {
+                $aliases[$matches['name']] = $matches['body']
+            }
+        }
+
+        $metadataCache['<aliases>'] = $aliases
+        $aliases
+    }
+
+    $getCompletionScriptData = {
+        if ($metadataCache.ContainsKey('<completion-script>')) {
+            return $metadataCache['<completion-script>']
+        }
+
+        $data = [pscustomobject]@{
+            Variables = @{}
+            Lines     = @()
+        }
+        $metadataCache['<completion-script>'] = $data
+
+        $gitCommand = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $gitCommand -or [string]::IsNullOrWhiteSpace($gitCommand.Source)) {
+            return $data
+        }
+
+        $installRoot = Split-Path -Path (Split-Path -Path $gitCommand.Source -Parent) -Parent
+        $scriptPath = $null
+        foreach ($relativePath in @(
+                'mingw64\share\git\completion\git-completion.bash',
+                'mingw32\share\git\completion\git-completion.bash',
+                'usr\share\git\completion\git-completion.bash'
+            )) {
+            $candidate = Join-Path -Path $installRoot -ChildPath $relativePath
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $scriptPath = $candidate
+                break
+            }
+        }
+
+        if (-not $scriptPath) {
+            return $data
+        }
+
+        $scriptLines = @(
+            try {
+                Get-Content -LiteralPath $scriptPath -ErrorAction Stop
+            }
+            catch {
+                @()
+            }
+        )
+
+        # The bundled bash completion keeps its option lists in '__git_<name>="..."' assignments
+        # that may span several lines.
+        $variables = @{}
+        $pendingName = $null
+        $pendingValue = $null
+        foreach ($scriptLine in $scriptLines) {
+            if ($null -eq $pendingName) {
+                if ($scriptLine -match '^__git_([A-Za-z0-9_]+)="(.*)$') {
+                    $pendingName = $matches[1]
+                    $remainder = $matches[2]
+                    if ($remainder -match '^(.*)"\s*$') {
+                        $variables[$pendingName] = $matches[1]
+                        $pendingName = $null
+                    }
+                    else {
+                        $pendingValue = $remainder
+                    }
+                }
+
+                continue
+            }
+
+            if ($scriptLine -match '^(.*)"\s*$') {
+                $variables[$pendingName] = "$pendingValue $($matches[1])"
+                $pendingName = $null
+                $pendingValue = $null
+            }
+            else {
+                $pendingValue = "$pendingValue $scriptLine"
+            }
+        }
+
+        $data.Variables = $variables
+        $data.Lines = $scriptLines
+        $data
+    }
+
+    $expandCompletionScriptWord = {
+        param([string]$word, [hashtable]$variables, [System.Collections.Generic.HashSet[string]]$visited, [System.Collections.Generic.List[string]]$sink)
+
+        if ($word -match '^\$__git_([A-Za-z0-9_]+)$') {
+            $variableName = $matches[1]
+            if (-not $visited.Add($variableName) -or -not $variables.ContainsKey($variableName)) {
+                return
+            }
+
+            foreach ($rawInner in ($variables[$variableName] -split '\s+')) {
+                & $expandCompletionScriptWord $rawInner.Trim([char[]]@([char]34, [char]39)) $variables $visited $sink
+            }
+
+            return
+        }
+
+        if ($word -match '^--[A-Za-z0-9][A-Za-z0-9-]*=?$') {
+            [void]$sink.Add(($word -replace '=$', ''))
+        }
+    }
+
+    $getCompletionScriptOptions = {
+        param([string]$functionName)
+
+        $data = & $getCompletionScriptData
+        if (@($data.Lines).Count -eq 0) {
+            return @()
+        }
+
+        $start = -1
+        for ($i = 0; $i -lt $data.Lines.Count; $i++) {
+            if ($data.Lines[$i] -match ('^' + [regex]::Escape($functionName) + '\s*\(\)\s*$')) {
+                $start = $i
+                break
+            }
+        }
+
+        if ($start -lt 0) {
+            return @()
+        }
+
+        $collected = [System.Collections.Generic.List[string]]::new()
+        for ($i = $start + 1; $i -lt $data.Lines.Count; $i++) {
+            if ($data.Lines[$i] -match '^\}') {
+                break
+            }
+
+            foreach ($rawWord in ($data.Lines[$i] -split '\s+')) {
+                $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                & $expandCompletionScriptWord $rawWord.Trim([char[]]@([char]34, [char]39)) $data.Variables $visited $collected
+            }
+        }
+
+        @($collected | Sort-Object -Unique)
+    }
+
+    # git deliberately prints an abbreviated '-h' for the revision-walking commands, so their real
+    # option surface is read from the bash completion script that ships with git.
+    $completionScriptFunctions = @{
+        'log'         = '__git_complete_log_opts'
+        'whatchanged' = '__git_complete_log_opts'
+        'show'        = '_git_show'
+        'diff'        = '_git_diff'
+    }
+
+    # The same script holds the value lists for the options those commands document only there.
+    $completionScriptValueVariables = @{
+        '--pretty'             = 'log_pretty_formats'
+        '--format'             = 'log_pretty_formats'
+        '--date'               = 'log_date_formats'
+        '--diff-algorithm'     = 'diff_algorithms'
+        '--submodule'          = 'diff_submodule_formats'
+        '--ws-error-highlight' = 'ws_error_highlight_opts'
+        '--color-moved'        = 'color_moved_opts'
+        '--color-moved-ws'     = 'color_moved_ws_opts'
+        '--diff-merges'        = 'diff_merges_opts'
+    }
+
+    $getCompletionScriptValues = {
+        param([string]$variableName)
+
+        $data = & $getCompletionScriptData
+        if (-not $data.Variables.ContainsKey($variableName)) {
+            return @()
+        }
+
+        @($data.Variables[$variableName] -split '\s+' | Where-Object { $_ })
     }
 
     $documentedNestedSubcommands = @{
@@ -149,8 +371,8 @@ function Complete-GitNative {
     }
 
     $getTopLevelSubcommands = {
-        if ($global:GitHelpMetadataCache.ContainsKey('<root>')) {
-            return $global:GitHelpMetadataCache['<root>'].Subcommands
+        if ($metadataCache.ContainsKey('<root>')) {
+            return $metadataCache['<root>'].Subcommands
         }
 
         $subcommands = @(
@@ -172,9 +394,10 @@ function Complete-GitNative {
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                     Sort-Object -Unique
             )
+            OptionSpecs = @{}
         }
 
-        $global:GitHelpMetadataCache['<root>'] = $metadata
+        $metadataCache['<root>'] = $metadata
         $metadata.Subcommands
     }
 
@@ -188,12 +411,42 @@ function Complete-GitNative {
             '<root>'
         }
 
-        if ($cacheKey -eq '<root>' -and -not $global:GitHelpMetadataCache.ContainsKey($cacheKey)) {
+        if ($cacheKey -eq '<root>' -and -not $metadataCache.ContainsKey($cacheKey)) {
             $null = & $getTopLevelSubcommands
         }
 
-        if ($global:GitHelpMetadataCache.ContainsKey($cacheKey)) {
-            return $global:GitHelpMetadataCache[$cacheKey]
+        if ($metadataCache.ContainsKey($cacheKey)) {
+            return $metadataCache[$cacheKey]
+        }
+
+        # Never run '-h' against a user alias: git has no help to print for a shell alias
+        # ('!cmd ...') and runs the alias body instead, so completion would execute it.
+        if ($commandPath.Count -ge 1) {
+            $aliasTable = & $getGitAliases
+            if ($aliasTable.ContainsKey($commandPath[0])) {
+                $aliasBody = [string]$aliasTable[$commandPath[0]]
+                $aliasMetadata = $null
+
+                if (-not $aliasBody.StartsWith('!')) {
+                    $aliasTarget = @($aliasBody -split '\s+' | Where-Object { $_ }) | Select-Object -First 1
+                    if ($aliasTarget -and
+                        $aliasTarget -match '^[A-Za-z0-9][A-Za-z0-9-]*$' -and
+                        -not $aliasTable.ContainsKey($aliasTarget)) {
+                        $aliasMetadata = & $getCommandMetadata (@($aliasTarget) + @($commandPath | Select-Object -Skip 1))
+                    }
+                }
+
+                if (-not $aliasMetadata) {
+                    $aliasMetadata = [pscustomobject]@{
+                        Flags       = @()
+                        Subcommands = @()
+                        OptionSpecs = @{}
+                    }
+                }
+
+                $metadataCache[$cacheKey] = $aliasMetadata
+                return $aliasMetadata
+            }
         }
 
         $helpLines = @(
@@ -201,9 +454,11 @@ function Complete-GitNative {
                 ForEach-Object { $_.ToString() }
         )
 
+        $optionPattern = '(?<!\w)(--\[(?:no-)\][A-Za-z0-9][A-Za-z0-9-]*|--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])'
         $flags = [System.Collections.Generic.List[string]]::new()
+        $optionSpecs = @{}
         foreach ($line in $helpLines) {
-            foreach ($match in [regex]::Matches($line, '(?<!\w)(--\[(?:no-)\][A-Za-z0-9][A-Za-z0-9-]*|--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])')) {
+            foreach ($match in [regex]::Matches($line, $optionPattern)) {
                 $option = $match.Value
                 if ($option -match '^--\[no-\](.+)$') {
                     $flags.Add("--$($Matches[1])")
@@ -212,6 +467,40 @@ function Complete-GitNative {
                 else {
                     $flags.Add($option)
                 }
+            }
+
+            # The option column of an option row carries the argument the option takes, for
+            # example '-F, --[no-]file <file>' or '--[no-]conflict <style>'. Everything after the
+            # last option token in that column is that argument's spec.
+            if ($line -notmatch '^\s{4}\S') {
+                continue
+            }
+
+            $optionColumn = @($line.Trim() -split '\s{2,}')[0]
+            $columnMatches = @([regex]::Matches($optionColumn, $optionPattern))
+            if ($columnMatches.Count -eq 0) {
+                continue
+            }
+
+            $lastMatch = $columnMatches[$columnMatches.Count - 1]
+            $spec = $optionColumn.Substring($lastMatch.Index + $lastMatch.Length).Trim()
+            if ([string]::IsNullOrWhiteSpace($spec)) {
+                continue
+            }
+
+            foreach ($columnMatch in $columnMatches) {
+                $specOption = $columnMatch.Value
+                if ($specOption -match '^--\[no-\](.+)$') {
+                    $specOption = "--$($Matches[1])"
+                }
+
+                $optionSpecs[$specOption] = $spec
+            }
+        }
+
+        if ($completionScriptFunctions.ContainsKey($cacheKey)) {
+            foreach ($supplementFlag in @(& $getCompletionScriptOptions $completionScriptFunctions[$cacheKey])) {
+                $flags.Add($supplementFlag)
             }
         }
 
@@ -277,9 +566,10 @@ function Complete-GitNative {
         $metadata = [pscustomobject]@{
             Flags       = @($flags | Sort-Object -Unique)
             Subcommands = @($subcommands | Sort-Object -Unique)
+            OptionSpecs = $optionSpecs
         }
 
-        $global:GitHelpMetadataCache[$cacheKey] = $metadata
+        $metadataCache[$cacheKey] = $metadata
         $metadata
     }
 
@@ -289,13 +579,25 @@ function Complete-GitNative {
         $commandPath = @()
         $metadata = & $getCommandMetadata $commandPath
         $lastNonFlagArgument = $null
+        $pendingGlobalValueOption = $null
 
         foreach ($argument in $argsBeforeCursor) {
             if ($argument -eq '--') {
                 break
             }
 
+            # A global option such as '-C <path>' consumes the token after it, which is otherwise
+            # mistaken for the subcommand.
+            if ($pendingGlobalValueOption) {
+                $pendingGlobalValueOption = $null
+                continue
+            }
+
             if ($argument.StartsWith('-')) {
+                if ($commandPath.Count -eq 0 -and $globalGitFlagsWithValues -contains $argument) {
+                    $pendingGlobalValueOption = $argument
+                }
+
                 continue
             }
 
@@ -307,9 +609,10 @@ function Complete-GitNative {
         }
 
         [pscustomobject]@{
-            CommandPath         = @($commandPath)
-            Metadata            = $metadata
-            LastNonFlagArgument = $lastNonFlagArgument
+            CommandPath              = @($commandPath)
+            Metadata                 = $metadata
+            LastNonFlagArgument      = $lastNonFlagArgument
+            PendingGlobalValueOption = $pendingGlobalValueOption
         }
     }
 
@@ -545,6 +848,60 @@ function Complete-GitNative {
         @($preferredFlags + $remainingFlags)
     }
 
+    $getHelpGuides = {
+        @(git --list-cmds=list-guide 2>$null) | Where-Object { $_ }
+    }
+
+    $completeOptionSpecValue = {
+        param(
+            [string]$spec,
+            [string]$valuePrefix,
+            [string]$completionPrefix = ''
+        )
+
+        if ([string]::IsNullOrWhiteSpace($spec)) {
+            return
+        }
+
+        $normalized = $spec.Trim().Trim([char[]]@('[', ']'))
+        if ($normalized.StartsWith('=')) {
+            $normalized = $normalized.Substring(1)
+        }
+
+        $normalized = $normalized.Trim([char[]]@('[', ']'))
+
+        $emit = {
+            param([string[]]$values)
+
+            if ([string]::IsNullOrEmpty($completionPrefix)) {
+                & $completeOrderedList $valuePrefix $values
+            }
+            else {
+                & $completeOrderedList $wordToComplete @($values | ForEach-Object { "$completionPrefix$_" })
+            }
+        }
+
+        $enumMatch = [regex]::Match(
+            $normalized,
+            '^\(?(?<values>[A-Za-z0-9][A-Za-z0-9._-]*(?:\|[A-Za-z0-9][A-Za-z0-9._-]*)+)\)?$'
+        )
+        if ($enumMatch.Success) {
+            & $emit @($enumMatch.Groups['values'].Value -split '\|')
+            return
+        }
+
+        switch -Regex ($normalized.Trim([char[]]@('<', '>')).ToLowerInvariant()) {
+            '^(file|path|dir|directory|template-directory|gitdir|pathspec)$' {
+                & $completeFileSystemPaths $valuePrefix $completionPrefix
+                return
+            }
+            '^(commit|commit-ish|committish|object|tree-ish|treeish|rev|revision|ref|reference|branch|new-branch|start-point|upstream)$' {
+                & $emit @(& $getRefs)
+                return
+            }
+        }
+    }
+
     $completeInitOptionValues = {
         param(
             [string]$optionName,
@@ -667,6 +1024,16 @@ function Complete-GitNative {
     $argsAfterPath = @(& $getArgumentsAfterPath $argsBeforeCursor $commandPath)
     $positionalsAfterPath = @(& $getPositionalArgumentsAfterPath $argsBeforeCursor $commandPath)
 
+    if ($commandContext.PendingGlobalValueOption) {
+        if ($globalGitDirectoryFlags -contains $commandContext.PendingGlobalValueOption) {
+            & $completeFileSystemPaths $wordToComplete '' -DirectoriesOnly
+        }
+
+        return
+    }
+
+    $optionSpecs = if ($commandContext.Metadata.OptionSpecs) { $commandContext.Metadata.OptionSpecs } else { @{} }
+
     if ($commandText -eq 'init') {
         $attachedInitValueMatch = [regex]::Match(
             $wordToComplete,
@@ -697,6 +1064,29 @@ function Complete-GitNative {
         }
     }
 
+    $attachedOptionValueMatch = [regex]::Match(
+        $wordToComplete,
+        '^(?<option>--[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$'
+    )
+    if ($attachedOptionValueMatch.Success) {
+        $attachedOption = $attachedOptionValueMatch.Groups['option'].Value
+        $attachedValue = $attachedOptionValueMatch.Groups['value'].Value
+
+        if ($completionScriptFunctions.ContainsKey($commandText) -and
+            $completionScriptValueVariables.ContainsKey($attachedOption)) {
+            $scriptValues = @(& $getCompletionScriptValues $completionScriptValueVariables[$attachedOption])
+            if ($scriptValues.Count -gt 0) {
+                & $completeOrderedList $wordToComplete @($scriptValues | ForEach-Object { "$attachedOption=$_" })
+                return
+            }
+        }
+
+        if ($optionSpecs.ContainsKey($attachedOption)) {
+            & $completeOptionSpecValue $optionSpecs[$attachedOption] $attachedValue "$attachedOption="
+            return
+        }
+    }
+
     if ($wordToComplete -like '-*') {
         if ($commandText -eq 'init') {
             & $completeOrderedList $wordToComplete (& $getInitFlagCompletions $commandContext.Metadata.Flags)
@@ -704,6 +1094,30 @@ function Complete-GitNative {
         else {
             & $completeList $commandContext.Metadata.Flags
         }
+        return
+    }
+
+    if ($argsAfterPath.Count -gt 0) {
+        $previousOption = $argsAfterPath[-1]
+
+        if ($previousOption.StartsWith('-') -and
+            $completionScriptFunctions.ContainsKey($commandText) -and
+            $completionScriptValueVariables.ContainsKey($previousOption)) {
+            $scriptValues = @(& $getCompletionScriptValues $completionScriptValueVariables[$previousOption])
+            if ($scriptValues.Count -gt 0) {
+                & $completeOrderedList $wordToComplete $scriptValues
+                return
+            }
+        }
+
+        if ($previousOption.StartsWith('-') -and $optionSpecs.ContainsKey($previousOption)) {
+            & $completeOptionSpecValue $optionSpecs[$previousOption] $wordToComplete ''
+            return
+        }
+    }
+
+    if ($commandText -eq 'help' -and $positionalsAfterPath.Count -eq 0) {
+        & $completeOrderedList $wordToComplete @(@(& $getTopLevelSubcommands) + @(& $getHelpGuides))
         return
     }
 

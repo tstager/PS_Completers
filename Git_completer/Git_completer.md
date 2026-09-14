@@ -22,7 +22,7 @@ The registration call stays at script scope with literal arguments because the C
 If `git` is not available in `PATH`, the completer returns without emitting suggestions.
 
 ## How completion works
-The completer tokenizes the current command line with a simple non-whitespace regex and then computes an argument index based on whether the cursor is after a trailing space.
+The completer tokenizes the current command line with a simple non-whitespace regex, keeps only the tokens that start before the cursor (after rebasing `$cursorPosition` by `$commandAst.Extent.StartOffset`), and then computes an argument index based on whether the cursor is after a trailing space. Because the token list is cut at the cursor, completing a word in the middle of a line works the same as completing at the end.
 
 Internal helper scriptblocks handle distinct parts of the workflow:
 - `$newResult` creates `CompletionResult` instances.
@@ -38,12 +38,17 @@ The script stores parsed help metadata in `$global:GitHelpMetadataCache`.
 
 For non-root commands, `$getCommandMetadata` runs `git <command path> -h`, parses:
 - flags from help text with regex
+- the argument each option takes, read from the option column of its help row (`-F, --[no-]file <file>` yields the spec `<file>` for both `-F` and `--file`)
 - nested subcommands from `usage:` / `or:` lines
+
+A user alias is **never** passed to `git ... -h`. git has no help to print for a shell alias (`!cmd ...`) and would run the alias body instead, so the alias table is read once per session with `git config --get-regexp "^alias."`; an alias that expands to a git command reuses that command's metadata, and a shell alias gets an empty metadata object.
+
+git deliberately prints an abbreviated `-h` for its revision-walking commands, so `log`, `show`, `diff`, and `whatchanged` are supplemented from the `git-completion.bash` that ships beside the installed git (`<git>\mingw64\share\git\completion\git-completion.bash`). Its `__git_*` option variables and the option tokens inside the matching completion function are parsed once and cached, which is where `--oneline`, `--graph`, `--stat`, and `--pretty` come from. The same file supplies the value lists for `--pretty`, `--format`, `--date`, `--diff-algorithm`, `--submodule`, `--ws-error-highlight`, `--color-moved`, `--color-moved-ws`, and `--diff-merges`.
 
 A hardcoded `$documentedNestedSubcommands` map supplements help parsing for command groups whose help output does not fully expose their subcommands.
 
 ### Command-path detection
-`$getCommandContext` walks non-flag arguments from left to right. Whenever a token matches one of the current command metadata object's known subcommands, it extends the command path and refreshes metadata for the deeper path.
+`$getCommandContext` walks non-flag arguments from left to right. Whenever a token matches one of the current command metadata object's known subcommands, it extends the command path and refreshes metadata for the deeper path. A global option that takes a value (`-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path`, `--config-env`) consumes the token after it, so that value is never mistaken for the subcommand; `-C`, `--git-dir`, and `--work-tree` complete directories in their value slot.
 
 `$getArgumentsAfterPath` and `$getPositionalArgumentsAfterPath` then isolate arguments that come after the recognized command path so later logic can make subcommand-specific decisions.
 
@@ -149,12 +154,18 @@ Supported value completions:
 
 The script handles both separated and attached forms such as `--object-format=sha256`.
 
+Option values are driven by the argument spec captured from help: `<file>` / `<path>` / `<dir>` complete file system paths, `<commit>` / `<ref>` / `<branch>` and their relatives complete refs, and a parenthesised alternation such as `(direct|inherit)` completes its members. An option whose spec names none of those completes nothing, which leaves the slot to PowerShell's own filename fallback rather than dumping the command's flag list into it. An attached `--option=<path>` result is quoted as a whole token, so a path containing a space stays syntactically valid.
+
+`git help <TAB>` offers the command list plus the concept guides from `git --list-cmds=list-guide`.
+
 ## Dependencies or external command expectations
 The completer expects a working `git` executable in `PATH`.
 
 It shells out to Git for completion data, including:
 - `git --list-cmds=main,others,alias,nohelpers`
-- `git <command path> -h`
+- `git --list-cmds=list-guide`
+- `git config --get-regexp "^alias."`
+- `git <command path> -h` (never for a user alias)
 - `git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags`
 - `git rev-parse --short HEAD`
 - `git remote`
@@ -182,6 +193,8 @@ Because the completer uses live Git output, results depend on the installed Git 
 - Tokenization uses `\S+`, so it is simpler than PowerShell's full parser and is oriented toward native-command argument shapes.
 - Help metadata is cached in a global variable for the session and is not invalidated automatically.
 - Nested subcommand coverage partly depends on parsing `git -h` output and partly on the hardcoded `$documentedNestedSubcommands` map.
+- `rev-parse` still gets only what its abbreviated `-h` prints; `git-completion.bash` has no completion function for it to supplement from.
+- A shell alias (`!cmd ...`) gets no flag or subcommand completion at all, because reading its surface would mean running it.
 - `git config` key completion is a fixed curated list in this script, not a live read of repository or global config keys.
 - New-branch completion for `checkout` / `switch` uses naming suggestions rather than enumerating existing branches.
 - When a command path is treated as a leaf command and the cursor is at a trailing-space boundary with no positional arguments, the completer can fall back to that command's flag set.
