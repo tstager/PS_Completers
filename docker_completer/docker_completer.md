@@ -41,20 +41,57 @@ The parsing intentionally tracks sections such as:
 
 and then normalizes them into a reusable help catalog.
 
+Section headers are matched with the trailing colon optional, because Docker CLI
+plugins are inconsistent about it: `docker mcp --help` prints `Available
+Commands:` while `docker scout --help` prints `Available Commands` and `Usage`
+with no colon at all.
+
+Option rows are recognised by their indentation - a flag starting at column 2 or
+6 - rather than by "the line contains something that looks like a flag". Docker
+wraps long descriptions onto deeply indented continuation lines, and those lines
+contain text such as `states) (default -1)`, which a flag-shaped regex otherwise
+harvests as an option named `-1`. Continuation lines are appended to the option's
+description instead, which is also what makes the enum harvest below work.
+
 ## Key completion behaviors / supported values
 The script provides:
 - root `docker` subcommand completion
-- root `docker` option completion, including `-h` and `--help`
-- nested completion for `docker compose` and deeper `compose` branches
-- help-driven completion for subcommand names and option names
-- filtering by the active partial word so suggestions stay narrow and predictable
+- root `docker` option completion, including `-h` and `--help`, which Docker's
+  own root help does not list
+- nested completion for `docker compose`, CLI plugins such as `scout` and `mcp`,
+  and deeper branches
+- completion of an exact subcommand under the cursor (`docker ps<TAB>` offers
+  `ps`), because a token that ends at or after the cursor is treated as the word
+  being completed rather than as a settled argument
+- option values in both the separate (`--log-level <TAB>`) and attached
+  (`--format=j<TAB>`) forms, where the attached form keeps the `--opt=` prefix
+- enum values harvested from the option's own description text: parenthesised
+  alternatives such as `("debug", "info", "warn", "error", "fatal")` and
+  `("never"|"always"|"auto")`, plus Docker's `--format` modes, which it documents
+  as `'table':` / `'json':`
+- filename completion for path-shaped options (`--config`, `--file`,
+  `--env-file`, `--tlscacert`, `--project-directory`, ...) and for any
+  path-shaped word, so `docker compose -f .\<TAB>` still walks the filesystem
+- a `<type>` placeholder for a value slot with no enum and no path meaning, so
+  the slot does not silently fill with unrelated file names
+- operand placeholders taken from the `Usage:` line (`docker logs <TAB>` offers
+  `<CONTAINER>`, `docker network create <TAB>` offers `<NETWORK>`); operands
+  named `PATH`, `URL`, `FILE` or `DIR` are left to the engine's own path
+  completion
 
-Because completion is based on live help output, it remains aligned with the installed Docker version rather than a stale, manually-maintained static table.
+Because completion is based on live help output, it remains aligned with the
+installed Docker version rather than a stale, manually-maintained static table.
 
 ## Dependencies or external command expectations
 - Requires Docker to be installed and available in `PATH`
 - Uses the installed Docker executable to request `--help` output from the real CLI
+- Each `--help` child runs with standard input closed and a four-second budget,
+  and is killed if it outlives it, so a hung CLI plugin cannot hang the prompt
+- A catalog that comes back empty is treated as a transient failure and retried
+  after thirty seconds rather than being cached for the rest of the session
 - Does not make any destructive or state-changing calls while completing
+- Does not enumerate containers, images, volumes or contexts; those slots get a
+  placeholder instead of a daemon round-trip
 
 ## Usage / loading example
 ```powershell
@@ -66,6 +103,25 @@ Because completion is based on live help output, it remains aligned with the ins
 # docker compose build <TAB>
 # docker compose up <TAB>
 ```
+
+## Runtime notes
+- Docker version during this revision: `29.7.2`
+- Validated in clean `pwsh -NoProfile` sessions with `TabExpansion2`:
+  `docker ps` with the cursor at the end of `ps` (filename fallback -> `ps`),
+  `docker ps --format ` (14 flags -> `table json`),
+  `docker ps --format=j` (0 -> `--format=json`),
+  `docker --log-level ` (82 root commands -> `debug info warn error fatal`),
+  `docker run --cgroupns ` (114 flags -> `host private`),
+  `docker run --pull ` (114 flags -> `always missing never`),
+  `docker compose --ansi ` (49 subcommands -> `never always auto`),
+  `docker scout ` (filename fallback -> 19 subcommands and flags),
+  `docker context use ` (filename fallback -> `<CONTEXT>`, `-h`, `--help`),
+  `docker logs ` (9 -> 12, adding `<CONTAINER>`, `-h`, `--help`),
+  `docker compose up -` (38 -> 37, losing the bogus `-1` and gaining
+  `--timeout`, `--timestamps`, `--wait`, `-h`, `--help`),
+  `docker build .\` and `docker compose -f .\` unchanged at path completion,
+  `$x = 1; docker ps -` identical to the same input at the start of a line
+- `$Error` did not grow across the probe set
 
 ## Limitations / notes
 - This script does not implement every Docker plugin surface as a static custom grammar.
