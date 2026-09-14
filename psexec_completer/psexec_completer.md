@@ -10,6 +10,7 @@ The implementation is intentionally static-first and side-effect free:
 - it offers placeholder values for remote-auth, timeout, service-name, session, processor-group, and affinity slots
 - it keeps command-tail completion conservative so remote execution is never probed during completion
 - when `-c` is present, it allows local executable and path completion for the command slot because that value names the local file PsExec copies before execution
+- when no `\\computer` target is given PsExec runs the application on the local system, so that command slot gets the same local executable and path completion
 
 ## Registration and command names
 
@@ -35,11 +36,15 @@ Load it into the session with:
 Before the command slot is chosen, the completer suggests safe remote-target forms:
 
 - `\\<computer>`
+- `\\<this computer>`, taken from `$env:COMPUTERNAME`
 - `\\localhost`
 - `\\*`
 - `@file`
 
-When the current token starts with `@`, completion switches to local path completion for the file portion while preserving the `@` prefix.
+A partially typed `\\host` that matches none of these is echoed back, so the slot
+never proposes a `<command>` placeholder where only a host name is legal.
+
+When the current token starts with `@`, completion switches to local path completion for the file portion while preserving the `@` prefix. Path completion handles a trailing separator and the `.` / `..` leaves, so `@.\` and `-c .\` enumerate the current directory.
 
 ### Switches and value slots
 
@@ -55,25 +60,35 @@ The completer covers the locally validated help surface, including:
 
 Value-aware slots return placeholders or sample values instead of falling back to filesystem completion:
 
-- `-u` -> `<username>`, `<domain\user>`
+- `-u` -> `<username>`, `<domain\user>`, `$env:USERDOMAIN\$env:USERNAME`
 - `-p` -> `<password>`
 - `-n` -> timeout samples
 - `-r` -> `PSEXESVC`, `<service-name>`
 - `-i` -> session samples
 - `-w` -> `<remote-directory>`
 - `-g` -> processor-group samples
-- `-a` -> CPU-affinity samples
+- `-a` -> `1`..`n` for up to eight CPUs, the documented `2,4` example, and `<cpu-list>`; help numbers CPUs from 1, so `0` is not offered
+
+Every hint list is filtered by the text already typed, and when nothing matches
+that text is echoed back, so Tab never rewrites a partially typed value into an
+unrelated hint.
+
+`-i` takes an *optional* session id (`-i [session]`), so the token after it is
+consumed as its value only when it is a number; a program name after a bare `-i`
+stays a program name.
 
 ### Command slot handling
 
-Without `-c`, the command and later arguments are treated conservatively:
+With a `\\computer` target and no `-c`, the command and later arguments are treated conservatively:
 
 - the first command slot returns placeholder/echo results such as `<command>`
 - later arguments return placeholder/echo results such as `<argument>`
 
 That suppresses generic filesystem fallback without pretending the local machine knows the remote command environment.
 
-With `-c`, the first command slot uses local executable/path completion because the argument names the local program or script PsExec copies to the target system.
+With `-c`, or with no remote target at all, the first command slot uses local executable/path completion because the argument names a local program or script.
+
+Tokens to the right of the cursor never classify the current slot: the element list is truncated at the cursor, so a mid-line completion sees only what was typed to its left.
 
 ## Dependencies or external command expectations
 

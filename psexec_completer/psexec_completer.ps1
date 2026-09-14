@@ -17,7 +17,7 @@ function Initialize-PsExecCompletionCatalog {
             [pscustomobject]@{ Token = '-s'; Description = 'Run the remote process in the System account.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-e'; Description = 'Do not load the specified account''s profile.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-x'; Description = 'Display UI on the Winlogon secure desktop (local only).' ; TakesValue = $false }
-            [pscustomobject]@{ Token = '-i'; Description = 'Run the program interactively in the specified session.'; TakesValue = $true; ValueKind = 'Session' }
+            [pscustomobject]@{ Token = '-i'; Description = 'Run the program interactively in the specified session. The session id is optional.'; TakesValue = $true; ValueKind = 'Session'; OptionalValue = $true }
             [pscustomobject]@{ Token = '-c'; Description = 'Copy the specified program to the remote system for execution.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-f'; Description = 'Copy the specified program even if it already exists remotely.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-v'; Description = 'Copy only if the local file is newer or a higher version.'; TakesValue = $false }
@@ -41,8 +41,51 @@ function Initialize-PsExecCompletionCatalog {
         TimeoutHints = @('1', '2', '5', '10', '30', '60')
         SessionHints = @('0', '1', '2', '<session-id>')
         GroupHints   = @('0', '1', '<group-id>')
-        AffinityHints = @('0', '1', '0,1', '1,2', '<cpu-list>')
+        # Help: 'Separate processors ... with commas where 1 is the lowest
+        # numbered CPU. For example, to run the application on CPU 2 and CPU 4,
+        # enter: "-a 2,4"'. CPU 0 does not exist in that numbering.
+        AffinityHints = @(@(1..([Math]::Min([Environment]::ProcessorCount, 8)) | ForEach-Object { [string]$_ }) + @('2,4', '<cpu-list>'))
     }
+}
+
+function Expand-PsExecHint {
+    param([string[]]$Hints, [string]$CurrentWord, [string]$ToolTip)
+
+    $typed = Remove-PsExecOuterQuotes -Value $CurrentWord
+    $matched = @(
+        foreach ($hint in $Hints) {
+            if ([string]::IsNullOrWhiteSpace($typed) -or $hint.StartsWith($typed, [System.StringComparison]::OrdinalIgnoreCase)) {
+                New-PsExecCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip $ToolTip
+            }
+        }
+    )
+
+    if ($matched.Count -gt 0) { return $matched }
+
+    # Never clobber what the user already typed with an unrelated hint.
+    @(New-PsExecCompletionResult -CompletionText $CurrentWord -ResultType 'ParameterValue' -ToolTip $ToolTip)
+}
+
+function Split-PsExecPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return [pscustomobject]@{ Parent = '.'; Leaf = '' }
+    }
+
+    if ($Path -match '[\\/]+$') {
+        return [pscustomobject]@{ Parent = $Path; Leaf = '' }
+    }
+
+    $leaf = Split-Path -Path $Path -Leaf
+    if ($leaf -in @('.', '..')) {
+        return [pscustomobject]@{ Parent = $Path; Leaf = '' }
+    }
+
+    $parent = Split-Path -Path $Path -Parent
+    if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
+
+    [pscustomobject]@{ Parent = $parent; Leaf = $leaf }
 }
 
 function New-PsExecCompletionResult {
@@ -95,16 +138,18 @@ function Get-PsExecArgumentState {
     $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
     } else {
-        Get-PsExecCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-PsExecCurrentToken -Line $CommandAst.Extent.Text -CursorPosition ($CursorPosition - $CommandAst.Extent.StartOffset) -Fallback $WordToComplete
     }
-    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
+
+    # Only elements that end at or before the cursor have actually been typed
+    # to the left of it; anything further right must not classify this slot.
+    $tokens = @($CommandAst.CommandElements |
+        Select-Object -Skip 1 |
+        Where-Object { $_.Extent.EndOffset -le $CursorPosition } |
+        ForEach-Object { $_.Extent.Text })
     $tokensBeforeCurrent = @($tokens)
     if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
-        if ($tokensBeforeCurrent.Count -gt 1) {
-            $tokensBeforeCurrent = @($tokensBeforeCurrent[0..($tokensBeforeCurrent.Count - 2)])
-        } else {
-            $tokensBeforeCurrent = @()
-        }
+        $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -First ($tokensBeforeCurrent.Count - 1))
     }
 
     [pscustomobject]@{
@@ -119,14 +164,9 @@ function Get-PsExecAtFileCompletions {
     $trimmed = Remove-PsExecOuterQuotes -Value $CurrentWord
     if (-not $trimmed.StartsWith('@')) { return @() }
     $pathPortion = $trimmed.Substring(1)
-    if ([string]::IsNullOrWhiteSpace($pathPortion)) {
-        $parent = '.'
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $pathPortion -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
-        $leaf = Split-Path -Path $pathPortion -Leaf
-    }
+    $parts = Split-PsExecPath -Path $pathPortion
+    $parent = $parts.Parent
+    $leaf = $parts.Leaf
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
     $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
     $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
@@ -172,9 +212,9 @@ function Get-PsExecExecutableCompletions {
     }
 
     if ($trimmed -match '[\\/]|^\.' -or $trimmed -match '^[A-Za-z]:') {
-        $parent = Split-Path -Path $trimmed -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
-        $leaf = Split-Path -Path $trimmed -Leaf
+        $parts = Split-PsExecPath -Path $trimmed
+        $parent = $parts.Parent
+        $leaf = $parts.Leaf
         $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
         foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)) {
             $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
@@ -253,7 +293,12 @@ function Complete-PsExec {
                     break
                 }
 
-                $i++
+                # '-i [session]' takes an OPTIONAL id, so only a number consumes
+                # the next token; a program name must stay a program name.
+                $optional = [bool]($spec.PSObject.Properties['OptionalValue'] -and $spec.OptionalValue)
+                if (-not $optional -or $tokensBeforeCurrent[$i + 1] -match '^\d+$') {
+                    $i++
+                }
             }
             continue
         }
@@ -273,36 +318,30 @@ function Complete-PsExec {
 
     switch ($valueContext) {
         'User' {
-            return @(
-                New-PsExecCompletionResult -CompletionText '<username>' -ResultType 'ParameterValue' -ToolTip 'Remote user name.'
-                New-PsExecCompletionResult -CompletionText '<domain\user>' -ResultType 'ParameterValue' -ToolTip 'Remote user name in Domain\User syntax.'
-            )
+            return @(Expand-PsExecHint -Hints @('<username>', '<domain\user>', "$env:USERDOMAIN\$env:USERNAME") -CurrentWord $currentWord -ToolTip 'Remote user name, Domain\User syntax when network access is needed.')
         }
         'Password' {
             $value = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<password>' } else { $currentWord }
             return @(New-PsExecCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'Remote password value.')
         }
         'Timeout' {
-            return @($script:PsExecCompletionCatalog.TimeoutHints | ForEach-Object { New-PsExecCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Remote connection timeout in seconds.' })
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.TimeoutHints -CurrentWord $currentWord -ToolTip 'Remote connection timeout in seconds.')
         }
         'ServiceName' {
-            return @(
-                New-PsExecCompletionResult -CompletionText 'PSEXESVC' -ResultType 'ParameterValue' -ToolTip 'Default PsExec remote service name.'
-                New-PsExecCompletionResult -CompletionText '<service-name>' -ResultType 'ParameterValue' -ToolTip 'Remote service name for PsExec.'
-            )
+            return @(Expand-PsExecHint -Hints @('PSEXESVC', '<service-name>') -CurrentWord $currentWord -ToolTip 'Remote service name for PsExec (PSEXESVC is the default).')
         }
         'Session' {
-            return @($script:PsExecCompletionCatalog.SessionHints | ForEach-Object { New-PsExecCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Interactive session number for -i.' })
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.SessionHints -CurrentWord $currentWord -ToolTip 'Interactive session number for -i.')
         }
         'RemoteDirectory' {
             $value = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<remote-directory>' } else { $currentWord }
             return @(New-PsExecCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'Remote working directory path for -w.')
         }
         'ProcessorGroup' {
-            return @($script:PsExecCompletionCatalog.GroupHints | ForEach-Object { New-PsExecCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Processor group number for -g.' })
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.GroupHints -CurrentWord $currentWord -ToolTip 'Processor group number for -g.')
         }
         'Affinity' {
-            return @($script:PsExecCompletionCatalog.AffinityHints | ForEach-Object { New-PsExecCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Comma-separated CPU list for -a.' })
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.AffinityHints -CurrentWord $currentWord -ToolTip 'Comma-separated CPU list for -a, where 1 is the lowest numbered CPU.')
         }
     }
 
@@ -323,8 +362,13 @@ function Complete-PsExec {
         return @(New-PsExecCompletionResult -CompletionText $argumentValue -ResultType 'ParameterValue' -ToolTip 'Command tail is intentionally conservative and non-enumerating.')
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $currentWord.StartsWith('-') -and -not $currentWord.StartsWith('\')) {
-        if ($copyMode) {
+    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and
+        -not $currentWord.StartsWith('-') -and
+        -not $currentWord.StartsWith('/') -and
+        -not $currentWord.StartsWith('\')) {
+        # 'If you omit the computer name PsExec runs the application on the
+        # local system', so the local-run command slot is a local program.
+        if ($copyMode -or -not $remoteTarget) {
             return Get-PsExecExecutableCompletions -CurrentWord $currentWord
         }
 
@@ -335,9 +379,10 @@ function Complete-PsExec {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
+    $typedTarget = Remove-PsExecOuterQuotes -Value $currentWord
     if (-not $remoteTarget) {
-        foreach ($target in @('\\<computer>', '\\localhost', '\\*', '@file')) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $target.StartsWith((Remove-PsExecOuterQuotes -Value $currentWord), [System.StringComparison]::OrdinalIgnoreCase)) {
+        foreach ($target in @('\\<computer>', "\\$env:COMPUTERNAME", '\\localhost', '\\*', '@file')) {
+            if ([string]::IsNullOrWhiteSpace($currentWord) -or $target.StartsWith($typedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
                 [void]$results.Add((New-PsExecCompletionResult -CompletionText $target -ResultType 'ParameterValue' -ToolTip 'PsExec remote target placeholder.'))
             }
         }
@@ -357,10 +402,16 @@ function Complete-PsExec {
         [void]$results.Add((New-PsExecCompletionResult -CompletionText $spec.Token -ResultType 'ParameterName' -ToolTip $spec.Description))
     }
 
-    if ($copyMode) {
+    if ($copyMode -and -not $currentWord.StartsWith('-')) {
         [void]$results.AddRange(@(Get-PsExecExecutableCompletions -CurrentWord $currentWord))
-    } elseif (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $currentWord.StartsWith('-')) {
-        [void]$results.Add((New-PsExecCompletionResult -CompletionText '<command>' -ResultType 'ParameterValue' -ToolTip 'Remote command or command path.'))
+    }
+
+    if ($results.Count -eq 0 -and ($typedTarget.StartsWith('\') -or $typedTarget.StartsWith('/'))) {
+        # A partially typed UNC target or slash form that matches no placeholder:
+        # echo it back rather than proposing a command in a slot that cannot
+        # hold one.
+        $echoToolTip = if ($typedTarget.StartsWith('\')) { 'Remote computer name.' } else { 'PsExec switch or command.' }
+        [void]$results.Add((New-PsExecCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip $echoToolTip))
     }
 
     @($results.ToArray())
