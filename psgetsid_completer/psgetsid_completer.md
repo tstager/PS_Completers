@@ -36,20 +36,23 @@ The completer uses a small script-scoped catalog for the locally confirmed surfa
 - `-u`
 - `-p`
 - `-nobanner`
+- `-accepteula` (accepted by the binary, never printed by its help)
 - `-?`
 - `/?`
+
+Every dash switch also has a slash twin (`/nobanner`, `/accepteula`, `/u`, `/p`): typing `/` offers the slash forms, and a slash form already on the line counts as the same switch.
 
 It does not attempt remote discovery or remote enumeration.
 
 ### Token-state parsing
-`Complete-PsGetsid` reconstructs the active token from the command line when needed and scans prior tokens to determine:
+`Complete-PsGetsid` tokenizes the raw command text up to the cursor (rebased by the command's start offset), so only the tokens to the left of the caret count as prior state. The engine's `wordToComplete` is the current word; when the parser hands an empty word for an array-literal shape such as a trailing `\\server1,`, the raw token is used instead so comma-separated remote lists still complete. It scans the prior tokens to determine:
 - whether the command is in local or remote mode
 - whether the current position is the value slot for `-u` or `-p`
 - whether a remote target has already been supplied
 - whether an identity argument is already present
 - whether help mode is terminal
 
-That state is what keeps the completer aligned with normal registered runtime use and `TabExpansion2`.
+That state is what keeps the completer aligned with normal registered runtime use and `TabExpansion2`, including a cursor placed inside an earlier token.
 
 ### First positional ambiguity
 The first non-switch slot is intentionally modeled as ambiguous:
@@ -77,10 +80,11 @@ The completer supports the documented remote token shapes without trying to enum
 For `@file`, the completer uses local filesystem completion and preserves directory navigation by returning container results with a trailing path separator.
 
 ### Remote credential handling
-Once a remote target is present:
-- `-u` becomes available
-- `-p` becomes available only after a `-u` value has been supplied
-- `-nobanner` remains available as a singleton switch
+One switch model serves every position:
+- `-u` becomes available once a remote target is present
+- `-p` becomes available only after a `-u` value has been supplied (even if `-u` was typed without a remote target)
+- `-nobanner` and `-accepteula` remain available as singleton switches until used
+- `-?` and `/?` are offered only while nothing else has been typed
 
 The value slots provide placeholder hints:
 - `-u`:
@@ -103,6 +107,7 @@ At the start of the command, completion can suggest:
 - remote-target placeholders
 - local identity placeholders
 - `-nobanner`
+- `-accepteula`
 - `-?`
 - `/?`
 

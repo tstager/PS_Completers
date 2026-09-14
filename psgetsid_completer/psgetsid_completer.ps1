@@ -6,7 +6,6 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name PsGetsidCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PsGetsidCompletionCatalog = @{
         Initialized            = $false
-        RootSwitchOrder        = @('-nobanner', '-?', '/?')
         SwitchInfo             = @{}
         FirstSlotIdentityHints = @('<account>', '<domain\user>', '<SID>')
         UsernameHints          = @('<username>', '<domain\user>')
@@ -56,6 +55,10 @@ function Initialize-PsGetsidCompletionCatalog {
             CompletionText = '-nobanner'
             Description    = 'Do not display the startup banner and copyright message.'
         }
+        '-accepteula' = @{
+            CompletionText = '-accepteula'
+            Description    = 'Suppress the Sysinternals license dialog on first run.'
+        }
         '-?'        = @{
             CompletionText = '-?'
             Description    = 'Displays PsGetsid help and terminates further argument completion.'
@@ -67,31 +70,6 @@ function Initialize-PsGetsidCompletionCatalog {
     }
 
     $script:PsGetsidCompletionCatalog.Initialized = $true
-}
-
-function Get-PsGetsidCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
 }
 
 function Remove-PsGetsidOuterQuotes {
@@ -126,6 +104,22 @@ function ConvertTo-PsGetsidQuotedValue {
     $Value
 }
 
+function ConvertTo-PsGetsidSwitchKey {
+    # PsTools accept both '-x' and '/x'; the catalog is keyed on the dash form.
+    param([string]$Token)
+
+    if ([string]::IsNullOrWhiteSpace($Token)) {
+        return ''
+    }
+
+    $key = $Token.ToLowerInvariant()
+    if ($key.StartsWith('/') -and $key -ne '/?') {
+        $key = '-' + $key.Substring(1)
+    }
+
+    $key
+}
+
 function Test-PsGetsidKnownSwitch {
     param([string]$Token)
 
@@ -133,7 +127,7 @@ function Test-PsGetsidKnownSwitch {
         return $false
     }
 
-    $script:PsGetsidCompletionCatalog.SwitchInfo.ContainsKey($Token.ToLowerInvariant())
+    $script:PsGetsidCompletionCatalog.SwitchInfo.ContainsKey((ConvertTo-PsGetsidSwitchKey -Token $Token))
 }
 
 function Test-PsGetsidRemoteTargetToken {
@@ -231,7 +225,7 @@ function Get-PsGetsidAtFileCompletions {
     $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
     $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
 
-    $results = foreach ($item in $items) {
+    $results = @(foreach ($item in $items) {
         $completionPath = if ($pathPortion -and -not [System.IO.Path]::IsPathRooted($pathPortion) -and $parent -ne '.') {
             Join-Path -Path $parent -ChildPath $item.Name
         } else {
@@ -245,7 +239,7 @@ function Get-PsGetsidAtFileCompletions {
         $completionText = ConvertTo-PsGetsidQuotedValue -Value ('@' + $completionPath) -AlwaysQuote:$alwaysQuote
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
         New-PsGetsidCompletionResult -CompletionText $completionText -ResultType $resultType -ToolTip $item.FullName
-    }
+    })
 
     if ($results.Count -gt 0) {
         return @($results)
@@ -320,28 +314,67 @@ function Get-PsGetsidIdentityCompletions {
             -GenericToolTip 'Account name, domain\user, or SID to translate.')
 }
 
+function Get-PsGetsidAvailableSwitchOrder {
+    # One switch model for every branch, derived from the live usage line:
+    # [\\computer[,computer2[,...] | @file] [-u Username [-p Password]]] [account | SID]
+    param([pscustomobject]$State)
+
+    $used = $State.UsedSwitchLookup
+    $order = New-Object System.Collections.Generic.List[string]
+
+    if (($State.RemoteTarget -or $used.ContainsKey('-p')) -and -not $used.ContainsKey('-u')) {
+        $order.Add('-u')
+    }
+
+    if ($State.ValuesBySwitch.ContainsKey('-u') -and -not $used.ContainsKey('-p')) {
+        $order.Add('-p')
+    }
+
+    if (-not $used.ContainsKey('-nobanner')) {
+        $order.Add('-nobanner')
+    }
+
+    if (-not $used.ContainsKey('-accepteula')) {
+        $order.Add('-accepteula')
+    }
+
+    if (-not $State.HasArguments) {
+        $order.Add('-?')
+        $order.Add('/?')
+    }
+
+    @($order.ToArray())
+}
+
 function Get-PsGetsidSwitchCompletions {
     param(
         [string]$CurrentWord,
-        [string[]]$SwitchOrder,
-        [hashtable]$UsedSwitchLookup
+        [string[]]$SwitchOrder
     )
 
     $results = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    $wantsSlashForm = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('/')
 
     foreach ($switchText in $SwitchOrder) {
         $key = $switchText.ToLowerInvariant()
-        if ($UsedSwitchLookup.ContainsKey($key)) {
+        $completionText = $switchText
+        if ($wantsSlashForm -and $switchText.StartsWith('-')) {
+            $completionText = '/' + $switchText.Substring(1)
+        }
+
+        if ($seen.ContainsKey($completionText)) {
             continue
         }
 
         if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and
-            -not $switchText.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            -not $completionText.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
+        $seen[$completionText] = $true
         $results.Add((New-PsGetsidCompletionResult `
-                    -CompletionText $switchText `
+                    -CompletionText $completionText `
                     -ResultType 'ParameterName' `
                     -ToolTip $script:PsGetsidCompletionCatalog.SwitchInfo[$key].Description))
     }
@@ -375,7 +408,7 @@ function Get-PsGetsidCommandState {
 
     for ($i = 0; $i -lt $TokensBeforeCurrent.Count; $i++) {
         $token = $TokensBeforeCurrent[$i]
-        $tokenKey = $token.ToLowerInvariant()
+        $tokenKey = ConvertTo-PsGetsidSwitchKey -Token $token
 
         if (Test-PsGetsidKnownSwitch -Token $token) {
             $usedSwitchLookup[$tokenKey] = $true
@@ -403,7 +436,7 @@ function Get-PsGetsidCommandState {
 
     $valueContext = $null
     if ($TokensBeforeCurrent.Count -gt 0) {
-        $lastToken = $TokensBeforeCurrent[-1].ToLowerInvariant()
+        $lastToken = ConvertTo-PsGetsidSwitchKey -Token $TokensBeforeCurrent[-1]
         if ($valueTakingSwitches.ContainsKey($lastToken)) {
             $valueContext = $lastToken
         }
@@ -415,6 +448,7 @@ function Get-PsGetsidCommandState {
         RemoteTarget     = $remoteTarget
         Identity         = $identity
         ValueContext     = $valueContext
+        HasArguments     = ($TokensBeforeCurrent.Count -gt 0)
     }
 }
 
@@ -427,27 +461,26 @@ function Complete-PsGetsid {
 
     Initialize-PsGetsidCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
-    $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-PsGetsidCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
-        ''
-    } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PsGetsidCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    } else {
-        $wordToComplete
+    # Tokenize the raw command text up to the cursor (command-relative) so that a cursor
+    # inside an earlier token only sees the tokens to its left.
+    $line = $commandAst.Extent.Text
+    $relativeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
+    $linePrefix = $line.Substring(0, $relativeCursor)
+    $hasTrailingSpace = ($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length -or $linePrefix -match '\s$'
+    $prefixTokens = @([regex]::Matches($linePrefix, '"[^"]*"?|\S+') | ForEach-Object { $_.Value })
+    $argumentTokens = @($prefixTokens | Select-Object -Skip 1)
+
+    $rawCurrentWord = ''
+    $tokensBeforeCurrent = @($argumentTokens)
+    if (-not $hasTrailingSpace -and $argumentTokens.Count -gt 0) {
+        $rawCurrentWord = [string]$argumentTokens[-1]
+        $tokensBeforeCurrent = @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
     }
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
-    }
+    # The engine's word is preferred (it resolves $env: references and closes an open quote);
+    # a comma-separated remote list such as a trailing '\\a,' is an array literal to the
+    # parser and reaches us as an empty word, so fall back to the raw token then.
+    $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { $rawCurrentWord } else { $wordToComplete }
 
     $state = Get-PsGetsidCommandState -TokensBeforeCurrent $tokensBeforeCurrent
     $usedSwitchLookup = $state.UsedSwitchLookup
@@ -471,18 +504,13 @@ function Complete-PsGetsid {
         }
     }
 
-    $allowRootHelp = -not $state.RemoteTarget -and -not $state.Identity -and -not $usedSwitchLookup.ContainsKey('-u') -and -not $usedSwitchLookup.ContainsKey('-p')
-    $rootSwitchOrder = if ($allowRootHelp) {
-        @($script:PsGetsidCompletionCatalog.RootSwitchOrder)
-    } else {
-        @()
+    $switchOrder = @(Get-PsGetsidAvailableSwitchOrder -State $state)
+
+    if ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/')) {
+        return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $switchOrder)
     }
 
     if (-not $state.RemoteTarget -and -not $state.Identity) {
-        if ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/')) {
-            return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $rootSwitchOrder -UsedSwitchLookup $usedSwitchLookup)
-        }
-
         if ($currentWord.StartsWith('\') -or $currentWord.StartsWith('@') -or $currentWord.StartsWith('"@')) {
             return @(Get-PsGetsidRemoteTargetCompletions -CurrentWord $currentWord)
         }
@@ -499,67 +527,33 @@ function Complete-PsGetsid {
             $results.Add($result)
         }
 
-        foreach ($result in @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $rootSwitchOrder -UsedSwitchLookup $usedSwitchLookup)) {
-            $results.Add($result)
+        if ([string]::IsNullOrWhiteSpace($currentWord)) {
+            foreach ($result in @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $switchOrder)) {
+                $results.Add($result)
+            }
         }
 
         return @($results.ToArray())
     }
 
-    if ($state.RemoteTarget) {
-        if ($currentWord.StartsWith('-')) {
-            $remoteSwitchOrder = New-Object System.Collections.Generic.List[string]
-
-            if (-not $usedSwitchLookup.ContainsKey('-u')) {
-                $remoteSwitchOrder.Add('-u')
-            }
-
-            if ($state.ValuesBySwitch.ContainsKey('-u') -and -not $usedSwitchLookup.ContainsKey('-p')) {
-                $remoteSwitchOrder.Add('-p')
-            }
-
-            if (-not $usedSwitchLookup.ContainsKey('-nobanner')) {
-                $remoteSwitchOrder.Add('-nobanner')
-            }
-
-            return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder @($remoteSwitchOrder.ToArray()) -UsedSwitchLookup $usedSwitchLookup)
-        }
-
+    if ($state.RemoteTarget -and -not $state.Identity) {
         $results = New-Object System.Collections.Generic.List[object]
 
-        if (-not $state.Identity) {
-            foreach ($result in @(Get-PsGetsidIdentityCompletions -CurrentWord $currentWord)) {
-                $results.Add($result)
-            }
+        foreach ($result in @(Get-PsGetsidIdentityCompletions -CurrentWord $currentWord)) {
+            $results.Add($result)
         }
 
         if ([string]::IsNullOrWhiteSpace($currentWord)) {
-            foreach ($result in @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder @('-u', '-p', '-nobanner') -UsedSwitchLookup $usedSwitchLookup)) {
-                if ($result.CompletionText -eq '-p' -and -not $state.ValuesBySwitch.ContainsKey('-u')) {
-                    continue
-                }
-
-                if ($result.CompletionText -eq '-u' -and $usedSwitchLookup.ContainsKey('-u')) {
-                    continue
-                }
-
+            foreach ($result in @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $switchOrder)) {
                 $results.Add($result)
             }
         }
 
-        if ($results.Count -gt 0) {
-            return @($results.ToArray())
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $state.Identity) {
-            return @(Get-PsGetsidIdentityCompletions -CurrentWord $currentWord)
-        }
-
-        return @()
+        return @($results.ToArray())
     }
 
-    if ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/')) {
-        return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder @('-nobanner') -UsedSwitchLookup $usedSwitchLookup)
+    if ([string]::IsNullOrWhiteSpace($currentWord)) {
+        return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $switchOrder)
     }
 
     @()
