@@ -87,7 +87,9 @@ function Get-PlaywrightCliMetadata {
         New-PlaywrightCliCommandSpec -Name 'open' -Description 'Open the browser.' -Positionals @('Url') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--browser') -Description 'Browser or chrome channel to use.' -ValueKind 'Browser'
             New-PlaywrightCliOptionSpec -Tokens @('--config') -Description 'Path to the configuration file.' -ValueKind 'FilePath'
+            New-PlaywrightCliOptionSpec -Tokens @('--device') -Description 'Emulate a specific device, for example "iPhone 15".' -ValueKind 'DeviceName'
             New-PlaywrightCliOptionSpec -Tokens @('--headed') -Description 'Run browser in headed mode.'
+            New-PlaywrightCliOptionSpec -Tokens @('--mobile') -Description 'Emulate a generic mobile device.'
             New-PlaywrightCliOptionSpec -Tokens @('--persistent') -Description 'Use a persistent browser profile.'
             New-PlaywrightCliOptionSpec -Tokens @('--profile') -Description 'Store the persistent profile in the specified directory.' -ValueKind 'DirectoryPath'
         )
@@ -99,8 +101,11 @@ function Get-PlaywrightCliMetadata {
             New-PlaywrightCliOptionSpec -Tokens @('--session') -Description 'Session name.' -ValueKind 'SessionName'
         )
         New-PlaywrightCliCommandSpec -Name 'close' -Description 'Close the browser.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'detach' -Description 'Detach from an attached browser.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'goto' -Description 'Navigate to a URL.' -Positionals @('Url') -Options @()
-        New-PlaywrightCliCommandSpec -Name 'type' -Description 'Type text into the active editable element.' -Positionals @('Text') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'type' -Description 'Type text into the active editable element.' -Positionals @('Text') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--submit') -Description 'Press Enter after typing the text.'
+        )
         New-PlaywrightCliCommandSpec -Name 'click' -Description 'Perform click on a web page.' -Positionals @('Target', 'MouseButton') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--modifiers') -Description 'Modifier keys to press.' -ValueKind 'ModifierKeys'
         )
@@ -111,6 +116,10 @@ function Get-PlaywrightCliMetadata {
             New-PlaywrightCliOptionSpec -Tokens @('--submit') -Description 'Press Enter after filling text.'
         )
         New-PlaywrightCliCommandSpec -Name 'drag' -Description 'Perform drag and drop between two elements.' -Positionals @('Target', 'Target') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'drop' -Description 'Drop files or data onto an element.' -Positionals @('Target') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--path') -Description 'Absolute path to a file to drop onto the element (repeatable).' -ValueKind 'FilePath'
+            New-PlaywrightCliOptionSpec -Tokens @('--data') -Description 'Data to drop in "mime/type=value" format (repeatable).' -ValueKind 'DropData'
+        )
         New-PlaywrightCliCommandSpec -Name 'hover' -Description 'Hover over an element on the page.' -Positionals @('Target') -Options @()
         New-PlaywrightCliCommandSpec -Name 'select' -Description 'Select an option in a dropdown.' -Positionals @('Target', 'DropdownValue') -Options @()
         New-PlaywrightCliCommandSpec -Name 'upload' -Description 'Upload one or more files.' -Positionals @('FilePath') -Options @()
@@ -119,6 +128,10 @@ function Get-PlaywrightCliMetadata {
         New-PlaywrightCliCommandSpec -Name 'snapshot' -Description 'Capture page snapshot to obtain element references.' -Positionals @('Target') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save snapshot to a markdown file.' -ValueKind 'FilePath'
             New-PlaywrightCliOptionSpec -Tokens @('--depth') -Description 'Limit snapshot depth.' -ValueKind 'Number'
+            New-PlaywrightCliOptionSpec -Tokens @('--boxes') -Description 'Include each element''s bounding box in the snapshot.'
+        )
+        New-PlaywrightCliCommandSpec -Name 'find' -Description 'Search the page snapshot for text or a regexp.' -Positionals @('Text') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--regex') -Description 'Regular expression to search for instead of plain text.' -ValueKind 'RegexFilter'
         )
         New-PlaywrightCliCommandSpec -Name 'eval' -Description 'Evaluate JavaScript expression on the page or an element.' -Positionals @('JavascriptExpression', 'Target') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save evaluation result to a file.' -ValueKind 'FilePath'
@@ -139,7 +152,9 @@ function Get-PlaywrightCliMetadata {
         New-PlaywrightCliCommandSpec -Name 'mousewheel' -Description 'Scroll mouse wheel.' -Positionals @('Number', 'Number') -Options @()
         New-PlaywrightCliCommandSpec -Name 'screenshot' -Description 'Capture a screenshot of the current page or an element.' -Positionals @('Target') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'File name to save the screenshot to.' -ValueKind 'FilePath'
+            New-PlaywrightCliOptionSpec -Tokens @('--type') -Description 'Image format; inferred from the filename extension when unset.' -ValueKind 'ImageFormat'
             New-PlaywrightCliOptionSpec -Tokens @('--full-page') -Description 'Capture the full scrollable page.'
+            New-PlaywrightCliOptionSpec -Tokens @('--hires') -Description 'Capture a high-resolution screenshot using device pixels.'
         )
         New-PlaywrightCliCommandSpec -Name 'pdf' -Description 'Save the page as PDF.' -Positionals @() -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'File name to save the PDF to.' -ValueKind 'FilePath'
@@ -184,6 +199,26 @@ function Get-PlaywrightCliMetadata {
         )
         New-PlaywrightCliCommandSpec -Name 'route-list' -Description 'List all active network routes.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'unroute' -Description 'Remove routes matching a pattern.' -Positionals @('RoutePattern') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'requests' -Description 'List all network requests since loading the page, numbered for the request command.' -Positionals @() -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--static') -Description 'Include successful static resources such as images, fonts and scripts.'
+            New-PlaywrightCliOptionSpec -Tokens @('--filter') -Description 'Only return requests whose URL matches this regexp.' -ValueKind 'RegexFilter'
+            New-PlaywrightCliOptionSpec -Tokens @('--clear') -Description 'Clear the network list.'
+        )
+        New-PlaywrightCliCommandSpec -Name 'request' -Description 'Show full details of a single network request by its number.' -Positionals @('RequestIndex') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save the result to a file instead of returning it as text.' -ValueKind 'FilePath'
+        )
+        New-PlaywrightCliCommandSpec -Name 'request-headers' -Description 'Print only the request headers of a single network request.' -Positionals @('RequestIndex') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save the result to a file instead of returning it as text.' -ValueKind 'FilePath'
+        )
+        New-PlaywrightCliCommandSpec -Name 'request-body' -Description 'Print only the request body of a single network request.' -Positionals @('RequestIndex') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save the result to a file instead of returning it as text.' -ValueKind 'FilePath'
+        )
+        New-PlaywrightCliCommandSpec -Name 'response-headers' -Description 'Print only the response headers of a single network request.' -Positionals @('RequestIndex') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save the result to a file instead of returning it as text.' -ValueKind 'FilePath'
+        )
+        New-PlaywrightCliCommandSpec -Name 'response-body' -Description 'Print the response body of a single network request.' -Positionals @('RequestIndex') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Save the result to a file instead of returning it as text.' -ValueKind 'FilePath'
+        )
         New-PlaywrightCliCommandSpec -Name 'network-state-set' -Description 'Set the browser network state to online or offline.' -Positionals @('NetworkState') -Options @()
         New-PlaywrightCliCommandSpec -Name 'console' -Description 'List console messages.' -Positionals @('ConsoleLevel') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--clear') -Description 'Clear the console list.'
@@ -191,13 +226,8 @@ function Get-PlaywrightCliMetadata {
         New-PlaywrightCliCommandSpec -Name 'run-code' -Description 'Run a Playwright code snippet.' -Positionals @('PlaywrightCode') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--filename') -Description 'Load code from the specified file.' -ValueKind 'FilePath'
         )
-        New-PlaywrightCliCommandSpec -Name 'network' -Description 'List network requests since loading the page.' -Positionals @() -Options @(
-            New-PlaywrightCliOptionSpec -Tokens @('--static') -Description 'Include successful static resources.'
-            New-PlaywrightCliOptionSpec -Tokens @('--request-body') -Description 'Include request bodies.'
-            New-PlaywrightCliOptionSpec -Tokens @('--request-headers') -Description 'Include request headers.'
-            New-PlaywrightCliOptionSpec -Tokens @('--filter') -Description 'Only return requests whose URL matches this regexp.' -ValueKind 'RegexFilter'
-            New-PlaywrightCliOptionSpec -Tokens @('--clear') -Description 'Clear the network list.'
-        )
+        New-PlaywrightCliCommandSpec -Name 'recording-start' -Description 'Start recording user actions.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'recording-stop' -Description 'Stop recording user actions and print them as Playwright code.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'tracing-start' -Description 'Start trace recording.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'tracing-stop' -Description 'Stop trace recording.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'video-start' -Description 'Start video recording.' -Positionals @('FilePath') -Options @(
@@ -208,12 +238,30 @@ function Get-PlaywrightCliMetadata {
             New-PlaywrightCliOptionSpec -Tokens @('--description') -Description 'Chapter description.' -ValueKind 'ChapterDescription'
             New-PlaywrightCliOptionSpec -Tokens @('--duration') -Description 'Duration in milliseconds for the chapter card.' -ValueKind 'Number'
         )
-        New-PlaywrightCliCommandSpec -Name 'show' -Description 'Show browser DevTools.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'video-show-actions' -Description 'Annotate subsequent actions on the page with a callout and target highlight.' -Positionals @() -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--duration') -Description 'How long each action annotation stays on screen, in milliseconds.' -ValueKind 'Number'
+            New-PlaywrightCliOptionSpec -Tokens @('--position') -Description 'Where to place the action title.' -ValueKind 'ActionPosition'
+            New-PlaywrightCliOptionSpec -Tokens @('--cursor') -Description 'Cursor decoration between action points.' -ValueKind 'CursorStyle'
+        )
+        New-PlaywrightCliCommandSpec -Name 'video-hide-actions' -Description 'Stop annotating actions performed on the page.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'show' -Description 'Show the Playwright dashboard.' -Positionals @() -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--port') -Description 'Start as a blocking HTTP server on this port (0 picks a random port).' -ValueKind 'Number'
+            New-PlaywrightCliOptionSpec -Tokens @('--host') -Description 'Host to bind to when using --port.' -ValueKind 'HostName'
+            New-PlaywrightCliOptionSpec -Tokens @('--annotate') -Description 'Switch the dashboard into annotation mode.'
+            New-PlaywrightCliOptionSpec -Tokens @('--kill') -Description 'Kill the dashboard daemon.'
+        )
         New-PlaywrightCliCommandSpec -Name 'pause-at' -Description 'Run the test to a location and pause there.' -Positionals @('SourceLocation') -Options @()
         New-PlaywrightCliCommandSpec -Name 'resume' -Description 'Resume the test execution.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'step-over' -Description 'Step over the next call in the test.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'generate-locator' -Description 'Generate a Playwright locator for the given element.' -Positionals @('Target') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'highlight' -Description 'Show (or with --hide, remove) a highlight overlay for an element.' -Positionals @('Target') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--hide') -Description 'Hide the highlight for this element, or all highlights when no element is given.'
+            New-PlaywrightCliOptionSpec -Tokens @('--style') -Description 'Additional inline CSS applied to the highlight overlay.' -ValueKind 'CssStyle'
+        )
+        New-PlaywrightCliCommandSpec -Name 'config-print' -Description 'Print the effective configuration.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'install' -Description 'Initialize the workspace.' -Positionals @() -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--skills') -Description 'Install skills.' -ValueKind 'SkillSet'
+            New-PlaywrightCliOptionSpec -Tokens @('--global') -Description 'Install skills into the home directory instead of the workspace (requires --skills).'
         )
         New-PlaywrightCliCommandSpec -Name 'install-browser' -Description 'Install browser binaries.' -Positionals @('InstallBrowser') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--with-deps') -Description 'Install system dependencies for browsers.'
@@ -228,7 +276,7 @@ function Get-PlaywrightCliMetadata {
         )
         New-PlaywrightCliCommandSpec -Name 'close-all' -Description 'Close all browser sessions.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'kill-all' -Description 'Forcefully kill all browser sessions.' -Positionals @() -Options @()
-        New-PlaywrightCliCommandSpec -Name 'help' -Description 'Display command help.' -Positionals @('CommandName') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'tray' -Description 'Run the Playwright tray application.' -Positionals @() -Options @()
     )
 
     $commandLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -241,14 +289,21 @@ function Get-PlaywrightCliMetadata {
         CommandLookup        = $commandLookup
         GlobalOptions        = @(
             New-PlaywrightCliOptionSpec -Tokens @('--help') -Description 'Print help for a command.' -ValueKind 'CommandName' -OptionalValue
+            New-PlaywrightCliOptionSpec -Tokens @('--json') -Description 'Output the response as JSON.'
             New-PlaywrightCliOptionSpec -Tokens @('--raw') -Description 'Output only the result value, without status and code.'
             New-PlaywrightCliOptionSpec -Tokens @('--version') -Description 'Print version.'
             New-PlaywrightCliOptionSpec -Tokens @('-s') -Description 'Session name for the command invocation.' -ValueKind 'SessionName' -CompletionText '-s='
         )
         BrowserValues        = @('chrome', 'firefox', 'webkit', 'msedge')
-        InstallBrowserValues = @('chromium', 'chrome', 'firefox', 'webkit', 'msedge')
+        InstallBrowserValues = @(
+            'chromium', 'chromium-headless-shell', 'chrome', 'chrome-beta', 'chrome-dev', 'chrome-canary',
+            'firefox', 'webkit', 'msedge', 'msedge-beta', 'msedge-dev', 'msedge-canary'
+        )
         MouseButtons         = @('left', 'right', 'middle')
-        ModifierKeys         = @('Alt', 'Control', 'Meta', 'Shift')
+        ModifierKeys         = @('Alt', 'Control', 'ControlOrMeta', 'Meta', 'Shift')
+        ImageFormats         = @('png', 'jpeg', 'webp')
+        ActionPositions      = @('top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right')
+        CursorStyles         = @('pointer', 'none')
         KeyboardKeys         = @(
             'Enter', 'Tab', 'Escape', 'Space', 'Backspace', 'Delete', 'Insert',
             'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
@@ -284,32 +339,37 @@ function Get-PlaywrightCliTokenText {
 function Get-PlaywrightCliProcessedTokens {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [string]$WordToComplete
+        [string]$WordToComplete,
+        [int]$CursorPosition
     )
 
     if ($CommandAst.CommandElements.Count -le 1) {
         return @()
     }
 
-    $tokens = @(
-        foreach ($element in @($CommandAst.CommandElements)[1..($CommandAst.CommandElements.Count - 1)]) {
-            if ($null -eq $element) {
-                continue
-            }
-
-            Get-PlaywrightCliTokenText -Element $element
-        }
-    )
-
-    if ($tokens.Count -gt 0 -and -not [string]::IsNullOrEmpty($WordToComplete) -and $tokens[-1] -eq $WordToComplete) {
-        if ($tokens.Count -eq 1) {
-            return @()
+    # Only the elements left of the cursor have been "processed"; the element that contains the
+    # cursor is the word being completed and anything right of it is ignored. Extent offsets and
+    # $CursorPosition are both absolute within the input line.
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($null -eq $element -or $element.Extent.StartOffset -ge $CursorPosition) {
+            break
         }
 
-        return @($tokens[0..($tokens.Count - 2)])
+        if ($element.Extent.EndOffset -ge $CursorPosition) {
+            break
+        }
+
+        [void]$tokens.Add((Get-PlaywrightCliTokenText -Element $element))
     }
 
-    @($tokens)
+    # A word PowerShell hands over that still sits at the end of the list (an empty cursor
+    # position, or a token that ends exactly at the cursor) is the current word, not a processed one.
+    if ($tokens.Count -gt 0 -and -not [string]::IsNullOrEmpty($WordToComplete) -and $tokens[$tokens.Count - 1] -eq $WordToComplete) {
+        $tokens.RemoveAt($tokens.Count - 1)
+    }
+
+    @($tokens.ToArray())
 }
 
 function Get-PlaywrightCliCommandSpec {
@@ -361,7 +421,9 @@ function Get-PlaywrightCliPathCompletions {
 
     $items = [System.Management.Automation.CompletionCompleters]::CompleteFilename($PathPrefix)
     foreach ($item in @($items)) {
-        if ($DirectoriesOnly -and -not (Test-Path -LiteralPath $item.CompletionText -PathType Container)) {
+        # CompleteFilename already quotes a path with spaces, so Test-Path on CompletionText would
+        # drop every such directory; its ResultType says whether the entry is a container.
+        if ($DirectoriesOnly -and $item.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
             continue
         }
 
@@ -401,7 +463,7 @@ function Get-PlaywrightCliValueCompletions {
             return
         }
 
-        if ($completionText -notlike "$WordToComplete*") {
+        if ($completionText -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             return
         }
 
@@ -453,7 +515,7 @@ function Get-PlaywrightCliValueCompletions {
             }
 
             foreach ($value in $metadata.ModifierKeys) {
-                if ($value -notlike "$valuePrefix*") {
+                if ($value -notlike ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*')) {
                     continue
                 }
 
@@ -491,6 +553,37 @@ function Get-PlaywrightCliValueCompletions {
             foreach ($value in $metadata.ConsoleLevels) {
                 & $addResult $value 'Minimum console level'
             }
+        }
+        'ImageFormat' {
+            foreach ($value in $metadata.ImageFormats) {
+                & $addResult $value 'Screenshot image format'
+            }
+        }
+        'ActionPosition' {
+            foreach ($value in $metadata.ActionPositions) {
+                & $addResult $value 'Action title position'
+            }
+        }
+        'CursorStyle' {
+            foreach ($value in $metadata.CursorStyles) {
+                & $addResult $value 'Cursor decoration'
+            }
+        }
+        'RequestIndex' {
+            & $addResult '<index>' '1-based request number as listed by requests'
+        }
+        'DeviceName' {
+            & $addResult '<device>' 'Device to emulate, for example "iPhone 15"'
+        }
+        'HostName' {
+            & $addResult 'localhost' 'Host to bind to'
+            & $addResult '<host>' 'Host to bind to'
+        }
+        'DropData' {
+            & $addResult '<mime/type=value>' 'Data to drop, for example text/plain=hello'
+        }
+        'CssStyle' {
+            & $addResult '<css>' 'Inline CSS, for example "outline: 2px dashed red"'
         }
         'ContentType' {
             foreach ($value in $metadata.ContentTypes) {
@@ -609,7 +702,7 @@ function Get-PlaywrightCliOptionCompletions {
 
     foreach ($option in @($Options)) {
         $completionText = $option.CompletionText
-        if ($completionText -notlike "$WordToComplete*") {
+        if ($completionText -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             continue
         }
 
@@ -630,9 +723,8 @@ function Complete-PlaywrightCli {
         [int]$CursorPosition
     )
 
-    $null = $CursorPosition
     $metadata = Get-PlaywrightCliMetadata
-    $tokens = @(Get-PlaywrightCliProcessedTokens -CommandAst $CommandAst -WordToComplete $WordToComplete)
+    $tokens = @(Get-PlaywrightCliProcessedTokens -CommandAst $CommandAst -WordToComplete $WordToComplete -CursorPosition $CursorPosition)
     $commandSpec = $null
     $positionalsConsumed = 0
     $expectingValue = $null

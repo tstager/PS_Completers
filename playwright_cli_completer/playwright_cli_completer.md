@@ -45,15 +45,15 @@ There are no top-level assignments, loops, external command calls, or registrati
 
 `Get-PlaywrightCliMetadata` lazily creates the command catalog the first time completion runs. It stores:
 
-- top-level commands and descriptions
+- all 90 top-level commands of `@playwright/cli` 0.1.19 and their descriptions (the same set the package's `help.json` catalog enumerates; the tool has no `help` verb, only the global `--help [command]`)
 - positional value kinds for each command
 - option tables for each command
-- global options such as `--help`, `--raw`, `--version`, and `-s=`
-- small enum tables for browsers, SameSite values, network state, and video sizes
+- global options `--help`, `--json`, `--raw`, `--version`, and `-s=`
+- small enum tables for browsers, install channels, SameSite values, network state, video sizes, screenshot image formats, and the `video-show-actions` position/cursor values
 
 ### 2. Command-context parsing
 
-`Complete-PlaywrightCli` walks the already-entered tokens and tracks:
+`Complete-PlaywrightCli` walks the tokens left of the cursor (the element under the cursor is the word being completed and anything right of it is ignored, so completing inside an earlier token works) and tracks:
 
 - the active command
 - how many positional arguments were already consumed
@@ -102,6 +102,9 @@ It also supplies concrete enums where the CLI help exposed useful fixed values, 
 - `cookie-set --sameSite` -> `Strict`, `Lax`, `None`
 - `network-state-set` -> `online`, `offline`
 - `install --skills` -> `claude`, `agents`
+- `screenshot --type` -> `png`, `jpeg`, `webp`
+- `video-show-actions --position` -> `top-left` ... `bottom-right`; `--cursor` -> `pointer`, `none`
+- `install-browser` -> `chromium`, `chromium-headless-shell`, `chrome`, the `-beta`/`-dev`/`-canary` channels, `firefox`, `webkit`, `msedge`
 
 For the global session selector, root completion suggests `-s=` to match the CLI usage string, and native value completion is available after `playwright-cli -s ` in real PowerShell.
 
@@ -113,9 +116,9 @@ The script intentionally covers the visible runtime help surface for the install
 - navigation, keyboard, and mouse commands
 - save/output commands like `screenshot` and `pdf`
 - storage commands like `cookie-set`, `localstorage-set`, and `sessionstorage-set`
-- network commands like `route`, `unroute`, and `network-state-set`
-- devtools/test-flow commands like `console`, `run-code`, `video-start`, and `pause-at`
-- workspace/session commands like `install`, `install-browser`, `list`, `close-all`, and `kill-all`
+- network commands like `requests`, `request`, `request-headers`, `response-body`, `route`, `unroute`, and `network-state-set`
+- devtools/test-flow commands like `console`, `run-code`, `recording-start`, `video-start`, `video-show-actions`, `show`, `pause-at`, `generate-locator`, and `highlight`
+- workspace/session commands like `install`, `install-browser`, `config-print`, `list`, `close-all`, `kill-all`, and `tray`
 
 The completer does **not** probe live browser sessions, tabs, selectors, cookies, or storage keys during completion. Those slots use placeholders instead of runtime enumeration.
 
