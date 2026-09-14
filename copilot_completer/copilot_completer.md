@@ -27,12 +27,18 @@ This completer is intentionally limited to CLI argv parsing. It does **not** att
 
 Top-level commands:
 
+- `completion <shell>` (`bash`, `zsh`, `fish`)
 - `help`
 - `init`
 - `login`
+- `mcp`
 - `plugin`
-- `update`
+- `plugins`
+- `skill`
+- `update [channel]` (`stable`, `prerelease`)
 - `version`
+
+An unknown command path never falls back to the root command list; only the global options are offered there.
 
 Help topics:
 
@@ -51,8 +57,28 @@ Plugin tree:
 - `plugin marketplace browse`
 - `plugin marketplace list`
 - `plugin marketplace remove`
+- `plugin marketplace update`
 - `plugin uninstall`
 - `plugin update`
+
+MCP tree:
+
+- `mcp add` (`--env`, `--header`, `--json`, `--show-secrets`, `--timeout`, `--tools`, `--transport` with `stdio`/`http`/`sse`)
+- `mcp get`, `mcp list`, `mcp remove`
+
+Plugins tree (`copilot plugins`, the cross-kind inspector):
+
+- `plugins disable` / `enable` / `remove|rm` (`--plugin`, `--mcp`, `--skill`)
+- `plugins install|add` (`--plugin`, `--mcp`, `--skill`, `--scope` with `user`/`project`)
+- `plugins list` (`--json`, `--kind`, `--scope`)
+- `plugins marketplace|marketplaces` with `add`, `browse`, `list|ls`, `remove|rm`, `update|refresh`
+- `plugins update` (`--all`)
+
+Skill tree:
+
+- `skill add` (`--project`)
+- `skill list` (`--json`)
+- `skill remove`
 
 ## Dynamic value providers
 
@@ -85,8 +111,12 @@ Notable value handling:
   - support optional values and suggest `on`, `off`
 - `login --host`
   - suggests example host URLs such as `https://github.com` and `https://example.ghe.com`
-- `--add-dir`, `--config-dir`, `--log-dir`, `--plugin-dir`
-  - use directory completion
+- `--add-dir`, `--config-dir`, `--log-dir`, `--plugin-dir`, `--extension-sdk-path`, `-C`
+  - use directory completion; a value ending in `\` or `/` (and `.`, `..`, `~\`) descends into that directory
+- `--attachment`
+  - uses file completion
+- `--mode` (`interactive`, `plan`, `autopilot`) and `--context` (`default`, `long_context`)
+  - closed enum sets
 - `--share[=path]`
   - supports inline `=` completion and file / directory path suggestions
 - `--additional-mcp-config`
@@ -126,6 +156,7 @@ Notable value handling:
 - The command / option tree is intentionally static so completion stays fast and predictable even if help text formatting changes.
 - Dynamic discovery is only used for values that are both useful and cheap to query locally.
 - Global options remain available under deeper command paths where the completer's parser still accepts them, not only at the root command.
+- Tokens are selected by their extent relative to the cursor, so completing a value mid-line (or with the command after another statement) uses only the text left of the cursor.
 - Optional-value switches such as `--resume`, `--share`, `--mouse`, and `--bash-env` are handled in both separated and inline `--flag=value` forms.
 - The completer does not infer live session IDs, marketplace plugin catalogs, or interactive in-session slash commands.
 - Runtime-backed suggestions depend on the installed `copilot` executable being available on `PATH`.
