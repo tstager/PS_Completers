@@ -7,6 +7,14 @@ if (-not (Get-Variable -Name HandleCompletionCatalog -Scope Script -ErrorAction 
     $script:HandleCompletionCatalog = @{
         Initialized             = $false
         SwitchOrder             = @('-a', '-l', '-c', '-y', '-s', '-g', '-u', '-v', '-vt', '-p', '-nobanner', '-?', '/?', '--help')
+        # handle's usage line is three alternative groups:
+        #   handle [[-a [-l]] [-v|-vt] [-u] | [-c <handle> [-y]] | [-s]] [-p ...] [name] [-nobanner]
+        # Switches outside this table (-g, -p, -nobanner, the help aliases) belong to every group.
+        SwitchGroups            = @{
+            '-a' = 'all'; '-l' = 'all'; '-v' = 'all'; '-vt' = 'all'; '-u' = 'all'
+            '-c' = 'close'; '-y' = 'close'
+            '-s' = 'summary'
+        }
         SwitchInfo              = @{}
         SearchPlaceholder       = '<name-fragment>'
         HandleValuePlaceholder  = '<hex-handle>'
@@ -201,30 +209,38 @@ function Update-HandleProcessCache {
 
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $idSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $entries = [System.Collections.Generic.List[object]]::new()
+    $nameEntries = [System.Collections.Generic.List[object]]::new()
+    $idEntries = [System.Collections.Generic.List[object]]::new()
 
     foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
         if ($process.ProcessName -and $nameSet.Add($process.ProcessName)) {
-            $entries.Add([pscustomobject]@{
+            $nameEntries.Add([pscustomobject]@{
                     CompletionText = $process.ProcessName
                     ResultType     = 'ParameterValue'
                     ToolTip        = "Process name $($process.ProcessName)"
                 })
         }
 
+        # PID 0 is the Idle pseudo-process and cannot be targeted.
+        if ($process.Id -eq 0) {
+            continue
+        }
+
         $processIdText = [string]$process.Id
         if ($processIdText -and $idSet.Add($processIdText)) {
-            $entries.Add([pscustomobject]@{
+            $idEntries.Add([pscustomobject]@{
                     CompletionText = $processIdText
                     ResultType     = 'ParameterValue'
-                    ToolTip        = "Process ID $processIdText"
+                    ToolTip        = "Process ID $processIdText ($($process.ProcessName))"
                 })
         }
     }
 
+    # handle's own help for -p says 'partial name accepted', so names are the primary
+    # input; keeping them in a separate list stops 500+ digits sorting ahead of them.
     $script:HandleCompletionCatalog.ProcessEntries = @(
-        $entries |
-            Sort-Object -Property CompletionText
+        @($nameEntries | Sort-Object -Property CompletionText) +
+        @($idEntries | Sort-Object -Property @{ Expression = { [int]$_.CompletionText } })
     )
     $script:HandleCompletionCatalog.ProcessCacheUpdated = Get-Date
 }
@@ -336,14 +352,7 @@ function Get-HandleCommandState {
             continue
         }
 
-        if ($lookup -eq '-a') {
-            $mode = 'all'
-            $usedSwitchLookup[$lookup] = $true
-            continue
-        }
-
         if ($lookup -eq '-c') {
-            $mode = 'close'
             $usedSwitchLookup[$lookup] = $true
             if ($index -eq ($TokensBeforeCurrent.Count - 1)) {
                 $valueContext = '-c'
@@ -366,12 +375,6 @@ function Get-HandleCommandState {
             continue
         }
 
-        if ($lookup -eq '-s') {
-            $mode = 'summary'
-            $usedSwitchLookup[$lookup] = $true
-            continue
-        }
-
         if ($lookup.StartsWith('-')) {
             $usedSwitchLookup[$lookup] = $true
             continue
@@ -379,6 +382,15 @@ function Get-HandleCommandState {
 
         if (-not $nameTarget) {
             $nameTarget = $token
+        }
+    }
+
+    # The first group-exclusive switch on the line, in catalog order, fixes the
+    # alternative group; everything from the other two groups is then out of grammar.
+    foreach ($token in $script:HandleCompletionCatalog.SwitchOrder) {
+        if ($usedSwitchLookup.ContainsKey($token) -and $script:HandleCompletionCatalog.SwitchGroups.ContainsKey($token)) {
+            $mode = $script:HandleCompletionCatalog.SwitchGroups[$token]
+            break
         }
     }
 
@@ -416,19 +428,17 @@ function Get-HandleSwitchCompletions {
             continue
         }
 
-        if ($token -eq '-l' -and $State.Mode -ne 'all') {
+        if ($script:HandleCompletionCatalog.SwitchGroups.ContainsKey($token) -and
+            $State.Mode -ne 'search' -and
+            $script:HandleCompletionCatalog.SwitchGroups[$token] -ne $State.Mode) {
             continue
         }
 
-        if ($token -eq '-y' -and $State.Mode -ne 'close') {
+        if ($token -eq '-l' -and -not $State.UsedSwitchLookup.ContainsKey('-a')) {
             continue
         }
 
-        if ($token -eq '-c' -and $State.Mode -eq 'all') {
-            continue
-        }
-
-        if ($token -eq '-s' -and $State.Mode -eq 'all') {
+        if ($token -eq '-y' -and -not $State.UsedSwitchLookup.ContainsKey('-c')) {
             continue
         }
 
@@ -460,12 +470,10 @@ function Complete-Handle {
     $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $safeCursor)
     $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    [object[]]$argumentTokens = if ($commandTokens.Count -gt 1) {
-        @($commandTokens | Select-Object -Skip 1)
-    } else {
-        @()
-    }
-    $argumentTokens = @($argumentTokens)
+    # Wrap the whole if-expression in @(): an [object[]]-constrained assignment from a
+    # branch that yields nothing binds $null, and re-wrapping that $null manufactures a
+    # one-element array holding $null, which would make every Count -eq 0 test false.
+    $argumentTokens = @(if ($commandTokens.Count -gt 1) { $commandTokens | Select-Object -Skip 1 })
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
         Get-HandleCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
@@ -474,14 +482,11 @@ function Complete-Handle {
     }
 
     $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
-    [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 0) {
-        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
-    } else {
-        @()
-    }
-    $tokensBeforeCurrent = @($tokensBeforeCurrent)
+    $tokensBeforeCurrent = @(if ($hasTrailingSpace) {
+            $argumentTokens
+        } elseif ($argumentTokens.Count -gt 0) {
+            $argumentTokens | Select-Object -First ($argumentTokens.Count - 1)
+        })
 
     $state = Get-HandleCommandState -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -493,7 +498,10 @@ function Complete-Handle {
 
     switch ($state.ValueContext) {
         '-c' {
-            return @(Get-HandleSampleValueResults -CurrentValue $currentWord -Samples @('0000007c', '00000120', '000004b0') -Placeholder $script:HandleCompletionCatalog.HandleValuePlaceholder -ToolTip 'Handle value interpreted as hexadecimal.')
+            # No sample handle values: -c closes an arbitrary handle in another process
+            # and handle's own help warns it can destabilise the system, so an invented
+            # value that looks real must never be offered as a completion.
+            return @(New-HandleLiteralValueResults -CurrentValue $currentWord -Placeholder $script:HandleCompletionCatalog.HandleValuePlaceholder -ToolTip $script:HandleCompletionCatalog.SwitchInfo['-c'])
         }
         '-p' {
             $idsOnly = ($state.Mode -eq 'close')
@@ -501,7 +509,7 @@ function Complete-Handle {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
+    if (-not [string]::IsNullOrWhiteSpace($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/'))) {
         return @(Get-HandleSwitchCompletions -CurrentWord $currentWord -State $state -NoArgumentsYet:($tokensBeforeCurrent.Count -eq 0))
     }
 
@@ -519,7 +527,13 @@ function Complete-Handle {
     }
 
     if (-not $state.NameTarget -and $state.Mode -ne 'close') {
-        return @(New-HandleLiteralValueResults -CurrentValue $currentWord -Placeholder $script:HandleCompletionCatalog.SearchPlaceholder -ToolTip 'Object name fragment to search for.')
+        # handle's canonical example searches a path fragment, so the filesystem is the
+        # only real source of candidates here; echoing the typed word back is a no-op
+        # that merely suppresses the completion the slot actually wants.
+        return @(
+            [System.Management.Automation.CompletionCompleters]::CompleteFilename($currentWord) |
+                ForEach-Object { New-HandleCompletionResult -CompletionText $_.CompletionText -ResultType $_.ResultType -ToolTip 'Object name fragment to search for.' }
+        )
     }
 
     @()
