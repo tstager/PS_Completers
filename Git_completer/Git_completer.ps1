@@ -118,6 +118,29 @@ function Complete-GitNative {
         ) | Where-Object { $_ }
     }
 
+    $getLocalBranches = {
+        @(git for-each-ref --format='%(refname:short)' refs/heads 2>$null) | Where-Object { $_ }
+    }
+
+    $getTags = {
+        @(git for-each-ref --format='%(refname:short)' refs/tags 2>$null) | Where-Object { $_ }
+    }
+
+    # Branch names on one remote, without the '<remote>/' prefix, as fetch/pull refspecs name them.
+    $getRemoteBranches = {
+        param([string]$remoteName)
+
+        $prefix = "$remoteName/"
+        @(git for-each-ref --format='%(refname:short)' "refs/remotes/$remoteName" 2>$null) |
+            Where-Object { $_ -and $_.StartsWith($prefix) } |
+            ForEach-Object { $_.Substring($prefix.Length) } |
+            Where-Object { $_ -ne 'HEAD' }
+    }
+
+    $getStashEntries = {
+        @(git stash list --format='%gd' 2>$null) | Where-Object { $_ }
+    }
+
     $getRemotes = {
         @(git remote 2>$null)
     }
@@ -137,21 +160,32 @@ function Complete-GitNative {
         ) | Where-Object { $_ }
     }
 
+    # Fallback for the root option list; the live list is parsed from the usage block of
+    # 'git --help' by $getGlobalFlags below.
     $globalGitFlags = @(
-        '--help',
+        '-v',
         '--version',
+        '-h',
+        '--help',
+        '-C',
+        '-c',
         '--exec-path',
         '--html-path',
         '--man-path',
         '--info-path',
+        '-p',
         '--paginate',
+        '-P',
+        '--no-pager',
+        '--no-replace-objects',
+        '--no-lazy-fetch',
+        '--no-optional-locks',
+        '--no-advice',
+        '--bare',
         '--git-dir',
         '--work-tree',
         '--namespace',
-        '-C',
-        '-c',
-        '-p',
-        '--no-pager'
+        '--config-env'
     )
 
     $globalGitFlagsWithValues = @(
@@ -189,6 +223,37 @@ function Complete-GitNative {
         $aliases
     }
 
+    # The root usage block of 'git --help' lists every global option in bracket groups
+    # ('[-v | --version] [-C <path>] [--no-advice] ...'), so the list follows the installed git.
+    $getGlobalFlags = {
+        if ($metadataCache.ContainsKey('<global-flags>')) {
+            return $metadataCache['<global-flags>']
+        }
+
+        $flags = [System.Collections.Generic.List[string]]::new()
+        $inUsage = $false
+        foreach ($helpLine in @($null | git --help 2>$null)) {
+            if ($helpLine -match '^usage:\s+git\b') {
+                $inUsage = $true
+            }
+            elseif ($inUsage -and [string]::IsNullOrWhiteSpace($helpLine)) {
+                break
+            }
+
+            if (-not $inUsage) {
+                continue
+            }
+
+            foreach ($match in [regex]::Matches($helpLine, '(?<=[\[\s|])(-[A-Za-z]|--[A-Za-z][A-Za-z0-9-]*)(?=[\s\]|=])')) {
+                $flags.Add($match.Value)
+            }
+        }
+
+        $result = if ($flags.Count -gt 0) { @($flags | Select-Object -Unique) } else { @($globalGitFlags) }
+        $metadataCache['<global-flags>'] = $result
+        $result
+    }
+
     $getCompletionScriptData = {
         if ($metadataCache.ContainsKey('<completion-script>')) {
             return $metadataCache['<completion-script>']
@@ -205,16 +270,40 @@ function Complete-GitNative {
             return $data
         }
 
-        $installRoot = Split-Path -Path (Split-Path -Path $gitCommand.Source -Parent) -Parent
+        # git.exe can resolve from <root>\cmd, <root>\bin or <root>\mingw64\bin, so no fixed number
+        # of Split-Path hops finds the install root. Walk upward from the resolved directory and
+        # from 'git --exec-path' (<root>\mingw64\libexec\git-core), probing the completion script
+        # at each level; the first hit wins.
+        $startDirectories = [System.Collections.Generic.List[string]]::new()
+        $startDirectories.Add((Split-Path -Path $gitCommand.Source -Parent))
+        $execPath = [string](@($null | git --exec-path 2>$null) | Select-Object -First 1)
+        if (-not [string]::IsNullOrWhiteSpace($execPath)) {
+            $startDirectories.Add($execPath.Replace('/', '\'))
+        }
+
+        $relativeCandidates = @(
+            'share\git\completion\git-completion.bash',
+            'mingw64\share\git\completion\git-completion.bash',
+            'mingw32\share\git\completion\git-completion.bash',
+            'usr\share\git\completion\git-completion.bash'
+        )
+
         $scriptPath = $null
-        foreach ($relativePath in @(
-                'mingw64\share\git\completion\git-completion.bash',
-                'mingw32\share\git\completion\git-completion.bash',
-                'usr\share\git\completion\git-completion.bash'
-            )) {
-            $candidate = Join-Path -Path $installRoot -ChildPath $relativePath
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                $scriptPath = $candidate
+        foreach ($startDirectory in $startDirectories) {
+            $directory = $startDirectory
+            for ($level = 0; $level -lt 5 -and -not $scriptPath -and -not [string]::IsNullOrWhiteSpace($directory); $level++) {
+                foreach ($relativePath in $relativeCandidates) {
+                    $candidate = Join-Path -Path $directory -ChildPath $relativePath
+                    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                        $scriptPath = $candidate
+                        break
+                    }
+                }
+
+                $directory = Split-Path -Path $directory -Parent
+            }
+
+            if ($scriptPath) {
                 break
             }
         }
@@ -388,13 +477,14 @@ function Complete-GitNative {
         }
 
         $metadata = [pscustomobject]@{
-            Flags       = @($globalGitFlags)
-            Subcommands = @(
+            Flags              = @($globalGitFlags)
+            Subcommands        = @(
                 $subcommands |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                     Sort-Object -Unique
             )
-            OptionSpecs = @{}
+            OptionSpecs        = @{}
+            OptionDescriptions = @{}
         }
 
         $metadataCache['<root>'] = $metadata
@@ -438,9 +528,10 @@ function Complete-GitNative {
 
                 if (-not $aliasMetadata) {
                     $aliasMetadata = [pscustomobject]@{
-                        Flags       = @()
-                        Subcommands = @()
-                        OptionSpecs = @{}
+                        Flags              = @()
+                        Subcommands        = @()
+                        OptionSpecs        = @{}
+                        OptionDescriptions = @{}
                     }
                 }
 
@@ -457,6 +548,8 @@ function Complete-GitNative {
         $optionPattern = '(?<!\w)(--\[(?:no-)\][A-Za-z0-9][A-Za-z0-9-]*|--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])'
         $flags = [System.Collections.Generic.List[string]]::new()
         $optionSpecs = @{}
+        $optionDescriptions = @{}
+        $describedOptions = @()
         foreach ($line in $helpLines) {
             foreach ($match in [regex]::Matches($line, $optionPattern)) {
                 $option = $match.Value
@@ -471,16 +564,42 @@ function Complete-GitNative {
 
             # The option column of an option row carries the argument the option takes, for
             # example '-F, --[no-]file <file>' or '--[no-]conflict <style>'. Everything after the
-            # last option token in that column is that argument's spec.
+            # last option token in that column is that argument's spec, and the description
+            # column (same line, or the indented continuation lines) may spell out the values
+            # a bare placeholder stands for ('optional modes: all, normal, no').
             if ($line -notmatch '^\s{4}\S') {
+                if ($describedOptions.Count -gt 0 -and $line -match '^\s{6,}\S') {
+                    foreach ($describedOption in $describedOptions) {
+                        $optionDescriptions[$describedOption] = ($optionDescriptions[$describedOption] + ' ' + $line.Trim()).Trim()
+                    }
+                }
+                else {
+                    $describedOptions = @()
+                }
+
                 continue
             }
 
-            $optionColumn = @($line.Trim() -split '\s{2,}')[0]
+            $columns = @($line.Trim() -split '\s{2,}', 2)
+            $optionColumn = $columns[0]
+            $description = if ($columns.Count -gt 1) { $columns[1].Trim() } else { '' }
             $columnMatches = @([regex]::Matches($optionColumn, $optionPattern))
             if ($columnMatches.Count -eq 0) {
+                $describedOptions = @()
                 continue
             }
+
+            $describedOptions = @(
+                foreach ($columnMatch in $columnMatches) {
+                    $specOption = $columnMatch.Value
+                    if ($specOption -match '^--\[no-\](.+)$') {
+                        $specOption = "--$($Matches[1])"
+                    }
+
+                    $optionDescriptions[$specOption] = $description
+                    $specOption
+                }
+            )
 
             $lastMatch = $columnMatches[$columnMatches.Count - 1]
             $spec = $optionColumn.Substring($lastMatch.Index + $lastMatch.Length).Trim()
@@ -488,12 +607,19 @@ function Complete-GitNative {
                 continue
             }
 
-            foreach ($columnMatch in $columnMatches) {
-                $specOption = $columnMatch.Value
-                if ($specOption -match '^--\[no-\](.+)$') {
-                    $specOption = "--$($Matches[1])"
+            # A long option column can run into its description with a single space
+            # ('--[no-]cleanup <mode> how to strip spaces ...'); keep only the argument spec.
+            $specSplit = [regex]::Match($spec, '^(?<spec>\[?=?(?:<[^>]+>|\([^)]*\))\]?)\s+(?<rest>\S.*)$')
+            if ($specSplit.Success) {
+                $spec = $specSplit.Groups['spec'].Value
+                if ([string]::IsNullOrWhiteSpace($description)) {
+                    foreach ($describedOption in $describedOptions) {
+                        $optionDescriptions[$describedOption] = $specSplit.Groups['rest'].Value.Trim()
+                    }
                 }
+            }
 
+            foreach ($specOption in $describedOptions) {
                 $optionSpecs[$specOption] = $spec
             }
         }
@@ -564,13 +690,65 @@ function Complete-GitNative {
         }
 
         $metadata = [pscustomobject]@{
-            Flags       = @($flags | Sort-Object -Unique)
-            Subcommands = @($subcommands | Sort-Object -Unique)
-            OptionSpecs = $optionSpecs
+            Flags              = @($flags | Sort-Object -Unique)
+            Subcommands        = @($subcommands | Sort-Object -Unique)
+            OptionSpecs        = $optionSpecs
+            OptionDescriptions = $optionDescriptions
         }
 
         $metadataCache[$cacheKey] = $metadata
         $metadata
+    }
+
+    # Values git documents only in prose, or not at all, for placeholder specs such as <mode>,
+    # <style>, <strategy> and <option>. Keyed by '<command> <option>'.
+    $curatedOptionValues = @{
+        'commit --cleanup'          = @('strip', 'whitespace', 'verbatim', 'scissors', 'default')
+        'commit -u'                 = @('all', 'normal', 'no')
+        'commit --untracked-files'  = @('all', 'normal', 'no')
+        'status -u'                 = @('all', 'normal', 'no')
+        'status --untracked-files'  = @('all', 'normal', 'no')
+        'checkout --conflict'       = @('merge', 'diff3', 'zdiff3')
+        'switch --conflict'         = @('merge', 'diff3', 'zdiff3')
+        'merge -s'                  = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'merge --strategy'          = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'rebase -s'                 = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'rebase --strategy'         = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'pull -s'                   = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'pull --strategy'           = @('ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree')
+        'merge -X'                  = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+        'merge --strategy-option'   = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+        'rebase -X'                 = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+        'rebase --strategy-option'  = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+        'pull -X'                   = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+        'pull --strategy-option'    = @('ours', 'theirs', 'patience', 'diff-algorithm=', 'ignore-space-change', 'ignore-all-space', 'ignore-space-at-eol', 'ignore-cr-at-eol', 'renormalize', 'no-renormalize', 'find-renames=', 'subtree=')
+    }
+
+    # A value list spelled out in the description column: 'optional modes: all, normal, no.' or
+    # 'conflict style (merge, diff3, or zdiff3)'.
+    $getDescribedOptionValues = {
+        param([string]$description)
+
+        if ([string]::IsNullOrWhiteSpace($description)) {
+            return @()
+        }
+
+        $listMatch = [regex]::Match(
+            $description,
+            '(?:modes?|values?|styles?|one of):\s*(?<values>[A-Za-z0-9_-]+(?:,\s*(?:or\s+)?[A-Za-z0-9_-]+)+)'
+        )
+        if (-not $listMatch.Success) {
+            $listMatch = [regex]::Match(
+                $description,
+                '\((?<values>[A-Za-z0-9_-]+(?:,\s*(?:or\s+)?[A-Za-z0-9_-]+)+)\)'
+            )
+        }
+
+        if (-not $listMatch.Success) {
+            return @()
+        }
+
+        @($listMatch.Groups['values'].Value -split ',' | ForEach-Object { ($_ -replace '^\s*or\s+', '').Trim() } | Where-Object { $_ })
     }
 
     $getCommandContext = {
@@ -856,7 +1034,8 @@ function Complete-GitNative {
         param(
             [string]$spec,
             [string]$valuePrefix,
-            [string]$completionPrefix = ''
+            [string]$completionPrefix = '',
+            [string]$optionName = ''
         )
 
         if ([string]::IsNullOrWhiteSpace($spec)) {
@@ -890,12 +1069,34 @@ function Complete-GitNative {
             return
         }
 
+        # Curated values and the description column outrank the placeholder word, which is
+        # what turns '<mode>', '<style>' and '<option>' into real choices.
+        if (-not [string]::IsNullOrWhiteSpace($optionName)) {
+            $curatedKey = "$commandText $optionName"
+            if ($curatedOptionValues.ContainsKey($curatedKey)) {
+                & $emit @($curatedOptionValues[$curatedKey])
+                return
+            }
+
+            if ($optionDescriptions.ContainsKey($optionName)) {
+                $describedValues = @(& $getDescribedOptionValues $optionDescriptions[$optionName])
+                if ($describedValues.Count -gt 0) {
+                    & $emit $describedValues
+                    return
+                }
+            }
+        }
+
         switch -Regex ($normalized.Trim([char[]]@('<', '>')).ToLowerInvariant()) {
             '^(file|path|dir|directory|template-directory|gitdir|pathspec)$' {
                 & $completeFileSystemPaths $valuePrefix $completionPrefix
                 return
             }
-            '^(commit|commit-ish|committish|object|tree-ish|treeish|rev|revision|ref|reference|branch|new-branch|start-point|upstream)$' {
+            '^new-branch$' {
+                & $emit @(& $getNewBranchSuggestions)
+                return
+            }
+            '^(commit|commit-ish|committish|object|tree-ish|treeish|rev|revision|ref|reference|branch|start-point|upstream)$' {
                 & $emit @(& $getRefs)
                 return
             }
@@ -987,7 +1188,7 @@ function Complete-GitNative {
 
     if ($argIndex -le 0) {
         if ($wordToComplete -like '-*') {
-            & $completeList $globalGitFlags
+            & $completeList (& $getGlobalFlags)
             return
         }
 
@@ -1033,6 +1234,15 @@ function Complete-GitNative {
     }
 
     $optionSpecs = if ($commandContext.Metadata.OptionSpecs) { $commandContext.Metadata.OptionSpecs } else { @{} }
+    $optionDescriptions = if ($commandContext.Metadata.OptionDescriptions) { $commandContext.Metadata.OptionDescriptions } else { @{} }
+
+    # 'checkout -b/-B' and 'switch -c/-C' name a branch to be created; their '<branch>' spec
+    # must not resolve to the existing refs the generic spec handler offers.
+    $branchCreationOptions = switch ($subcommand) {
+        'checkout' { @('-b', '-B', '--orphan') }
+        'switch' { @('-c', '-C', '--orphan') }
+        default { @() }
+    }
 
     if ($commandText -eq 'init') {
         $attachedInitValueMatch = [regex]::Match(
@@ -1081,8 +1291,13 @@ function Complete-GitNative {
             }
         }
 
+        if ($attachedOption -in $branchCreationOptions) {
+            & $completeOrderedList $wordToComplete @(& $getNewBranchSuggestions | ForEach-Object { "$attachedOption=$_" })
+            return
+        }
+
         if ($optionSpecs.ContainsKey($attachedOption)) {
-            & $completeOptionSpecValue $optionSpecs[$attachedOption] $attachedValue "$attachedOption="
+            & $completeOptionSpecValue $optionSpecs[$attachedOption] $attachedValue "$attachedOption=" $attachedOption
             return
         }
     }
@@ -1110,10 +1325,28 @@ function Complete-GitNative {
             }
         }
 
-        if ($previousOption.StartsWith('-') -and $optionSpecs.ContainsKey($previousOption)) {
-            & $completeOptionSpecValue $optionSpecs[$previousOption] $wordToComplete ''
+        if ($previousOption -in $branchCreationOptions) {
+            & $completeList (& $getNewBranchSuggestions)
             return
         }
+
+        if ($previousOption.StartsWith('-') -and $optionSpecs.ContainsKey($previousOption)) {
+            & $completeOptionSpecValue $optionSpecs[$previousOption] $wordToComplete '' $previousOption
+            return
+        }
+    }
+
+    # After '--' every remaining argument is a pathspec, whatever the command: tracked and
+    # untracked files for the index-editing commands, the filesystem for everything else.
+    if ($argsAfterPath -contains '--') {
+        if ($subcommand -in @('add', 'restore', 'rm', 'mv')) {
+            & $completeList (& $getFiles)
+        }
+        else {
+            & $completeFileSystemPaths $wordToComplete
+        }
+
+        return
     }
 
     if ($commandText -eq 'help' -and $positionalsAfterPath.Count -eq 0) {
@@ -1261,6 +1494,21 @@ function Complete-GitNative {
             }
             return
         }
+        { $_ -in @('stash apply', 'stash pop', 'stash drop', 'stash show') } {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getStashEntries)
+            }
+            return
+        }
+        'stash branch' {
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getNewBranchSuggestions)
+            }
+            elseif ($positionalsAfterPath.Count -lt 2) {
+                & $completeList (& $getStashEntries)
+            }
+            return
+        }
     }
 
     switch ($subcommand) {
@@ -1280,7 +1528,24 @@ function Complete-GitNative {
             return
         }
         { $_ -in @('push', 'pull', 'fetch') } {
-            & $completeList (& $getRemotes)
+            # 'git push [<repository> [<refspec>...]]': the first slot is a remote, later slots
+            # are refspecs (local branches and tags to push; the remote's branches to fetch/pull).
+            if ($positionalsAfterPath.Count -lt 1) {
+                & $completeList (& $getRemotes)
+                return
+            }
+
+            if ($subcommand -eq 'push') {
+                & $completeList (@(& $getLocalBranches) + @(& $getTags))
+                return
+            }
+
+            $remoteBranches = @(& $getRemoteBranches $positionalsAfterPath[0])
+            if ($remoteBranches.Count -eq 0) {
+                $remoteBranches = @(& $getLocalBranches)
+            }
+
+            & $completeList $remoteBranches
             return
         }
         { $_ -in @('add', 'restore', 'rm', 'mv') } {
@@ -1289,6 +1554,16 @@ function Complete-GitNative {
         }
         'branch' {
             & $completeList (& $getRefs)
+            return
+        }
+        'tag' {
+            $tagNames = @(& $getTags)
+            if ($tagNames.Count -gt 0) {
+                & $completeList $tagNames
+            }
+            elseif ($shouldCompleteLeafFlags) {
+                & $completeList $commandContext.Metadata.Flags
+            }
             return
         }
         default {

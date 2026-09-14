@@ -43,7 +43,7 @@ For non-root commands, `$getCommandMetadata` runs `git <command path> -h`, parse
 
 A user alias is **never** passed to `git ... -h`. git has no help to print for a shell alias (`!cmd ...`) and would run the alias body instead, so the alias table is read once per session with `git config --get-regexp "^alias."`; an alias that expands to a git command reuses that command's metadata, and a shell alias gets an empty metadata object.
 
-git deliberately prints an abbreviated `-h` for its revision-walking commands, so `log`, `show`, `diff`, and `whatchanged` are supplemented from the `git-completion.bash` that ships beside the installed git (`<git>\mingw64\share\git\completion\git-completion.bash`). Its `__git_*` option variables and the option tokens inside the matching completion function are parsed once and cached, which is where `--oneline`, `--graph`, `--stat`, and `--pretty` come from. The same file supplies the value lists for `--pretty`, `--format`, `--date`, `--diff-algorithm`, `--submodule`, `--ws-error-highlight`, `--color-moved`, `--color-moved-ws`, and `--diff-merges`.
+git deliberately prints an abbreviated `-h` for its revision-walking commands, so `log`, `show`, `diff`, and `whatchanged` are supplemented from the `git-completion.bash` that ships with the installed git (`<root>\mingw64\share\git\completion\git-completion.bash` on Git for Windows). The install root is not assumed from a fixed number of directory hops: `git.exe` may resolve from `<root>\cmd`, `<root>\bin` or `<root>\mingw64\bin`, so the lookup walks upward from the resolved directory and from `git --exec-path`, probing `share\git\completion`, `mingw64\share\...`, `mingw32\share\...` and `usr\share\...` at each level. Its `__git_*` option variables and the option tokens inside the matching completion function are parsed once and cached, which is where `--oneline`, `--graph`, `--stat`, and `--pretty` come from. The same file supplies the value lists for `--pretty`, `--format`, `--date`, `--diff-algorithm`, `--submodule`, `--ws-error-highlight`, `--color-moved`, `--color-moved-ws`, and `--diff-merges`.
 
 A hardcoded `$documentedNestedSubcommands` map supplements help parsing for command groups whose help output does not fully expose their subcommands.
 
@@ -82,21 +82,15 @@ It prefers this display order when those subcommands exist in the installed Git:
 Remaining discovered subcommands are appended alphabetically.
 
 ### Global flags
-The root metadata includes these global flags:
-- `--help`
-- `--version`
-- `--exec-path`
-- `--html-path`
-- `--man-path`
-- `--info-path`
-- `--paginate`
-- `--git-dir`
-- `--work-tree`
-- `--namespace`
-- `-C`
-- `-c`
-- `-p`
-- `--no-pager`
+The global option list is parsed from the usage block of `git --help` (`[-v | --version] [-h | --help] [-C <path>] ... [--config-env=<name>=<envvar>]`) the first time it is needed and cached for the session, so it follows the installed git. A static list is the fallback when that parse yields nothing:
+- `-v`, `--version`, `-h`, `--help`
+- `-C`, `-c`, `--exec-path`, `--html-path`, `--man-path`, `--info-path`
+- `-p`, `--paginate`, `-P`, `--no-pager`
+- `--no-replace-objects`, `--no-lazy-fetch`, `--no-optional-locks`, `--no-advice`, `--bare`
+- `--git-dir`, `--work-tree`, `--namespace`, `--config-env`
+
+### Option values
+Each `-h` option row's argument spec and description column are both kept. A spec that names the values (`(check|on-demand|no)`) completes them directly; `<file>`/`<path>` specs complete paths and `<commit>`/`<branch>`/`<ref>` specs complete refs. For bare placeholders git never spells out (`<mode>`, `<style>`, `<strategy>`, `<option>`) a curated table keyed by command and option supplies the values (`commit --cleanup`, `-u/--untracked-files`, `checkout|switch --conflict`, `merge|rebase|pull -s/--strategy` and `-X/--strategy-option`), and otherwise a value list spelled out in the description column (`optional modes: all, normal, no`) is used. All three work in the separate and the attached `--option=value` form.
 
 ### Nested subcommand families
 The script explicitly documents nested subcommands for these command groups:
@@ -126,7 +120,10 @@ Examples from the built-in nested map include:
 - `git checkout` / `git switch` complete refs by default.
 - `git checkout -b|-B` and `git switch -c|-C` switch to new-branch-name suggestions such as `feature/`, `bugfix/`, `hotfix/`, `chore/`, `docs/`, `refactor/`, `test/`, plus `<current-branch>-fix` and `<current-branch>-update` when the current branch can be resolved. After the new branch name has been supplied, completion returns to refs for the optional start point.
 - `git merge`, `rebase`, `reset`, `show`, `log`, `diff`, `cherry-pick`, and `revert` complete refs.
-- `git push`, `pull`, and `fetch` complete remotes.
+- `git push`, `pull`, and `fetch` complete remotes in the first slot; later slots are refspecs: local branches and tags for `push`, the chosen remote's branches (from `refs/remotes/<remote>`) for `fetch` and `pull`.
+- `git tag` completes existing tag names (`git for-each-ref refs/tags`), which is what `-d`, `-v`, `-f` and `--contains` take.
+- `git stash apply|pop|drop|show` complete stash entries from `git stash list --format=%gd`; `git stash branch` takes a new branch name first and a stash entry second.
+- After a `--` separator every command completes pathspecs: tracked and untracked files for `add`, `restore`, `rm` and `mv`, the filesystem for everything else (`git log -- <path>`).
 - `git add`, `restore`, `rm`, and `mv` complete tracked and untracked file paths from `git ls-files`.
 
 ### `git init` special handling
