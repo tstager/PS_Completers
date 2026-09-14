@@ -14,6 +14,10 @@ if (-not (Get-Variable -Name IcaclsCompletionCatalog -Scope Script -ErrorAction 
         SimplePermissions   = @()
         SpecificPermissions = @()
         InheritanceFlags    = @()
+        PreCommandOptions   = @()
+        Identities          = @()
+        IdentitiesBuilt     = $false
+        AclIdentityCache    = @{}
     }
 }
 
@@ -49,7 +53,8 @@ function Expand-IcaclsHelpToken {
 function Get-IcaclsTokensFromText {
     param([string]$Text)
 
-    $tokens = foreach ($match in [regex]::Matches($Text, '(?<!\w)(/[A-Za-z][A-Za-z0-9]*(?::[^\s\]]+)?)')) {
+    # Keep a trailing '[...]' group so '/grant[:r]' and '/remove[:g|:d]' reach Expand-IcaclsHelpToken intact.
+    $tokens = foreach ($match in [regex]::Matches($Text, '(?<!\w)(/[A-Za-z][A-Za-z0-9]*(?:\[[^\]]*\])?(?::[^\s\]]+)?)')) {
         Expand-IcaclsHelpToken -Token $match.Groups[1].Value
     }
 
@@ -64,7 +69,13 @@ function Get-IcaclsSyntaxBlocks {
     $capturing = $false
 
     foreach ($line in $Lines) {
-        if ($line -match '^\s*ICACLS\s+') {
+        # Syntax blocks start at column 0 in upper case; the indented lower-case
+        # 'icacls ...' example lines must not overwrite them.
+        if ($line -match '^Examples:') {
+            break
+        }
+
+        if ($line -cmatch '^ICACLS\s') {
             if ($current.Count -gt 0) {
                 $blocks.Add(@($current))
                 $current.Clear()
@@ -89,7 +100,9 @@ function Get-IcaclsSyntaxBlocks {
             continue
         }
 
-        if ($line -match '^\s+') {
+        # Syntax continuation lines start with '[' or '/'; the description lines that
+        # follow start with a word and may mention other switches ("for later use with /restore").
+        if ($line -match '^\s+[\[/]') {
             $current.Add($line.Trim())
             continue
         }
@@ -247,6 +260,7 @@ function Initialize-IcaclsCompletionCatalog {
 
     $commands = @()
     $modifyOptions = @()
+    $preCommandOptions = @()
     $commandOptionsByKey = @{}
     $syntaxBlocks = Get-IcaclsSyntaxBlocks -Lines $helpLines
 
@@ -265,6 +279,13 @@ function Initialize-IcaclsCompletionCatalog {
                     Where-Object { $_ -ne $mainCommand } |
                     Sort-Object -Unique
             )
+
+            # Options documented before the command ('[/substitute SidOld SidNew] /restore')
+            # are typed before it, so they must be offered while no command is active.
+            $mainIndex = $blockText.IndexOf($mainCommand, [System.StringComparison]::OrdinalIgnoreCase)
+            if ($mainIndex -gt 0) {
+                $preCommandOptions += @(Get-IcaclsTokensFromText -Text $blockText.Substring(0, $mainIndex))
+            }
             continue
         }
 
@@ -282,6 +303,7 @@ function Initialize-IcaclsCompletionCatalog {
     $script:IcaclsCompletionCatalog.Commands = @($commands | Sort-Object -Unique)
     $script:IcaclsCompletionCatalog.CommandOptionsByKey = $commandOptionsByKey
     $script:IcaclsCompletionCatalog.CommonOptions = $commonOptions
+    $script:IcaclsCompletionCatalog.PreCommandOptions = @($preCommandOptions | Sort-Object -Unique)
     $script:IcaclsCompletionCatalog.ModifyOptions = @(
         $modifyOptions |
             Where-Object {
@@ -311,16 +333,118 @@ function Get-IcaclsPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $parent = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { Split-Path -Path $cleanInput -Parent }
-    if ([string]::IsNullOrWhiteSpace($parent)) {
-        $parent = '.'
+
+    # A trailing separator means "list this directory"; Split-Path -Leaf would return the directory itself.
+    $parent = '.'
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
+        if ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
+            $parent = $cleanInput
+        } else {
+            $candidateParent = Split-Path -Path $cleanInput -Parent
+            if (-not [string]::IsNullOrWhiteSpace($candidateParent)) {
+                $parent = $candidateParent
+            }
+
+            $leaf = Split-Path -Path $cleanInput -Leaf
+        }
     }
 
-    $leaf = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { Split-Path -Path $cleanInput -Leaf }
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-
-    $items = Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object {
+        [string]::IsNullOrWhiteSpace($leaf) -or $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
+    })
     $items | ForEach-Object { ConvertTo-IcaclsQuotedPath -Path $_.FullName }
+}
+
+function Get-IcaclsIdentityList {
+    param([string]$OperandPath)
+
+    # Principals a Sid operand can name: well-known accounts, the current user, local
+    # users and groups (built once per session), plus whatever the operand's ACL already
+    # references (cached per path for 30 s). All read-only local state.
+    if (-not $script:IcaclsCompletionCatalog.IdentitiesBuilt) {
+        $names = New-Object System.Collections.Generic.List[string]
+        foreach ($name in @('Everyone', 'SYSTEM', 'Administrators', 'Users', 'Authenticated Users', 'CREATOR OWNER',
+                'NT AUTHORITY\SYSTEM', 'NT AUTHORITY\LOCAL SERVICE', 'NT AUTHORITY\NETWORK SERVICE',
+                'NT SERVICE\TrustedInstaller', 'BUILTIN\Administrators', 'BUILTIN\Users')) {
+            $names.Add($name)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($env:USERNAME)) {
+            $names.Add($env:USERNAME)
+            if (-not [string]::IsNullOrWhiteSpace($env:USERDOMAIN)) {
+                $names.Add($env:USERDOMAIN + '\' + $env:USERNAME)
+            }
+        }
+
+        try {
+            foreach ($account in @(Get-LocalUser -ErrorAction Ignore) + @(Get-LocalGroup -ErrorAction Ignore)) {
+                if ($account -and -not [string]::IsNullOrWhiteSpace($account.Name)) {
+                    $names.Add($account.Name)
+                }
+            }
+        } catch {
+            Write-Debug "icacls local account enumeration failed: $($_.Exception.Message)"
+        }
+
+        $script:IcaclsCompletionCatalog.Identities = @($names | Sort-Object -Unique)
+        $script:IcaclsCompletionCatalog.IdentitiesBuilt = $true
+    }
+
+    $aclNames = @()
+    if (-not [string]::IsNullOrWhiteSpace($OperandPath)) {
+        $cleanPath = $OperandPath.Trim('"')
+        $cache = $script:IcaclsCompletionCatalog.AclIdentityCache
+        $entry = if ($cache.ContainsKey($cleanPath)) { $cache[$cleanPath] } else { $null }
+        if ($entry -and ((Get-Date) - $entry.UpdatedAt).TotalSeconds -lt 30) {
+            $aclNames = @($entry.Names)
+        } else {
+            try {
+                $acl = Get-Acl -LiteralPath $cleanPath -ErrorAction Ignore
+                if ($acl) {
+                    $aclNames = @($acl.Access | ForEach-Object { $_.IdentityReference.Value } | Where-Object { $_ } | Sort-Object -Unique)
+                }
+            } catch {
+                Write-Debug "icacls ACL read failed for '$cleanPath': $($_.Exception.Message)"
+            }
+
+            $cache[$cleanPath] = [pscustomobject]@{ UpdatedAt = Get-Date; Names = @($aclNames) }
+        }
+    }
+
+    @(@($aclNames) + @($script:IcaclsCompletionCatalog.Identities) | Sort-Object -Unique)
+}
+
+function Get-IcaclsIdentityCompletions {
+    param(
+        [string]$WordToComplete,
+        [string]$OperandPath,
+        [switch]$PermissionStage
+    )
+
+    # Sid operands (/setowner, /findsid, /remove, /substitute) complete as the bare
+    # principal; the Sid:perm slots (/grant, /deny) complete as 'Identity:' so the
+    # permission engine takes over after the colon.
+    $word = if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
+    $isQuoted = $word.StartsWith('"')
+    $prefix = $word.Trim('"')
+
+    foreach ($identity in @(Get-IcaclsIdentityList -OperandPath $OperandPath)) {
+        $leafName = if ($identity.Contains('\')) { $identity.Substring($identity.LastIndexOf('\') + 1) } else { $identity }
+        if (-not [string]::IsNullOrEmpty($prefix) -and
+            -not $identity.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $leafName.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $needsQuote = $isQuoted -or ($identity -match '\s')
+        if ($PermissionStage) {
+            # Leave the quote open so the permission part can still be typed inside it.
+            if ($needsQuote) { '"' + $identity + ':' } else { $identity + ':' }
+        } else {
+            if ($needsQuote) { '"' + $identity + '"' } else { $identity }
+        }
+    }
 }
 
 function New-IcaclsCompletionResult {
@@ -367,40 +491,41 @@ function Get-IcaclsCurrentToken {
     $Fallback
 }
 
-function Get-IcaclsTokensBeforeCurrent {
+function Get-IcaclsCursorContext {
     param(
-        [string[]]$Tokens,
-        [string]$CurrentWord,
-        [bool]$HasTrailingSpace
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ($HasTrailingSpace) {
-        return @($Tokens)
-    }
-
-    if (-not $Tokens -or $Tokens.Count -eq 0) {
-        return @()
-    }
-
-    if (-not [string]::IsNullOrEmpty($CurrentWord)) {
-        for ($suffixLength = 1; $suffixLength -le $Tokens.Count; $suffixLength++) {
-            $suffix = (@($Tokens | Select-Object -Last $suffixLength) -join '')
-            if ($suffix -eq $CurrentWord) {
-                $prefixLength = $Tokens.Count - $suffixLength
-                if ($prefixLength -le 0) {
-                    return @()
-                }
-
-                return @($Tokens | Select-Object -First $prefixLength)
-            }
+    # Locate the element under the cursor by extent (offsets are absolute), then pull in
+    # any elements glued to it without whitespace (the parser splits 'Users:(D' into
+    # 'Users:' and '(D'). Everything before that group is already typed.
+    $elements = @($CommandAst.CommandElements | Select-Object -Skip 1)
+    $currentIndex = -1
+    for ($index = 0; $index -lt $elements.Count; $index++) {
+        $extent = $elements[$index].Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $extent.EndOffset -ge $CursorPosition) {
+            $currentIndex = $index
+            break
         }
     }
 
-    if ($Tokens.Count -gt 1) {
-        return @($Tokens | Select-Object -First ($Tokens.Count - 1))
+    if ($currentIndex -lt 0) {
+        return [pscustomobject]@{
+            TokensBeforeCurrent = @($elements | Where-Object { $_.Extent.EndOffset -le $CursorPosition } | ForEach-Object { $_.Extent.Text })
+            CurrentGroup        = @()
+        }
     }
 
-    @()
+    $startIndex = $currentIndex
+    while ($startIndex -gt 0 -and $elements[$startIndex - 1].Extent.EndOffset -eq $elements[$startIndex].Extent.StartOffset) {
+        $startIndex--
+    }
+
+    [pscustomobject]@{
+        TokensBeforeCurrent = @($elements | Select-Object -First $startIndex | ForEach-Object { $_.Extent.Text })
+        CurrentGroup        = @($elements[$startIndex..$currentIndex] | ForEach-Object { $_.Extent.Text })
+    }
 }
 
 function Get-IcaclsActiveCommand {
@@ -443,6 +568,11 @@ function Get-IcaclsExpectedValueOption {
         return $null
     }
 
+    # /substitute takes two Sid operands (SidOld SidNew).
+    if ($TokensBeforeCurrent.Count -ge 2 -and $TokensBeforeCurrent[-2] -eq '/substitute' -and -not $TokensBeforeCurrent[-1].StartsWith('/')) {
+        return '/substitute'
+    }
+
     $lastToken = $TokensBeforeCurrent[-1].ToLowerInvariant()
     switch ($lastToken) {
         '/save' { return '/save' }
@@ -483,17 +613,6 @@ function Get-IcaclsInlineOptionCompletions {
         return @('r') |
             Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($valuePrefix) + '*') } |
             ForEach-Object { "/grant:$_" }
-    }
-
-    @()
-}
-
-function Get-IcaclsExpandedOptionValueCompletions {
-    param([string]$WordToComplete)
-
-    if ($WordToComplete.Equals('/setintegritylevel', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return Get-IcaclsIntegrityLevelCompletions -WordToComplete '' |
-            ForEach-Object { "/setintegritylevel $_" }
     }
 
     @()
@@ -661,8 +780,6 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
     Initialize-IcaclsCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $rawCurrentWord = $wordToComplete
     $lineCurrentWord = Get-IcaclsCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
@@ -675,24 +792,26 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     } else {
         $wordToComplete
     }
-    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
-    $tokensBeforeCurrent = @(Get-IcaclsTokensBeforeCurrent -Tokens $tokens -CurrentWord $currentWord -HasTrailingSpace $hasTrailingSpace)
+
+    $cursorContext = Get-IcaclsCursorContext -CommandAst $commandAst -CursorPosition $cursorPosition
+    $tokensBeforeCurrent = @($cursorContext.TokensBeforeCurrent)
+    $currentGroup = @($cursorContext.CurrentGroup)
     $permissionIdentityPrefix = $null
     if (
         (-not [string]::IsNullOrWhiteSpace($rawCurrentWord)) -and
         (-not $rawCurrentWord.Contains(':')) -and
         ($currentWord.Contains(':')) -and
-        ($tokens.Count -ge 2) -and
-        $tokens[-2].EndsWith(':') -and
-        (($tokens[-2] + $tokens[-1]) -eq $currentWord)
+        ($currentGroup.Count -ge 2) -and
+        $currentGroup[0].EndsWith(':')
     ) {
-        $permissionIdentityPrefix = $tokens[-2]
+        $permissionIdentityPrefix = $currentGroup[0]
     }
 
     $activeCommand = Get-IcaclsActiveCommand -Tokens $tokensBeforeCurrent -KnownCommands $script:IcaclsCompletionCatalog.Commands
     $hasModifyOperation = Test-IcaclsHasModifyOperation -Tokens $tokensBeforeCurrent
     $expectedValueOption = Get-IcaclsExpectedValueOption -TokensBeforeCurrent $tokensBeforeCurrent
     $hasTargetPath = ($tokensBeforeCurrent.Count -gt 0) -and (-not $tokensBeforeCurrent[0].StartsWith('/'))
+    $operandPath = if ($hasTargetPath) { $tokensBeforeCurrent[0] } else { '' }
 
     $inlineOptionCompletions = @(Get-IcaclsInlineOptionCompletions -WordToComplete $currentWord)
     if ($inlineOptionCompletions.Count -gt 0) {
@@ -701,14 +820,20 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
         }
     }
 
-    $expandedOptionValueCompletions = @(Get-IcaclsExpandedOptionValueCompletions -WordToComplete $currentWord)
-    if ($expandedOptionValueCompletions.Count -gt 0) {
-        return $expandedOptionValueCompletions | ForEach-Object {
-            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-        }
-    }
-
     if ($expectedValueOption) {
+        # Sid:perm slots complete the principal first, then hand over to the permission engine.
+        if ($expectedValueOption -in @('/grant', '/grant:r', '/deny') -and -not $currentWord.Trim('"').Contains(':')) {
+            return @(Get-IcaclsIdentityCompletions -WordToComplete $currentWord -OperandPath $operandPath -PermissionStage) | ForEach-Object {
+                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+            }
+        }
+
+        if ($expectedValueOption -in @('/setowner', '/findsid', '/remove', '/remove:g', '/remove:d', '/substitute')) {
+            return @(Get-IcaclsIdentityCompletions -WordToComplete $currentWord -OperandPath $operandPath) | ForEach-Object {
+                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
+            }
+        }
+
         switch ($expectedValueOption) {
             '/save' {
                 return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
@@ -816,6 +941,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     } else {
         $suggestions = @(
             $script:IcaclsCompletionCatalog.Commands +
+            $script:IcaclsCompletionCatalog.PreCommandOptions +
             $script:IcaclsCompletionCatalog.ModifyOptions +
             $script:IcaclsCompletionCatalog.CommonOptions +
             '/?'
