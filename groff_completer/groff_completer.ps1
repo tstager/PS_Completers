@@ -21,9 +21,10 @@ if (-not (Get-Variable -Name GroffCompletionCatalog -Scope Script -ErrorAction I
         EncodingHints      = @(
             'utf8', 'utf-8', 'latin1', 'latin2', 'latin5', 'latin9', 'koi8-r', 'cp1047', 'ascii'
         )
+        FontFamilyFallback = @('T', 'H', 'C', 'N', 'P', 'A', 'BM', 'HN', 'ZCM')
+        FontFamiliesByDevice = @{}
         PlaceholderHints   = @{
             '-d' = @('name=text', 'foo=bar', 's=string')
-            '-f' = @('TR', 'HB', 'I')
             '-n' = @('1', '5', '10')
             '-o' = @('1', '1-3', '1,3-5,8-')
             '-r' = @('S=12', 'Pn=1', 'LL=72u')
@@ -32,7 +33,6 @@ if (-not (Get-Variable -Name GroffCompletionCatalog -Scope Script -ErrorAction I
         }
         AttachedPlaceholderHints = @{
             '-d' = @('name=text', 'foo=bar', 's=string')
-            '-f' = @('TR', 'HB', 'I')
             '-n' = @('1', '5', '10')
             '-o' = @('1', '1-3', '1,3-5,8-')
             '-r' = @('S12', 'Pn1', 'LL72u')
@@ -300,7 +300,7 @@ function Get-GroffStaticOptionDefinitions {
         [pscustomobject]@{ Short = '-D'; Long = $null; Canonical = '-D'; Description = 'Use the default input encoding'; ValueMode = 'Required'; ValueKind = 'Encoding'; ShortAllowsSeparate = $true; ShortAllowsAttached = $true; Terminal = $false }
         [pscustomobject]@{ Short = '-e'; Long = $null; Canonical = '-e'; Description = 'Preprocess with eqn'; ValueMode = 'None'; ValueKind = 'None'; ShortAllowsSeparate = $false; ShortAllowsAttached = $false; Terminal = $false }
         [pscustomobject]@{ Short = '-E'; Long = $null; Canonical = '-E'; Description = 'Inhibit all errors'; ValueMode = 'None'; ValueKind = 'None'; ShortAllowsSeparate = $false; ShortAllowsAttached = $false; Terminal = $false }
-        [pscustomobject]@{ Short = '-f'; Long = $null; Canonical = '-f'; Description = 'Use the default font family'; ValueMode = 'Required'; ValueKind = 'OpaqueValue'; ShortAllowsSeparate = $true; ShortAllowsAttached = $true; Terminal = $false }
+        [pscustomobject]@{ Short = '-f'; Long = $null; Canonical = '-f'; Description = 'Use the default font family'; ValueMode = 'Required'; ValueKind = 'FontFamily'; ShortAllowsSeparate = $true; ShortAllowsAttached = $true; Terminal = $false }
         [pscustomobject]@{ Short = '-F'; Long = $null; Canonical = '-F'; Description = 'Search a directory for device directories'; ValueMode = 'Required'; ValueKind = 'DirectoryPath'; ShortAllowsSeparate = $true; ShortAllowsAttached = $true; Terminal = $false }
         [pscustomobject]@{ Short = '-g'; Long = $null; Canonical = '-g'; Description = 'Preprocess with grn'; ValueMode = 'None'; ValueKind = 'None'; ShortAllowsSeparate = $false; ShortAllowsAttached = $false; Terminal = $false }
         [pscustomobject]@{ Short = '-G'; Long = $null; Canonical = '-G'; Description = 'Preprocess with grap'; ValueMode = 'None'; ValueKind = 'None'; ShortAllowsSeparate = $false; ShortAllowsAttached = $false; Terminal = $false }
@@ -419,6 +419,62 @@ function Get-GroffMacroPackages {
     Get-GroffUniqueStrings -Items @($packages.ToArray()) | Sort-Object
 }
 
+function Get-GroffFontFamilyList {
+    # Font families for -f: the device's font file names with the DESC 'styles' suffixes stripped
+    # (devps: TR/TI/TB/TBI -> T). Cached per device; falls back to the classic family list.
+    param([string]$Device)
+
+    $deviceName = if ([string]::IsNullOrWhiteSpace($Device)) { 'ps' } else { $Device }
+    if ($script:GroffCompletionCatalog.FontFamiliesByDevice.ContainsKey($deviceName)) {
+        return $script:GroffCompletionCatalog.FontFamiliesByDevice[$deviceName]
+    }
+
+    $families = New-Object System.Collections.Generic.List[string]
+    foreach ($root in @(Get-GroffDiscoveryRoots)) {
+        $deviceDirectory = Join-Path -Path $root -ChildPath ('current\font\dev' + $deviceName)
+        $descPath = Join-Path -Path $deviceDirectory -ChildPath 'DESC'
+        if (-not (Test-Path -LiteralPath $descPath)) {
+            continue
+        }
+
+        $styles = @()
+        foreach ($line in @(Get-Content -LiteralPath $descPath -ErrorAction SilentlyContinue)) {
+            if ($line -match '^styles\s+(?<styles>.+)$') {
+                $styles = @($Matches['styles'].Trim() -split '\s+')
+            } elseif ($line -match '^family\s+(?<family>\S+)') {
+                [void]$families.Add($Matches['family'])
+            }
+        }
+
+        if ($styles.Count -eq 0) {
+            continue
+        }
+
+        foreach ($file in @(Get-ChildItem -LiteralPath $deviceDirectory -File -ErrorAction SilentlyContinue)) {
+            $name = $file.Name
+            if ($name -eq 'DESC' -or $name.Contains('.')) {
+                continue
+            }
+
+            foreach ($style in ($styles | Sort-Object -Property Length -Descending)) {
+                if ($name.Length -gt $style.Length -and $name.EndsWith($style, [System.StringComparison]::Ordinal)) {
+                    [void]$families.Add($name.Substring(0, $name.Length - $style.Length))
+                    break
+                }
+            }
+        }
+    }
+
+    $result = if ($families.Count -gt 0) {
+        @(Get-GroffUniqueStrings -Items @($families.ToArray()) | Sort-Object)
+    } else {
+        @($script:GroffCompletionCatalog.FontFamilyFallback)
+    }
+
+    $script:GroffCompletionCatalog.FontFamiliesByDevice[$deviceName] = $result
+    $result
+}
+
 function Initialize-GroffCompletionCatalog {
     if ($script:GroffCompletionCatalog.Initialized) {
         return
@@ -491,6 +547,7 @@ function New-GroffParseState {
         EndOfOptions          = $false
         PendingSeparateOption = $null
         HelpRequested         = $false
+        OutputDevice          = $null
     }
 }
 
@@ -534,6 +591,9 @@ function Update-GroffParseState {
 
     foreach ($token in @($Tokens)) {
         if ($State.PendingSeparateOption) {
+            if ($State.PendingSeparateOption -eq '-T') {
+                $State.OutputDevice = Remove-GroffOuterQuotes -InputText $token
+            }
             $State.PendingSeparateOption = $null
             continue
         }
@@ -567,6 +627,8 @@ function Update-GroffParseState {
             $parsedToken = Parse-GroffShortToken -Token $token
             if ($parsedToken -and $parsedToken.RequiresSeparate) {
                 $State.PendingSeparateOption = $parsedToken.OptionToken
+            } elseif ($parsedToken -and $parsedToken.OptionToken -eq '-T') {
+                $State.OutputDevice = Remove-GroffOuterQuotes -InputText $parsedToken.AttachedValue
             }
         }
     }
@@ -592,10 +654,9 @@ function Get-GroffPathCompletions {
     }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        return @()
-    }
-
-    if ($inputEndsWithSeparator) {
+        $parentPath = '.'
+        $leaf = ''
+    } elseif ($inputEndsWithSeparator) {
         $parentPath = $cleanInput
         $leaf = ''
     } else {
@@ -705,15 +766,23 @@ function Get-GroffDirectoryValueCompletions {
         )
     }
 
-    if ([string]::IsNullOrWhiteSpace($TokenPrefix)) {
-        return @(Get-GroffPathCompletions -InputPath $CurrentValue -DirectoriesOnly)
+    $results = @(
+        foreach ($pathResult in @(Get-GroffPathCompletions -InputPath $CurrentValue -DirectoriesOnly)) {
+            if ([string]::IsNullOrWhiteSpace($TokenPrefix)) {
+                $pathResult
+            } else {
+                New-GroffCompletionResult -CompletionText ($TokenPrefix + $pathResult.CompletionText) -ResultType $pathResult.ResultType -ToolTip $pathResult.ToolTip
+            }
+        }
+    )
+
+    if ($results.Count -gt 0) {
+        return $results
     }
 
-    $results = foreach ($pathResult in @(Get-GroffPathCompletions -InputPath $CurrentValue -DirectoriesOnly)) {
-        New-GroffCompletionResult -CompletionText ($TokenPrefix + $pathResult.CompletionText) -ResultType $pathResult.ResultType -ToolTip $pathResult.ToolTip
-    }
-
-    @($results)
+    # No matching subdirectory: suppress PowerShell's filename fallback, which would offer files here.
+    $completionText = if ([string]::IsNullOrWhiteSpace($TokenPrefix)) { '<directory>' } else { $TokenPrefix + '<directory>' }
+    @(New-GroffCompletionResult -CompletionText $completionText -ListItemText '<directory>' -ResultType 'ParameterValue' -ToolTip 'Directory path.')
 }
 
 function Get-GroffOperandCompletions {
@@ -725,7 +794,8 @@ function Get-GroffOperandCompletions {
         [void]$results.Add((New-GroffCompletionResult -CompletionText '-' -ResultType 'ParameterValue' -ToolTip 'Read from standard input'))
     }
 
-    if (-not [string]::IsNullOrEmpty($CurrentValue) -and ($CurrentValue -ne '-')) {
+    # Input files are groff's primary operand, so the empty slot lists the current directory too.
+    if ($CurrentValue -ne '-') {
         foreach ($result in @(Get-GroffPathCompletions -InputPath $CurrentValue)) {
             [void]$results.Add($result)
         }
@@ -738,7 +808,8 @@ function Get-GroffValueCompletions {
     param(
         [string]$OptionToken,
         [string]$CurrentValue,
-        [string]$TokenPrefix = ''
+        [string]$TokenPrefix = '',
+        [string]$OutputDevice = ''
     )
 
     $definition = $script:GroffCompletionCatalog.ShortOptionMap[$OptionToken]
@@ -747,6 +818,9 @@ function Get-GroffValueCompletions {
     }
 
     switch ($definition.ValueKind) {
+        'FontFamily' {
+            return @(Get-GroffCatalogValueCompletions -Values (Get-GroffFontFamilyList -Device $OutputDevice) -CurrentValue $CurrentValue -TokenPrefix $TokenPrefix -ToolTipPrefix 'Font family ')
+        }
         'OutputDevice' {
             return @(Get-GroffCatalogValueCompletions -Values $script:GroffCompletionCatalog.OutputDevices -CurrentValue $CurrentValue -TokenPrefix $TokenPrefix -ToolTipPrefix 'Output device ')
         }
@@ -789,6 +863,39 @@ function Get-GroffOptionCompletions {
     @($results)
 }
 
+function Get-GroffShortClusterCompletion {
+    # An all-flag cluster such as -ab is valid as typed; offer it and every extension by one more flag.
+    param([string]$CurrentToken)
+
+    if ($CurrentToken.Length -lt 3 -or -not $CurrentToken.StartsWith('-') -or $CurrentToken.StartsWith('--')) {
+        return @()
+    }
+
+    $present = New-GroffStringSet
+    for ($index = 1; $index -lt $CurrentToken.Length; $index++) {
+        $optionToken = '-' + $CurrentToken[$index]
+        $definition = $script:GroffCompletionCatalog.ShortOptionMap[$optionToken]
+        if ($null -eq $definition -or $definition.ValueMode -ne 'None') {
+            return @()
+        }
+
+        [void]$present.Add($optionToken)
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    [void]$results.Add((New-GroffCompletionResult -CompletionText $CurrentToken -ResultType 'ParameterName' -ToolTip ('Flags ' + $CurrentToken.Substring(1))))
+
+    foreach ($definition in $script:GroffCompletionCatalog.OptionDefinitions) {
+        if ($present.Contains($definition.Short) -or $definition.Terminal) {
+            continue
+        }
+
+        [void]$results.Add((New-GroffCompletionResult -CompletionText ($CurrentToken + $definition.Short.Substring(1)) -ResultType 'ParameterName' -ToolTip $definition.Description))
+    }
+
+    @($results.ToArray())
+}
+
 function Get-GroffTerminalCompletions {
     param([string]$CurrentWord)
 
@@ -807,25 +914,40 @@ function Complete-Groff {
 
     Initialize-GroffCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
-    $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-GroffCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
+    # Words are rebuilt from the element extents (adjacent elements such as '-F' + '.\dir' re-joined)
+    # and the completed word is the one under the cursor, so editing an earlier token works too.
+    $words = New-Object System.Collections.Generic.List[object]
+    foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if (($words.Count -gt 0) -and ($words[$words.Count - 1].End -eq $extent.StartOffset)) {
+            $words[$words.Count - 1].Text += $extent.Text
+            $words[$words.Count - 1].End = $extent.EndOffset
+        } else {
+            [void]$words.Add([pscustomobject]@{ Start = $extent.StartOffset; End = $extent.EndOffset; Text = $extent.Text })
+        }
+    }
+
+    $currentWordEntry = $null
+    foreach ($word in $words) {
+        if (($word.Start -lt $cursorPosition) -and ($cursorPosition -le $word.End)) {
+            $currentWordEntry = $word
+            break
+        }
+    }
+
+    $currentWord = if ($null -ne $currentWordEntry) {
+        $currentWordEntry.Text.Substring(0, [Math]::Min($currentWordEntry.Text.Length, $cursorPosition - $currentWordEntry.Start))
+    } elseif ([string]::IsNullOrEmpty($wordToComplete)) {
         ''
     } else {
-        $wordToComplete
+        Get-GroffCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
-    }
+    $tokensBeforeCurrent = @(
+        $words | Where-Object {
+            if ($null -ne $currentWordEntry) { $_.End -le $currentWordEntry.Start } else { $_.End -le $cursorPosition }
+        } | ForEach-Object { $_.Text }
+    )
 
     $state = New-GroffParseState
     Update-GroffParseState -State $state -Tokens $tokensBeforeCurrent
@@ -835,7 +957,7 @@ function Complete-Groff {
     }
 
     if ($state.PendingSeparateOption) {
-        return @(Get-GroffValueCompletions -OptionToken $state.PendingSeparateOption -CurrentValue $currentWord)
+        return @(Get-GroffValueCompletions -OptionToken $state.PendingSeparateOption -CurrentValue $currentWord -OutputDevice $state.OutputDevice)
     }
 
     if ($state.EndOfOptions) {
@@ -857,7 +979,12 @@ function Complete-Groff {
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-', [System.StringComparison]::Ordinal)) {
         $parsedCurrent = Parse-GroffShortToken -Token $currentWord
         if ($parsedCurrent) {
-            return @(Get-GroffValueCompletions -OptionToken $parsedCurrent.OptionToken -CurrentValue $parsedCurrent.AttachedValue -TokenPrefix $parsedCurrent.PrefixText)
+            return @(Get-GroffValueCompletions -OptionToken $parsedCurrent.OptionToken -CurrentValue $parsedCurrent.AttachedValue -TokenPrefix $parsedCurrent.PrefixText -OutputDevice $state.OutputDevice)
+        }
+
+        $clusterResults = @(Get-GroffShortClusterCompletion -CurrentToken $currentWord)
+        if ($clusterResults.Count -gt 0) {
+            return $clusterResults
         }
 
         return @(Get-GroffOptionCompletions -CurrentToken $currentWord)
