@@ -39,14 +39,15 @@ At the top level, the completer suggests:
 
 ### 3. Subcommand-aware completion
 
-Once a known top-level subcommand is selected, the completer switches to that subcommand's own option and command catalog. For example:
+Once a known top-level subcommand is selected, the completer switches to that subcommand's own option and command catalog, and keeps descending for every further subcommand on the line (`grok help <a> <b>` is fetched lazily and cached per path). Subcommand aliases printed as `[aliases: ...]` (`ls`, `rm`, `disk-usage`, `v`) resolve to their canonical node. For example:
 
 - `grok agent <TAB>` suggests agent subcommands such as `stdio`, `headless`, `serve`, and `leader`,
+- `grok worktree db <TAB>` suggests `path`, `rebuild`, and `stats`,
 - `grok completions <TAB>` suggests shell values such as `bash`, `fish`, `powershell`, and `zsh`.
 
 ### 4. Value-aware option completion
 
-When the previous token is a value-taking option, the completer attempts to use help-derived values when `grok` publishes them. If the help does not provide specific values, it falls back to a conservative placeholder such as `<value>` or path-aware completion for path-like options such as `--cwd` and `--debug-file`.
+When the previous token is a value-taking option (or the current word is the attached `--option=value` form), the completer uses help-derived values when `grok` publishes them, including clap's multi-line `Possible values:` blocks (`--output-format`) and the inline `[possible values: ...]` form (`--permission-mode`). Option aliases from `[aliases: ...]` and `(compat alias: ...)` notes (`--effort`, `--ref`, `--allowedTools`) resolve to the same option. The value kind is derived from the metavariable and description: `<CWD>`/`<DIR>` options complete directories only, `<FILE>`/`<PATH>` options and options whose description mentions a file complete paths, and everything else falls back to a conservative `<value>` placeholder.
 
 ## Dependencies or external command expectations
 

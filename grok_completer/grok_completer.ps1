@@ -52,18 +52,44 @@ function Get-GrokRootHelpOutput {
 }
 
 function Get-GrokSubcommandHelpOutput {
-    param([string]$SubcommandName)
+    param([string[]]$SubcommandPath)
 
     $commandPath = Get-GrokCommandPath
-    if ([string]::IsNullOrWhiteSpace($commandPath) -or [string]::IsNullOrWhiteSpace($SubcommandName)) {
+    if ([string]::IsNullOrWhiteSpace($commandPath) -or @($SubcommandPath).Count -eq 0) {
         return ''
     }
 
     try {
-        return ($null | & $commandPath help $SubcommandName 2>&1 | Out-String)
+        return ($null | & $commandPath help @SubcommandPath 2>&1 | Out-String)
     } catch {
         return ''
     }
+}
+
+function Get-GrokValueKind {
+    param(
+        [string]$Metavar,
+        [string]$Description,
+        [string[]]$Values
+    )
+
+    if (@($Values).Count -gt 0) {
+        return 'Enum'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Metavar)) {
+        return 'None'
+    }
+
+    if ($Metavar -match '^(CWD|DIR|DIRECTORY|FOLDER)$' -or $Metavar -match '_DIR$' -or $Description -match '\bdirectory\b') {
+        return 'Directory'
+    }
+
+    if ($Metavar -match '^(FILE|PATH|FILES|PATHS)$' -or $Metavar -match '_(FILE|PATH)$' -or $Description -match '\bfile\b') {
+        return 'Path'
+    }
+
+    return 'Text'
 }
 
 function ConvertFrom-GrokHelp {
@@ -74,141 +100,166 @@ function ConvertFrom-GrokHelp {
     $subcommands = New-Object System.Collections.Generic.List[string]
     $arguments = New-Object System.Collections.Generic.List[object]
     $optionByName = @{}
+    $subcommandAliases = @{}
 
-    $inCommands = $false
-    $inOptions = $false
-    $inArguments = $false
+    # Group the help into entries: each entry is a head line plus every
+    # following line that belongs to it (clap prints both the one-line and
+    # the long, blank-line separated layouts, sometimes mixed in one page).
+    $entries = New-Object System.Collections.Generic.List[object]
+    $section = ''
+    $current = $null
 
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        $line = $lines[$index]
-        $trimmed = $line.Trim()
+    foreach ($rawLine in $lines) {
+        $line = $rawLine.TrimEnd()
 
-        if ($trimmed -eq 'Commands:') {
-            $inCommands = $true
-            $inOptions = $false
-            $inArguments = $false
+        if ($line -match '^(Commands|Options|Arguments|Usage):\s*(.*)$') {
+            if ($null -ne $current) { [void]$entries.Add($current); $current = $null }
+            $section = $Matches[1]
             continue
         }
 
-        if ($trimmed -eq 'Arguments:') {
-            $inCommands = $false
-            $inOptions = $false
-            $inArguments = $true
+        if ($section -eq '' -or $section -eq 'Usage') {
             continue
         }
 
-        if ($trimmed -eq 'Options:') {
-            $inCommands = $false
-            $inOptions = $true
-            $inArguments = $false
+        if ($line -match '^\S') {
+            if ($null -ne $current) { [void]$entries.Add($current); $current = $null }
+            $section = ''
             continue
         }
 
-        if ($inCommands) {
-            if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        $startsEntry = switch ($section) {
+            'Options' { $line -match '^\s{2,7}-\S' }
+            'Arguments' { $line -match '^\s{2}[<\[]' }
+            default { $line -match '^\s{2}\S' -and $line -notmatch '^\s{3}' }
+        }
+
+        if ($startsEntry) {
+            if ($null -ne $current) { [void]$entries.Add($current) }
+            $current = [pscustomobject]@{ Section = $section; Head = $line; Body = New-Object System.Collections.Generic.List[string] }
+            continue
+        }
+
+        if ($null -ne $current) {
+            [void]$current.Body.Add($line)
+        }
+    }
+
+    if ($null -ne $current) { [void]$entries.Add($current) }
+
+    foreach ($entry in $entries) {
+        $head = $entry.Head
+        $bodyText = ''
+        $bulletValues = New-Object System.Collections.Generic.List[string]
+        $inPossibleValues = $false
+
+        foreach ($bodyLine in $entry.Body) {
+            $trimmed = $bodyLine.Trim()
+            if ($trimmed -match '^Possible values:') {
+                $inPossibleValues = $true
                 continue
             }
 
-            if ($trimmed -match '^\s*([A-Za-z0-9][A-Za-z0-9-]*)\s{2,}') {
-                $subName = $matches[1]
-                if ($subName -notin @('help')) {
-                    [void]$subcommands.Add($subName)
+            if ($inPossibleValues) {
+                if ($trimmed -match '^-\s+([^:\s]+)') {
+                    [void]$bulletValues.Add($Matches[1])
+                    continue
+                }
+
+                if ($trimmed -eq '') {
+                    continue
+                }
+
+                if ($trimmed -notmatch '^\[') {
+                    $inPossibleValues = $false
                 }
             }
 
-            continue
+            if ($trimmed -ne '') {
+                $bodyText = if ($bodyText) { "$bodyText $trimmed" } else { $trimmed }
+            }
         }
 
-        if ($inArguments) {
-            if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                continue
-            }
+        $fullText = ($head.Trim() + ' ' + $bodyText).Trim()
 
-            if ($trimmed -match '^\s*(<[^>]+>|\[[^]]+\])\s{2,}(.*)$') {
-                $argName = $matches[1]
-                $description = $matches[2]
+        $values = @()
+        if ($bulletValues.Count -gt 0) {
+            $values = @($bulletValues.ToArray())
+        } elseif ($fullText -match '\[possible values:\s*([^\]]+)\]') {
+            $values = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
 
-                if ([string]::IsNullOrWhiteSpace($description) -and $index + 1 -lt $lines.Count) {
-                    $nextLine = $lines[$index + 1].Trim()
-                    if (-not [string]::IsNullOrWhiteSpace($nextLine)) {
-                        $description = $nextLine
+        $aliases = @()
+        if ($fullText -match '\[aliases:\s*([^\]]+)\]') {
+            $aliases = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+
+        switch ($entry.Section) {
+            'Commands' {
+                if ($head -match '^\s{2}([A-Za-z0-9][A-Za-z0-9-]*)\s*(.*)$') {
+                    $subName = $Matches[1]
+                    if ($subName -ne 'help') {
+                        [void]$subcommands.Add($subName)
+                        foreach ($alias in $aliases) {
+                            $subcommandAliases[$alias] = $subName
+                        }
                     }
                 }
-
-                $values = @()
-                if ($description -match '\[possible values:\s*(.+?)\]') {
-                    $values = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-                }
-
-                $entry = [pscustomobject]@{
-                    Name = $argName
-                    Values = @($values)
-                    Description = $description
-                }
-
-                [void]$arguments.Add($entry)
             }
+            'Arguments' {
+                if ($head -match '^\s{2}(<[^>]+>|\[[^\]]+\])(\.\.\.)?(?:\s{2,}(.*))?$') {
+                    $argName = $Matches[1]
+                    $description = if ($Matches[3]) { $Matches[3].Trim() } else { '' }
+                    if ($bodyText) {
+                        $description = if ($description) { "$description $bodyText" } else { $bodyText }
+                    }
 
-            continue
-        }
-
-        if ($inOptions) {
-            if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                continue
-            }
-
-            $optionNames = New-Object System.Collections.Generic.List[string]
-            $parseLine = $trimmed
-            while ($parseLine -match '^(?<option>--?[A-Za-z0-9][A-Za-z0-9-]*)(?<rest>.*)$') {
-                [void]$optionNames.Add($matches.option)
-                $parseLine = $matches.rest
-
-                if ($parseLine -match '^\s*$') {
-                    break
-                }
-
-                if ($parseLine -match '^\s*,\s*') {
-                    $parseLine = $parseLine -replace '^\s*,\s*', ''
-                    continue
-                }
-
-                if ($parseLine -match '^\s+') {
-                    $parseLine = $parseLine.TrimStart()
-                    continue
-                }
-
-                break
-            }
-
-            if ($optionNames.Count -eq 0) {
-                continue
-            }
-
-            $description = ''
-            $nextLine = $null
-            if ($index + 1 -lt $lines.Count) {
-                $nextLine = $lines[$index + 1].Trim()
-                if (-not [string]::IsNullOrWhiteSpace($nextLine)) {
-                    $description = $nextLine
+                    [void]$arguments.Add([pscustomobject]@{
+                        Name = $argName
+                        Values = @($values)
+                        Description = ($description -replace '\s*\[possible values:[^\]]*\]', '')
+                    })
                 }
             }
+            'Options' {
+                if ($head -match '^\s{2,7}(-[^\s<\[,]+(?:,\s+-[^\s<\[,]+)*)(?:\s+(?:<([^>]+)>|\[<([^>]+)>\]))?(?:\s{2,}(\S.*))?$') {
+                    $optionNames = @($Matches[1] -split ',\s*' | ForEach-Object { $_.Trim().TrimEnd('.') } | Where-Object { $_ })
+                    $metavar = if ($Matches[2]) { $Matches[2] } elseif ($Matches[3]) { $Matches[3] } else { '' }
+                    $optionalValue = [bool]$Matches[3]
+                    $description = if ($Matches[4]) { $Matches[4].Trim() } else { '' }
+                    if ($bodyText) {
+                        $description = if ($description) { "$description $bodyText" } else { $bodyText }
+                    }
 
-            $hasValue = $line -match '<[^>]+>' -or $line -match '\[[^]]*<[^>]+>'
-            $values = @()
-            if ($description -match '\[possible values:\s*(.+?)\]') {
-                $values = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            }
+                    $description = $description -replace '\s*\[(possible values|aliases|default|env):[^\]]*\]', ''
 
-            foreach ($optionName in $optionNames) {
-                $entry = [pscustomobject]@{
-                    Name = $optionName
-                    TakesValue = $hasValue
-                    Values = @($values)
-                    Description = $description
+                    $compatAliases = @([regex]::Matches($description, 'compat alias:\s*(--?[A-Za-z0-9][A-Za-z0-9-]*)') | ForEach-Object { $_.Groups[1].Value })
+                    $allAliases = @($aliases + $compatAliases | Where-Object { $_ -match '^--?[A-Za-z0-9]' })
+
+                    $valueKind = Get-GrokValueKind -Metavar $metavar -Description $description -Values $values
+                    $hasValue = -not [string]::IsNullOrWhiteSpace($metavar)
+
+                    foreach ($optionName in $optionNames) {
+                        $spec = [pscustomobject]@{
+                            Name = $optionName
+                            TakesValue = $hasValue
+                            OptionalValue = $optionalValue
+                            ValueKind = $valueKind
+                            Values = @($values)
+                            Aliases = @($allAliases)
+                            Description = $description
+                        }
+
+                        [void]$options.Add($spec)
+                        $optionByName[$optionName] = $spec
+                    }
+
+                    foreach ($alias in $allAliases) {
+                        if (-not $optionByName.ContainsKey($alias)) {
+                            $optionByName[$alias] = $optionByName[$optionNames[-1]]
+                        }
+                    }
                 }
-
-                [void]$options.Add($entry)
-                $optionByName[$optionName] = $entry
             }
         }
     }
@@ -216,6 +267,7 @@ function ConvertFrom-GrokHelp {
     [pscustomobject]@{
         Options = (ConvertTo-GrokArray -Value $options)
         Subcommands = (ConvertTo-GrokArray -Value ($subcommands.ToArray() | Sort-Object -Unique))
+        SubcommandAliases = $subcommandAliases
         Arguments = (ConvertTo-GrokArray -Value $arguments)
         OptionByName = $optionByName
     }
@@ -232,6 +284,7 @@ function Get-GrokCompletionCatalog {
         CommandPath = $null
         RootHelpText = ''
         RootSubcommands = @()
+        RootSubcommandAliases = @{}
         RootOptions = @()
         RootArguments = @()
         RootOptionByName = @{}
@@ -253,6 +306,7 @@ function Initialize-GrokCompletionCatalog {
 
     $rootHelp = ConvertFrom-GrokHelp -HelpText $catalog.RootHelpText
     $catalog.RootSubcommands = (ConvertTo-GrokArray -Value $rootHelp.Subcommands)
+    $catalog.RootSubcommandAliases = $rootHelp.SubcommandAliases
     $catalog.RootOptions = (ConvertTo-GrokArray -Value $rootHelp.Options)
     $catalog.RootArguments = (ConvertTo-GrokArray -Value $rootHelp.Arguments)
     $catalog.RootOptionByName = $rootHelp.OptionByName
@@ -263,34 +317,39 @@ function Initialize-GrokCompletionCatalog {
 }
 
 function Get-GrokSubcommandCatalog {
-    param([string]$SubcommandName)
+    param([string[]]$SubcommandPath)
 
-    if ([string]::IsNullOrWhiteSpace($SubcommandName)) {
+    $catalog = Initialize-GrokCompletionCatalog
+    $path = @($SubcommandPath)
+
+    if ($path.Count -eq 0) {
         return [pscustomobject]@{
-            Options = @()
-            Subcommands = @()
-            Arguments = @()
-            OptionByName = @{}
+            Options = (ConvertTo-GrokArray -Value $catalog.RootOptions)
+            Subcommands = (ConvertTo-GrokArray -Value $catalog.RootSubcommands)
+            SubcommandAliases = $catalog.RootSubcommandAliases
+            Arguments = (ConvertTo-GrokArray -Value $catalog.RootArguments)
+            OptionByName = $catalog.RootOptionByName
         }
     }
 
-    $catalog = Initialize-GrokCompletionCatalog
-    if ($catalog.SubcommandCatalogs.ContainsKey($SubcommandName)) {
-        return $catalog.SubcommandCatalogs[$SubcommandName]
+    $key = $path -join ' '
+    if ($catalog.SubcommandCatalogs.ContainsKey($key)) {
+        return $catalog.SubcommandCatalogs[$key]
     }
 
-    $helpOutput = Get-GrokSubcommandHelpOutput -SubcommandName $SubcommandName
+    $helpOutput = Get-GrokSubcommandHelpOutput -SubcommandPath $path
     $parsed = ConvertFrom-GrokHelp -HelpText $helpOutput
     $parsedObject = [pscustomobject]@{
         Options = (ConvertTo-GrokArray -Value $parsed.Options)
         Subcommands = (ConvertTo-GrokArray -Value $parsed.Subcommands)
+        SubcommandAliases = $parsed.SubcommandAliases
         Arguments = (ConvertTo-GrokArray -Value $parsed.Arguments)
         OptionByName = $parsed.OptionByName
     }
 
-    $catalog.SubcommandCatalogs[$SubcommandName] = $parsedObject
+    $catalog.SubcommandCatalogs[$key] = $parsedObject
     Set-Variable -Name 'GrokCompletionCatalog' -Value $catalog -Scope Script
-    return $catalog.SubcommandCatalogs[$SubcommandName]
+    return $catalog.SubcommandCatalogs[$key]
 }
 
 function ConvertTo-GrokArray {
@@ -345,9 +404,11 @@ function Get-GrokCommandTokens {
         return @()
     }
 
+    # Only elements that end strictly before the cursor precede the current
+    # word; the element the cursor touches is the word being completed.
     $tokens = New-Object System.Collections.Generic.List[string]
     foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
-        if ($element.Extent.EndOffset -le $CursorPosition) {
+        if ($element.Extent.EndOffset -lt $CursorPosition) {
             [void]$tokens.Add($element.Extent.Text.Trim())
         }
     }
@@ -356,7 +417,10 @@ function Get-GrokCommandTokens {
 }
 
 function Get-GrokPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$DirectoryOnly
+    )
 
     $cleanInput = $InputPath
     if ($null -eq $cleanInput) {
@@ -388,6 +452,10 @@ function Get-GrokPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
+        if ($DirectoryOnly -and -not $item.PSIsContainer) {
+            continue
+        }
+
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
             $item.Name
         } else {
@@ -438,6 +506,63 @@ function Get-GrokOptionSpec {
     return $null
 }
 
+function Resolve-GrokSubcommandName {
+    param(
+        [psobject]$Catalog,
+        [string]$Token
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Token) -or $Token.StartsWith('-')) {
+        return $null
+    }
+
+    if (@($Catalog.Subcommands) -contains $Token) {
+        return $Token
+    }
+
+    $aliases = $Catalog.SubcommandAliases
+    if ($null -ne $aliases -and $aliases.ContainsKey($Token)) {
+        return $aliases[$Token]
+    }
+
+    return $null
+}
+
+function Complete-GrokOptionValue {
+    param(
+        [psobject]$OptionSpec,
+        [string]$ValueText,
+        [string]$Prefix = ''
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    switch ($OptionSpec.ValueKind) {
+        'Enum' {
+            foreach ($value in $OptionSpec.Values) {
+                if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($ValueText) + '*')) {
+                    [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + $value) -ListItemText $value -ResultType 'ParameterValue' -ToolTip $OptionSpec.Description))
+                }
+            }
+        }
+        'Directory' {
+            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText -DirectoryOnly)) {
+                [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip))
+            }
+        }
+        'Path' {
+            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText)) {
+                [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip))
+            }
+        }
+        default {
+            [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + '<value>') -ListItemText '<value>' -ResultType 'ParameterValue' -ToolTip $OptionSpec.Description))
+        }
+    }
+
+    return (ConvertTo-GrokArray -Value $results)
+}
+
 function Complete-Grok {
     param(
         [string]$wordToComplete,
@@ -445,63 +570,88 @@ function Complete-Grok {
         [int]$cursorPosition
     )
 
-    $catalog = Initialize-GrokCompletionCatalog
+    $null = Initialize-GrokCompletionCatalog
     $currentWord = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
     $tokensBeforeCurrent = @(Get-GrokCommandTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
-    $currentToken = $currentWord
 
-    $subcommandName = $null
-    if ($tokensBeforeCurrent.Count -gt 0) {
-        $firstToken = $tokensBeforeCurrent[0]
-        if ($firstToken -and -not $firstToken.StartsWith('-') -and $catalog.RootSubcommands -contains $firstToken) {
-            $subcommandName = $firstToken
+    # The engine hands over the whole token when the cursor sits inside it;
+    # re-derive the word from the command-relative text before the cursor.
+    $currentToken = $currentWord
+    if ($null -ne $commandAst) {
+        if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
+            $currentToken = ''
+        } else {
+            $currentToken = Get-GrokCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $currentWord
         }
     }
+    $currentToken = $currentToken.Trim([char[]]@([char]34, [char]39))
 
-    $activeCatalog = if ($subcommandName) { Get-GrokSubcommandCatalog -SubcommandName $subcommandName } else { [pscustomobject]@{ Options = (ConvertTo-GrokArray -Value $catalog.RootOptions); Subcommands = (ConvertTo-GrokArray -Value $catalog.RootSubcommands); Arguments = (ConvertTo-GrokArray -Value $catalog.RootArguments); OptionByName = $catalog.RootOptionByName } }
+    # Walk the command path greedily: every leading non-option token that
+    # names a subcommand (or alias) of the current node descends one level.
+    $commandPath = @()
+    $activeCatalog = Get-GrokSubcommandCatalog -SubcommandPath @()
+    $positionalCount = 0
+    $descending = $true
+    $pendingOption = $null
 
-    if ($tokensBeforeCurrent.Count -gt 0) {
-        $candidateOption = $tokensBeforeCurrent[-1]
-        if ($candidateOption -and $candidateOption.StartsWith('-')) {
-            $optionSpec = Get-GrokOptionSpec -Catalog $activeCatalog -OptionName $candidateOption
-            if ($null -ne $optionSpec -and $optionSpec.TakesValue) {
-                if ($optionSpec.Values.Count -gt 0) {
-                    return @(
-                        foreach ($value in $optionSpec.Values) {
-                            if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
-                                New-GrokCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip $optionSpec.Description
-                            }
-                        }
-                    )
-                }
-
-                $pathLikeOptions = @('cwd', 'agent-profile', 'prompt-file', 'debug-file', 'leader-socket', 'worktree-ref')
-                if ($optionSpec.Name -in $pathLikeOptions -or $optionSpec.Name -in @('--cwd', '--agent-profile', '--prompt-file', '--debug-file', '--leader-socket', '--worktree-ref')) {
-                    return @(Get-GrokPathCompletions -InputPath $currentToken)
-                }
-
-                return @(
-                    New-GrokCompletionResult -CompletionText '<value>' -ListItemText '<value>' -ResultType 'ParameterValue' -ToolTip $optionSpec.Description
-                )
-            }
+    foreach ($token in $tokensBeforeCurrent) {
+        if ($null -ne $pendingOption) {
+            $pendingOption = $null
+            continue
         }
+
+        if ($token.StartsWith('-') -and $token.Length -gt 1) {
+            if ($token.Contains('=')) {
+                continue
+            }
+
+            $spec = Get-GrokOptionSpec -Catalog $activeCatalog -OptionName $token
+            if ($null -ne $spec -and $spec.TakesValue -and -not $spec.OptionalValue) {
+                $pendingOption = $spec
+            }
+
+            continue
+        }
+
+        $resolved = if ($descending) { Resolve-GrokSubcommandName -Catalog $activeCatalog -Token $token } else { $null }
+        if ($null -ne $resolved) {
+            $commandPath += $resolved
+            $activeCatalog = Get-GrokSubcommandCatalog -SubcommandPath $commandPath
+            continue
+        }
+
+        $descending = $false
+        $positionalCount++
+    }
+
+    if ($null -ne $pendingOption) {
+        return Complete-GrokOptionValue -OptionSpec $pendingOption -ValueText $currentToken
+    }
+
+    if ($currentToken -match '^(--?[A-Za-z0-9][A-Za-z0-9-]*)=(.*)$') {
+        $spec = Get-GrokOptionSpec -Catalog $activeCatalog -OptionName $Matches[1]
+        if ($null -ne $spec -and $spec.TakesValue) {
+            return Complete-GrokOptionValue -OptionSpec $spec -ValueText $Matches[2] -Prefix ($Matches[1] + '=')
+        }
+
+        return @()
     }
 
     $results = New-Object System.Collections.Generic.List[object]
 
-    if ($subcommandName -eq 'completions' -and $tokensBeforeCurrent.Count -eq 1 -and -not $currentWord.StartsWith('-')) {
+    if ($positionalCount -eq 0 -and -not $currentToken.StartsWith('-')) {
         $argumentSpec = $null
         foreach ($argument in @($activeCatalog.Arguments)) {
-            if ($argument.Name -match '^<') {
+            if ($argument.Name -match '^<' -and @($argument.Values).Count -gt 0) {
                 $argumentSpec = $argument
                 break
             }
         }
 
-        if ($null -ne $argumentSpec -and $argumentSpec.Values.Count -gt 0) {
+        if ($null -ne $argumentSpec) {
             foreach ($value in $argumentSpec.Values) {
                 if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
-                    [void]$results.Add((New-GrokCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip 'Shell for grok completions'))
+                    [void]$results.Add((New-GrokCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip $argumentSpec.Description))
                 }
             }
 
@@ -509,23 +659,25 @@ function Complete-Grok {
         }
     }
 
-    if ($currentWord.StartsWith('-')) {
+    if ($currentToken.StartsWith('-')) {
         foreach ($option in @($activeCatalog.Options)) {
-            if ($option.Name -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
+            if ($option.Name -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText $option.Name -ListItemText $option.Name -ResultType 'ParameterName' -ToolTip $option.Description))
             }
         }
     } else {
         # When not starting with '-', offer both subcommands and options at the command level
-        foreach ($subcommand in @($activeCatalog.Subcommands)) {
-            if ($subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*')) {
-                [void]$results.Add((New-GrokCompletionResult -CompletionText $subcommand -ListItemText $subcommand -ResultType 'ParameterValue' -ToolTip 'grok subcommand'))
+        if ($descending) {
+            foreach ($subcommand in @($activeCatalog.Subcommands)) {
+                if ($subcommand -like ([System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
+                    [void]$results.Add((New-GrokCompletionResult -CompletionText $subcommand -ListItemText $subcommand -ResultType 'ParameterValue' -ToolTip 'grok subcommand'))
+                }
             }
         }
 
         # Also offer options at the command level (with '-' prefix)
         foreach ($option in @($activeCatalog.Options)) {
-            if ($option.Name -like "-$currentWord*") {
+            if ($option.Name -like ('-' + [System.Management.Automation.WildcardPattern]::Escape($currentToken) + '*')) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText $option.Name -ListItemText $option.Name -ResultType 'ParameterName' -ToolTip $option.Description))
             }
         }
