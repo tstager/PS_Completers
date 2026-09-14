@@ -116,6 +116,22 @@ The completer suggests the documented option surface for common `rustc` flags, i
 - `-V`, `--version`
 - `-v`, `--verbose`
 
+and the options that only `rustc --help -v` documents but that `rustc` accepts on
+every invocation:
+
+- `--extern`
+- `--sysroot`
+- `--error-format`
+- `--json`
+- `--color`
+- `--diagnostic-width`
+- `--remap-path-prefix`
+- `--remap-path-scope`
+
+Spellings are matched ordinally, because rustc's short flags are case-distinct in
+three pairs: `-L`/`-l`, `-O`/`-o` and `-V`/`-v`. A case-insensitive match followed
+by a case-insensitive `Sort-Object -Unique` keeps only one spelling of each pair.
+
 ### Representative value slots
 
 The completer gives value suggestions for several non-path slots:
@@ -125,9 +141,24 @@ The completer gives value suggestions for several non-path slots:
 - `--emit` → documented emit kinds
 - `--print` → documented `rustc --print` topics
 - `--target` → installed target triples from `rustc --print target-list`
-- `-A`, `-W`, `-D`, `-F`, `--force-warn` → lint names from `rustc -W help`
+- `-A`, `-W`, `-D`, `-F`, `--force-warn` → lint names **and lint groups** from
+  `rustc -W help`. That command prints two tables; only the first was being read,
+  so `warnings`, `unused`, `nonstandard-style`, `future-incompatible`,
+  `rust-2021-compatibility` and the rest of the groups - the values people
+  actually pass - were missing. A group's tooltip lists its sub-lints.
 - `--cap-lints` → `allow`, `warn`, `deny`, `forbid`
 - `-C`, `--codegen` → option names from `rustc -C help`
+- `--error-format` → `human`, `json`, `short`
+- `--color` → `auto`, `always`, `never`
+- `--remap-path-scope` → `macro`, `diagnostics`, `debuginfo`, `coverage`,
+  `object`, `all`
+- `--json` → `artifacts`, `diagnostic-short`, `diagnostic-rendered-ansi`,
+  `diagnostic-unicode`, `future-incompat`
+- `--sysroot` → directories
+
+Both value forms work. The attached form keeps its `--opt=` prefix on the
+inserted text, so `rustc --emit=<TAB>` yields `--emit=asm` rather than a bare
+`asm` that would replace the whole token and delete the option name.
 
 For `-C` / `--codegen`, the completer also recognizes `name=value` forms and suggests values for common options such as:
 
@@ -146,10 +177,17 @@ For `-C` / `--codegen`, the completer also recognizes `name=value` forms and sug
 
 The completer uses local-only filesystem enumeration for:
 
-- the primary input source file operand
+- the INPUT operand, filtered to directories and `.rs` files, and reachable from
+  a bare TAB alongside the switch list
 - `-L` library search paths
 - `-o` output file paths
-- `--out-dir` output directories
+- `--out-dir` and `--sysroot` directories
+
+Paths are split on the last separator rather than with `Split-Path`. `Split-Path`
+throws on an empty string, which aborted the whole completion scriptblock and
+silently degraded every empty or bare path slot to PowerShell's filename
+fallback; on a trailing separator it also returns the directory itself as the
+leaf, so a slot could never descend.
 
 ### Placeholder-only slots
 
@@ -180,11 +218,37 @@ rustc.exe --print <TAB>
 ## Runtime notes
 
 - The completer registers both `rustc` and `rustc.exe` because both names resolve locally on this machine.
-- Help/output harvesting is lazy and cached in script scope.
+- Help/output harvesting is lazy and cached in script scope, and reads
+  `rustc --help -v` so the verbose-only options are covered.
 - Help text is treated as authoritative even though native tools do not always use conventional exit codes for help paths.
+- `$cursorPosition` is rebased by `$commandAst.Extent.StartOffset` before it is
+  applied to the command-relative extent text.
+- rustc version during this revision: `1.98.1`.
+
+### Representative validation
+
+Clean `pwsh -NoProfile` `TabExpansion2` runs:
+
+- `rustc -` 31 -> 42 spellings, gaining the eight verbose-only options plus
+  `-L`, `-O` and `-V`
+- `rustc --extern ` 31 switch names -> `<name>=<path>`
+- `rustc --color ` 31 switch names -> `auto always never`
+- `rustc --error-format ` 31 switch names -> `human json short`
+- `rustc --remap-path-scope ` 31 switch names -> the six scopes
+- `rustc --json ` 31 switch names -> the five JSON configs
+- `rustc --sysroot ` 31 switch names -> 174 directories
+- `rustc -W ` 245 -> 258 values, adding the 13 lint groups
+- `rustc -W unu` 24 -> 25, adding the `unused` group
+- `rustc --emit=` -> `--emit=asm` ... instead of a bare `asm`
+- `rustc --crate-type=b` -> `--crate-type=bin`
+- `rustc -L ` and `rustc --out-dir ` filename fallback -> 174 directories
+- `$x = 1; rustc --edi` identical to the same input at the start of a line
+- `$Error` did not grow across the probe set; it grew by 2 before
 
 ## Limitations
 
-- The completer does not parse every possible nested `rustc` value grammar.
+- The completer does not parse every possible nested `rustc` value grammar; the
+  comma-separated `--emit`/`--crate-type`/`--print` lists and the `=FILE` suffix
+  are not modelled.
 - `-L` and `-l` support richer syntaxes than simple directory/library-name hints; the completer keeps those slots conservative.
 - Path completion is local-only and prefix-based.

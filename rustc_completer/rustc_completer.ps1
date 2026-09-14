@@ -145,31 +145,45 @@ function ConvertTo-RustcQuotedValue {
     '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
 }
 
+function Split-RustcPathToken {
+    param([string]$Value)
+
+    # Split on the last separator instead of Split-Path: Split-Path throws on an
+    # empty string, and on a trailing separator it returns the directory itself
+    # as the leaf, so a path slot could never descend.
+    if ([string]::IsNullOrEmpty($Value)) {
+        return [pscustomobject]@{ Prefix = ''; Parent = '.'; Leaf = '' }
+    }
+
+    if ($Value -match '^[A-Za-z]:$') {
+        return [pscustomobject]@{ Prefix = $Value; Parent = ($Value + [IO.Path]::DirectorySeparatorChar); Leaf = '' }
+    }
+
+    $index = $Value.LastIndexOfAny([char[]]@('\', '/'))
+    if ($index -lt 0) {
+        return [pscustomobject]@{ Prefix = ''; Parent = '.'; Leaf = $Value }
+    }
+
+    $prefix = $Value.Substring(0, $index + 1)
+    [pscustomobject]@{ Prefix = $prefix; Parent = $prefix; Leaf = $Value.Substring($index + 1) }
+}
+
 function Get-RustcPathCompletions {
     param(
         [string]$CurrentToken,
         [bool]$DirectoriesOnly = $false,
-        [bool]$FilesOnly = $false
+        [bool]$FilesOnly = $false,
+        [bool]$RustSourceOnly = $false
     )
 
     $raw = if ($null -eq $CurrentToken) { '' } else { $CurrentToken }
     $clean = Remove-RustcOuterQuotes -Value $raw
-
-    $parentText = Split-Path -Path $clean -Parent
-    $leaf = Split-Path -Path $clean -Leaf
-    if ([string]::IsNullOrEmpty($parentText)) {
-        $parentText = '.'
-        $leaf = $clean
-    }
-
-    $literalParent = $parentText
-    if ([string]::IsNullOrWhiteSpace($literalParent)) {
-        $literalParent = '.'
-    }
+    $split = Split-RustcPathToken -Value $clean
+    $leaf = $split.Leaf
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
     try {
-        $items = Get-ChildItem -LiteralPath $literalParent -Force -ErrorAction Stop
+        $items = Get-ChildItem -LiteralPath $split.Parent -Force -ErrorAction Stop
     } catch {
         return @()
     }
@@ -183,16 +197,15 @@ function Get-RustcPathCompletions {
             continue
         }
 
+        if ($RustSourceOnly -and -not $item.PSIsContainer -and $item.Extension -ne '.rs') {
+            continue
+        }
+
         if ($leaf -and -not $item.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        $completionPath = if ($parentText -eq '.') {
-            $item.Name
-        } else {
-            Join-Path -Path $parentText -ChildPath $item.Name
-        }
-
+        $completionPath = $split.Prefix + $item.Name
         if ($item.PSIsContainer) {
             $completionPath += [IO.Path]::DirectorySeparatorChar
         }
@@ -266,6 +279,15 @@ function Get-RustcCatalog {
         [pscustomobject]@{ Token = '-C'; Aliases = @('-C', '--codegen'); Description = 'Set a codegen option.'; ValueKind = 'CodegenOption' }
         [pscustomobject]@{ Token = '-V'; Aliases = @('-V', '--version'); Description = 'Print version info and exit.'; ValueKind = $null }
         [pscustomobject]@{ Token = '-v'; Aliases = @('-v', '--verbose'); Description = 'Use verbose output.'; ValueKind = $null }
+        # Documented by `rustc --help -v` only, but accepted on every invocation.
+        [pscustomobject]@{ Token = '--extern'; Aliases = @('--extern'); Description = 'Specify where an external rust library is located.'; ValueKind = 'ExternSpec' }
+        [pscustomobject]@{ Token = '--sysroot'; Aliases = @('--sysroot'); Description = 'Override the system root.'; ValueKind = 'OutputDir' }
+        [pscustomobject]@{ Token = '--error-format'; Aliases = @('--error-format'); Description = 'How errors and other messages are produced.'; ValueKind = 'ErrorFormat' }
+        [pscustomobject]@{ Token = '--json'; Aliases = @('--json'); Description = 'Configure the JSON output of the compiler.'; ValueKind = 'JsonConfig' }
+        [pscustomobject]@{ Token = '--color'; Aliases = @('--color'); Description = 'Configure coloring of output.'; ValueKind = 'ColorMode' }
+        [pscustomobject]@{ Token = '--diagnostic-width'; Aliases = @('--diagnostic-width'); Description = 'Inform rustc of the width of the output.'; ValueKind = 'DiagnosticWidth' }
+        [pscustomobject]@{ Token = '--remap-path-prefix'; Aliases = @('--remap-path-prefix'); Description = 'Remap source names in all output.'; ValueKind = 'RemapPathPrefix' }
+        [pscustomobject]@{ Token = '--remap-path-scope'; Aliases = @('--remap-path-scope'); Description = 'Which scopes of paths --remap-path-prefix remaps.'; ValueKind = 'RemapPathScope' }
     )
 
     $aliasLookup = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)
@@ -275,7 +297,7 @@ function Get-RustcCatalog {
         }
     }
 
-    $topHelp = Invoke-RustcText -Arguments @('-h')
+    $topHelp = Invoke-RustcText -Arguments @('--help', '-v')
     foreach ($line in $topHelp) {
         if ($line -match '^\s+(-\w(?:,\s+--[A-Za-z0-9\-]+)?|--[A-Za-z0-9\-]+)\b') {
             $tokenGroup = $matches[1]
@@ -291,10 +313,30 @@ function Get-RustcCatalog {
         }
     }
 
+    # `rustc -W help` prints two tables: "Lint checks provided by rustc:" with a
+    # default level per lint, and "Lint groups provided by rustc:" with the
+    # group's sub-lints. Both are valid -A/-W/-D/-F/--force-warn values.
     $lintNames = New-Object System.Collections.Generic.List[string]
+    $lintGroups = New-Object System.Collections.Generic.List[object]
+    $inGroups = $false
     foreach ($line in (Invoke-RustcText -Arguments @('-W', 'help'))) {
+        if ($line -match '^Lint groups provided by') {
+            $inGroups = $true
+            continue
+        }
+
+        if ($line -match '^[A-Za-z].*:\s*$') {
+            $inGroups = $false
+            continue
+        }
+
         if ($line -match '^\s{2,}([a-z0-9][a-z0-9\-]*)\s{2,}(allow|warn|deny|forbid)\s{2,}') {
             [void]$lintNames.Add($matches[1])
+            continue
+        }
+
+        if ($inGroups -and $line -match '^\s{2,}(?<name>[a-z0-9][a-z0-9\-]*)\s{2,}(?<sub>\S.*)$' -and $matches.name -ne 'name') {
+            [void]$lintGroups.Add([pscustomobject]@{ Name = $matches.name; SubLints = $matches.sub.Trim() })
         }
     }
 
@@ -322,6 +364,7 @@ function Get-RustcCatalog {
         PrintInfos     = @('all-target-specs-json', 'backend-has-zstd', 'calling-conventions', 'cfg', 'check-cfg', 'code-models', 'crate-name', 'crate-root-lint-levels', 'deployment-target', 'file-names', 'host-tuple', 'link-args', 'native-static-libs', 'relocation-models', 'split-debuginfo', 'stack-protector-strategies', 'supported-crate-types', 'sysroot', 'target-cpus', 'target-features', 'target-libdir', 'target-list', 'target-spec-json', 'target-spec-json-schema', 'tls-models')
         LintLevels     = @('allow', 'warn', 'deny', 'forbid')
         LintNames      = @($lintNames.ToArray() | Sort-Object -Unique)
+        LintGroups     = @($lintGroups.ToArray() | Sort-Object -Property Name -Unique)
         CodegenOptions = @($codegenOptions.ToArray() | Sort-Object -Unique)
         TargetTriples  = @($targetTriples | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         TargetCpus     = @($targetCpus.ToArray() | Sort-Object -Unique)
@@ -390,10 +433,58 @@ function Get-RustcValueKindSuggestions {
             }
         }
         'LintName' {
+            foreach ($group in $catalog.LintGroups) {
+                if ($group.Name.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $group.Name -ResultType 'ParameterValue' -ToolTip "lint group: $($group.SubLints)"))
+                }
+            }
             foreach ($value in $catalog.LintNames) {
                 if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
                     [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc lint name'))
                 }
+            }
+        }
+        'ErrorFormat' {
+            foreach ($value in @('human', 'json', 'short')) {
+                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc --error-format'))
+                }
+            }
+        }
+        'ColorMode' {
+            foreach ($value in @('auto', 'always', 'never')) {
+                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc --color'))
+                }
+            }
+        }
+        'RemapPathScope' {
+            foreach ($value in @('macro', 'diagnostics', 'debuginfo', 'coverage', 'object', 'all')) {
+                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc --remap-path-scope'))
+                }
+            }
+        }
+        'JsonConfig' {
+            foreach ($value in @('artifacts', 'diagnostic-short', 'diagnostic-rendered-ansi', 'diagnostic-unicode', 'future-incompat')) {
+                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc --json config'))
+                }
+            }
+        }
+        'DiagnosticWidth' {
+            if ([string]::IsNullOrEmpty($clean)) {
+                [void]$results.Add((New-RustcCompletionResult -CompletionText '<width>' -ResultType 'ParameterValue' -ToolTip 'Output width in columns'))
+            }
+        }
+        'RemapPathPrefix' {
+            if ([string]::IsNullOrEmpty($clean)) {
+                [void]$results.Add((New-RustcCompletionResult -CompletionText '<from>=<to>' -ResultType 'ParameterValue' -ToolTip 'rustc --remap-path-prefix'))
+            }
+        }
+        'ExternSpec' {
+            if ([string]::IsNullOrEmpty($clean)) {
+                [void]$results.Add((New-RustcCompletionResult -CompletionText '<name>=<path>' -ResultType 'ParameterValue' -ToolTip 'rustc --extern NAME[=PATH]'))
             }
         }
         'LintLevel' {
@@ -421,7 +512,7 @@ function Get-RustcValueKindSuggestions {
         'LibrarySearchPath' { return Get-RustcPathCompletions -CurrentToken $raw -DirectoriesOnly $true }
         'OutputDir' { return Get-RustcPathCompletions -CurrentToken $raw -DirectoriesOnly $true }
         'OutputFile' { return Get-RustcPathCompletions -CurrentToken $raw }
-        'InputFile' { return Get-RustcPathCompletions -CurrentToken $raw -FilesOnly $true }
+        'InputFile' { return Get-RustcPathCompletions -CurrentToken $raw -RustSourceOnly $true }
         'ExplainCode' {
             foreach ($value in @('E0001', 'E0308', 'E0425', 'E0599', '<error-code>')) {
                 if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -557,21 +648,28 @@ function Get-RustcSwitchSuggestions {
     $clean = Remove-RustcOuterQuotes -Value $CurrentToken
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
 
+    # Ordinal throughout: rustc's short flags are case-distinct in three pairs
+    # (-L/-l, -O/-o, -V/-v). A case-insensitive match plus a case-insensitive
+    # Sort-Object -Unique keeps only one spelling of each pair.
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($switch in $catalog.Switches) {
         foreach ($alias in $switch.Aliases) {
-            if ($alias.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($alias.StartsWith($clean, [System.StringComparison]::Ordinal) -and $seen.Add($alias)) {
                 [void]$results.Add((New-RustcCompletionResult -CompletionText $alias -ResultType 'ParameterName' -ToolTip $switch.Description -ListItemText $alias))
             }
         }
     }
 
-    @($results.ToArray() | Sort-Object CompletionText -Unique)
+    @($results.ToArray() | Sort-Object -Property CompletionText -CaseSensitive)
 }
 
 Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $tokenState = Get-RustcTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    # $cursorPosition is an offset into the whole input line, while
+    # $commandAst.Extent.Text is command-relative.
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    $tokenState = Get-RustcTokenState -Line $commandAst.Extent.Text -CursorPosition $relativeCursor
     $currentToken = if ($null -eq $tokenState.CurrentToken) { $wordToComplete } else { $tokenState.CurrentToken }
     $tokensBeforeCurrent = @($tokenState.TokensBeforeCurrent)
     if ([string]::IsNullOrEmpty($wordToComplete) -and -not [string]::IsNullOrEmpty($currentToken)) {
@@ -589,21 +687,36 @@ Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptB
     if ($cleanCurrent -match '^(--[A-Za-z0-9\-]+)=(.*)$') {
         $catalog = Get-RustcCatalog
         $optionName = $matches[1]
+        $attachedValue = $matches[2]
         if ($catalog.AliasLookup.ContainsKey($optionName)) {
             $spec = $catalog.AliasLookup[$optionName]
             if ($spec.ValueKind) {
-                return Get-RustcValueKindSuggestions -ValueKind $spec.ValueKind -CurrentToken $matches[2]
+                # Keep the "--opt=" prefix on every suggestion so accepting one
+                # does not delete the option name.
+                return @(
+                    Get-RustcValueKindSuggestions -ValueKind $spec.ValueKind -CurrentToken $attachedValue |
+                        ForEach-Object {
+                            New-RustcCompletionResult -CompletionText ($optionName + '=' + $_.CompletionText) -ResultType $_.ResultType -ToolTip $_.ToolTip -ListItemText $_.ListItemText
+                        }
+                )
             }
         }
+
+        return @()
     }
 
-    if ($cleanCurrent.StartsWith('-') -or [string]::IsNullOrEmpty($cleanCurrent)) {
+    if ($cleanCurrent.StartsWith('-')) {
         return Get-RustcSwitchSuggestions -CurrentToken $currentToken
     }
 
-    if ($state.OperandCount -eq 0) {
-        return Get-RustcValueKindSuggestions -ValueKind 'InputFile' -CurrentToken $currentToken
+    if ([string]::IsNullOrEmpty($cleanCurrent)) {
+        # The INPUT operand is reachable from a bare TAB: offer the switches and
+        # the .rs sources rustc actually compiles.
+        return @(
+            @(Get-RustcSwitchSuggestions -CurrentToken $currentToken) +
+            @(Get-RustcPathCompletions -CurrentToken $currentToken -RustSourceOnly $true)
+        )
     }
 
-    Get-RustcPathCompletions -CurrentToken $currentToken -FilesOnly $true
+    Get-RustcPathCompletions -CurrentToken $currentToken -RustSourceOnly $true
 }
