@@ -25,8 +25,9 @@ This completer is intentionally limited to CLI argv parsing. It does **not** att
 
 ## Static command coverage
 
-Top-level commands:
+Top-level commands (re-derived from `copilot --help` 1.0.83):
 
+- `app`
 - `completion <shell>` (`bash`, `zsh`, `fish`)
 - `help`
 - `init`
@@ -42,10 +43,16 @@ An unknown command path never falls back to the root command list; only the glob
 
 Help topics:
 
+- `billing`
 - `commands`
 - `config`
 - `environment`
+- `limits`
 - `logging`
+- `monitoring`
+- `permissions`
+- `providers`
+- `sandbox`
 - `permissions`
 - `providers`
 
@@ -98,11 +105,11 @@ The script caches those runtime lists briefly to keep repeated completion respon
 Notable value handling:
 
 - `--model`
-  - suggests models discovered from `copilot help config`
+  - suggests `auto` (let Copilot pick) followed by the models discovered from `copilot help config`
 - `--log-level`
   - suggests `none`, `error`, `warning`, `info`, `debug`, `all`, `default`
 - `--effort` / `--reasoning-effort`
-  - suggests `low`, `medium`, `high`, `xhigh`
+  - suggests `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
 - `--output-format`
   - suggests `text`, `json`
 - `--stream`
@@ -111,8 +118,16 @@ Notable value handling:
   - support optional values and suggest `on`, `off`
 - `login --host`
   - suggests example host URLs such as `https://github.com` and `https://example.ghe.com`
-- `--add-dir`, `--config-dir`, `--log-dir`, `--plugin-dir`, `--extension-sdk-path`, `-C`
-  - use directory completion; a value ending in `\` or `/` (and `.`, `..`, `~\`) descends into that directory
+- `login --device-code`, `--web-flow`, `--with-token`
+  - the authentication-mode switches documented by `copilot login --help`
+- `--add-dir`, `--log-dir`, `--plugin-dir`, `--extension-sdk-path`, `-C`
+  - use directory completion; a value ending in `\` or `/` (and `.`, `..`, `~\`) descends into that directory; a directory with no subdirectories yields the typed value (or a `<directory>` placeholder) rather than PowerShell's file fallback
+- `--enable-mcp-server` / `--disable-mcp-server`
+  - `<server-name>` placeholder
+- `--usage-output-file`
+  - file completion
+- attached `--option=` on placeholder slots (`--agent=`, `--name=`, `--resume=`, `--allow-tool=` ...)
+  - offers `--option=<placeholder>` rather than echoing the flag; a short-flag cluster such as `-sp` falls back to the option list
 - `--attachment`
   - uses file completion
 - `--mode` (`interactive`, `plan`, `autopilot`) and `--context` (`default`, `long_context`)

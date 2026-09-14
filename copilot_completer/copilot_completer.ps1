@@ -29,7 +29,7 @@ if (-not (Get-Variable -Name CopilotCompletionCache -Scope Script -ErrorAction I
         InstalledPluginsLoadedAt   = $null
         ModelCacheTtlSeconds       = 300
         RuntimeCacheTtlSeconds     = 60
-        HelpTopics                 = @('commands', 'config', 'environment', 'logging', 'permissions', 'providers')
+        HelpTopics                 = @('billing', 'commands', 'config', 'environment', 'limits', 'logging', 'monitoring', 'permissions', 'providers', 'sandbox')
         GlobalOptions              = $null
         CommandSpecs               = $null
     }
@@ -257,13 +257,13 @@ function Initialize-CopilotStaticMetadata {
         New-CopilotOptionSpec -Tokens @('--allow-all-urls') -Description 'Allow access to all URLs without confirmation.'
         New-CopilotOptionSpec -Tokens @('--allow-tool') -Description 'Grant permission to a specific tool or tool pattern.' -ValueKind 'ToolPattern' -OptionalValue
         New-CopilotOptionSpec -Tokens @('--allow-url') -Description 'Grant permission to a specific URL or domain.' -ValueKind 'UrlPattern' -OptionalValue
+        New-CopilotOptionSpec -Tokens @('--assisted-approval') -Description 'Review tool permission requests with the assisted-approval safety judge instead of approving them outright.'
         New-CopilotOptionSpec -Tokens @('--attachment') -Description 'Attach a file (image or native document) to the initial prompt.' -ValueKind 'FilePath'
         New-CopilotOptionSpec -Tokens @('--autopilot') -Description 'Enable autopilot continuation in prompt mode.'
         New-CopilotOptionSpec -Tokens @('--available-tools') -Description 'Only these tools will be available to the model.' -ValueKind 'ToolPattern' -OptionalValue
         New-CopilotOptionSpec -Tokens @('--banner') -Description 'Show the startup banner.'
         New-CopilotOptionSpec -Tokens @('--bash-env') -Description 'Enable BASH_ENV support for bash shells.' -ValueKind 'OnOff' -OptionalValue
         New-CopilotOptionSpec -Tokens @('-C') -Description 'Change working directory before doing anything else.' -ValueKind 'DirectoryPath'
-        New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Set the configuration directory.' -ValueKind 'DirectoryPath'
         New-CopilotOptionSpec -Tokens @('--connect') -Description 'Connect directly to a remote session (optional session or task ID).' -ValueKind 'ResumeSession' -OptionalValue
         New-CopilotOptionSpec -Tokens @('--context') -Description 'Set the context window tier.' -ValueKind 'ContextTier'
         New-CopilotOptionSpec -Tokens @('--continue') -Description 'Resume the most recent session.'
@@ -273,8 +273,8 @@ function Initialize-CopilotStaticMetadata {
         New-CopilotOptionSpec -Tokens @('--disable-mcp-server') -Description 'Disable a specific MCP server.' -ValueKind 'ServerName'
         New-CopilotOptionSpec -Tokens @('--disallow-temp-dir') -Description 'Prevent automatic access to the system temp directory.'
         New-CopilotOptionSpec -Tokens @('--enable-all-github-mcp-tools') -Description 'Enable all GitHub MCP server tools.'
+        New-CopilotOptionSpec -Tokens @('--enable-mcp-server') -Description 'Enable an MCP server disabled in settings for this run only (can be used multiple times).' -ValueKind 'ServerName'
         New-CopilotOptionSpec -Tokens @('--enable-memory') -Description 'Enable memory in prompt mode.'
-        New-CopilotOptionSpec -Tokens @('--enable-reasoning-summaries') -Description 'Request reasoning summaries for OpenAI models.'
         New-CopilotOptionSpec -Tokens @('--excluded-tools') -Description 'These tools will not be available to the model.' -ValueKind 'ToolPattern' -OptionalValue
         New-CopilotOptionSpec -Tokens @('--experimental') -Description 'Enable experimental features.'
         New-CopilotOptionSpec -Tokens @('--extension-sdk-path') -Description 'Override the bundled @github/copilot-sdk with a local copilot-sdk/ folder.' -ValueKind 'DirectoryPath'
@@ -293,6 +293,7 @@ function Initialize-CopilotStaticMetadata {
         New-CopilotOptionSpec -Tokens @('--no-bash-env') -Description 'Disable BASH_ENV support for bash shells.'
         New-CopilotOptionSpec -Tokens @('--no-color') -Description 'Disable all color output.'
         New-CopilotOptionSpec -Tokens @('--no-custom-instructions') -Description 'Disable loading custom instructions files.'
+        New-CopilotOptionSpec -Tokens @('--no-eager-powershell-resolution') -Description 'Disable background PowerShell prompt resolution on Windows.'
         New-CopilotOptionSpec -Tokens @('--no-experimental') -Description 'Disable experimental features.'
         New-CopilotOptionSpec -Tokens @('--no-mouse') -Description 'Disable mouse support in alt screen mode.'
         New-CopilotOptionSpec -Tokens @('--no-remote') -Description 'Disable remote control of your session from GitHub web and mobile.'
@@ -312,6 +313,7 @@ function Initialize-CopilotStaticMetadata {
         New-CopilotOptionSpec -Tokens @('--share') -Description 'Share session to a markdown file after completion.' -ValueKind 'SharePath' -OptionalValue
         New-CopilotOptionSpec -Tokens @('--share-gist') -Description 'Share session to a secret GitHub gist after completion.'
         New-CopilotOptionSpec -Tokens @('--stream') -Description 'Enable or disable streaming mode.' -ValueKind 'OnOff'
+        New-CopilotOptionSpec -Tokens @('--usage-output-file') -Description 'Write final usage statistics as JSON to the specified file.' -ValueKind 'FilePath'
         New-CopilotOptionSpec -Tokens @('-v', '--version') -Description 'Show version information.'
         New-CopilotOptionSpec -Tokens @('--yolo') -Description 'Enable all permissions.'
     )
@@ -327,6 +329,7 @@ function Initialize-CopilotStaticMetadata {
     $script:CopilotCompletionCache.CommandSpecs = @{
         ''                           = @{
             Commands   = [ordered]@{
+                'app'        = 'Open the GitHub Copilot app in the current directory.'
                 'completion' = 'Generate a shell completion script.'
                 'help'       = 'Display help information.'
                 'init'       = 'Initialize Copilot instructions.'
@@ -339,6 +342,11 @@ function Initialize-CopilotStaticMetadata {
                 'version'    = 'Display version information.'
             }
             Options    = @()
+            Positionals = @()
+        }
+        'app'                        = @{
+            Commands   = [ordered]@{}
+            Options    = $helpOnly
             Positionals = @()
         }
         'completion'                 = @{
@@ -523,9 +531,11 @@ function Initialize-CopilotStaticMetadata {
         'login'                      = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Set the configuration directory.' -ValueKind 'DirectoryPath'
+                New-CopilotOptionSpec -Tokens @('--device-code') -Description 'Authenticate using the OAuth device code flow (default in remote or headless environments).'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
                 New-CopilotOptionSpec -Tokens @('--host') -Description 'GitHub host URL.' -ValueKind 'Host'
+                New-CopilotOptionSpec -Tokens @('--web-flow') -Description 'Authenticate using the browser (web) flow (default on local desktops).'
+                New-CopilotOptionSpec -Tokens @('--with-token') -Description 'Read an authentication token from standard input.'
             )
             Positionals = @()
         }
@@ -545,7 +555,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin install'             = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @(
@@ -555,7 +564,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin list'                = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @()
@@ -563,7 +571,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin uninstall'           = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @(
@@ -573,7 +580,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin update'              = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @(
@@ -596,7 +602,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin marketplace add'     = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @(
@@ -606,7 +611,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin marketplace browse'  = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @(
@@ -616,7 +620,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin marketplace list'    = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
             Positionals = @()
@@ -624,7 +627,6 @@ function Initialize-CopilotStaticMetadata {
         'plugin marketplace remove'  = @{
             Commands   = [ordered]@{}
             Options    = @(
-                New-CopilotOptionSpec -Tokens @('--config-dir') -Description 'Path to the configuration directory.' -ValueKind 'DirectoryPath'
                 New-CopilotOptionSpec -Tokens @('-f', '--force') -Description 'Force removal even if plugins are installed.'
                 New-CopilotOptionSpec -Tokens @('-h', '--help') -Description 'Display help for command.'
             )
@@ -873,17 +875,20 @@ function New-CopilotLiteralValueResults {
     param(
         [string]$CurrentValue,
         [string]$Placeholder,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$Prefix = ''
     )
 
+    # $CurrentValue is the raw typed value; the '--option=' prefix is applied here so the
+    # emptiness test still sees an empty value in the attached form.
     if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
         return @(
-            New-CopilotCompletionResult -CompletionText $Placeholder -ToolTip $ToolTip -ListItemText $Placeholder
+            New-CopilotCompletionResult -CompletionText ($Prefix + $Placeholder) -ToolTip $ToolTip -ListItemText $Placeholder
         )
     }
 
     @(
-        New-CopilotCompletionResult -CompletionText $CurrentValue -ToolTip $ToolTip -ListItemText $CurrentValue
+        New-CopilotCompletionResult -CompletionText ($Prefix + $CurrentValue) -ToolTip $ToolTip -ListItemText $CurrentValue
     )
 }
 
@@ -898,19 +903,21 @@ function Get-CopilotValueResults {
 
     switch ($ValueKind) {
         'Model' {
-            $models = @(Get-CopilotModels)
-            if ($models.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Placeholder '<model>' -ToolTip 'Model name from `copilot help config`.'
+            # 'auto' lets Copilot pick the model and is documented on --model but never listed
+            # by 'copilot help config', so it leads the discovered ids.
+            $models = @('auto') + @(Get-CopilotModels)
+            if ($models.Count -eq 1) {
+                $models += '<model>'
             }
 
             return $models |
                 Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object {
-                    New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Model name discovered from `copilot help config`.'
+                    New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Model name (auto lets Copilot pick; others discovered from `copilot help config`).' -ListItemText $_
                 }
         }
         'ReasoningEffort' {
-            return @('low', 'medium', 'high', 'xhigh') |
+            return @('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max') |
                 Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Reasoning effort level.' }
         }
@@ -930,10 +937,22 @@ function Get-CopilotValueResults {
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'CLI log level.' }
         }
         'DirectoryPath' {
-            return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix -DirectoriesOnly)
+            # A directory with no subdirectories must still yield something, or PowerShell's
+            # filename fallback offers files in a directory-only slot.
+            $paths = @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix -DirectoriesOnly)
+            if ($paths.Count -eq 0) {
+                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<directory>' -ToolTip 'Directory path.'
+            }
+
+            return $paths
         }
         'FilePath' {
-            return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+            $paths = @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+            if ($paths.Count -eq 0) {
+                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<file>' -ToolTip 'File path.'
+            }
+
+            return $paths
         }
         'CompletionShell' {
             return @('bash', 'zsh', 'fish') |
@@ -956,7 +975,7 @@ function Get-CopilotValueResults {
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Plugin kind filter.' }
         }
         'PluginScope' {
-            return @('user', 'repository', 'working-directory', 'organization', 'plugin', 'builtin', 'unknown') |
+            return @('user', 'session', 'repository', 'working-directory', 'organization', 'plugin', 'builtin', 'unknown') |
                 Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Configuration scope filter.' }
         }
@@ -980,16 +999,16 @@ function Get-CopilotValueResults {
                 return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
             }
 
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '<skill-name-or-path>') -ToolTip 'Skill name, SKILL.md path, URL, or skill directory.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<skill-name-or-path>') -ToolTip 'Skill name, SKILL.md path, URL, or skill directory.'
         }
         'SessionName' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '"<session name>"') -ToolTip 'Display name for the new session.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"<session name>"') -ToolTip 'Display name for the new session.'
         }
         'EnvAssignment' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'KEY=VALUE') -ToolTip 'Environment variable assignment.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('KEY=VALUE') -ToolTip 'Environment variable assignment.'
         }
         'HttpHeader' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '"Name: value"') -ToolTip 'HTTP header for remote servers.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"Name: value"') -ToolTip 'HTTP header for remote servers.'
         }
         'SharePath' {
             $results = New-Object System.Collections.Generic.List[object]
@@ -997,8 +1016,8 @@ function Get-CopilotValueResults {
                 [void]$results.Add($result)
             }
 
-            if ([string]::IsNullOrWhiteSpace($typedValue)) {
-                [void]$results.Add((New-CopilotCompletionResult -CompletionText ($Prefix + '.\copilot-session-<id>.md') -ToolTip 'Default markdown share path pattern.'))
+            if ($results.Count -eq 0 -or [string]::IsNullOrWhiteSpace($typedValue)) {
+                [void]$results.Add((New-CopilotCompletionResult -CompletionText ($Prefix + '.\copilot-session-<id>.md') -ToolTip 'Default markdown share path pattern.' -ListItemText '.\copilot-session-<id>.md'))
             }
 
             return @($results.ToArray())
@@ -1013,7 +1032,7 @@ function Get-CopilotValueResults {
                 [void]$results.Add((New-CopilotCompletionResult -CompletionText ($Prefix + '@') -ToolTip 'Prefix a file path with @ to load JSON from disk.'))
             }
 
-            foreach ($result in @(New-CopilotLiteralValueResults -CurrentValue $typedValue -Placeholder '<json-or-@file>' -ToolTip 'Inline JSON string or @file path.')) {
+            foreach ($result in @(New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<json-or-@file>' -ToolTip 'Inline JSON string or @file path.')) {
                 [void]$results.Add($result)
             }
 
@@ -1027,7 +1046,7 @@ function Get-CopilotValueResults {
         'InstalledPlugin' {
             $plugins = @(Get-CopilotInstalledPluginNames)
             if ($plugins.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Placeholder '<plugin-name>' -ToolTip 'Installed plugin name.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<plugin-name>' -ToolTip 'Installed plugin name.'
             }
 
             return $plugins |
@@ -1037,7 +1056,7 @@ function Get-CopilotValueResults {
         'MarketplaceName' {
             $marketplaces = @(Get-CopilotMarketplaceNames)
             if ($marketplaces.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Placeholder '<marketplace-name>' -ToolTip 'Registered marketplace name.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<marketplace-name>' -ToolTip 'Registered marketplace name.'
             }
 
             return $marketplaces |
@@ -1077,37 +1096,37 @@ function Get-CopilotValueResults {
                 return $results
             }
 
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'https://example.ghe.com') -ToolTip 'GitHub host URL.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('https://example.ghe.com') -ToolTip 'GitHub host URL.'
         }
         'ResumeSession' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '<session-id>') -ToolTip 'Session ID or task ID.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<session-id>') -ToolTip 'Session ID or task ID.'
         }
         'AgentName' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '<agent>') -ToolTip 'Custom agent name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<agent>') -ToolTip 'Custom agent name.'
         }
         'PromptText' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '"<prompt>"') -ToolTip 'Prompt text.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"<prompt>"') -ToolTip 'Prompt text.'
         }
         'ToolPattern' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'shell(git:*)') -ToolTip 'Tool name or permission pattern.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('shell(git:*)') -ToolTip 'Tool name or permission pattern.'
         }
         'UrlPattern' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'github.com') -ToolTip 'URL, domain, or wildcard domain.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('github.com') -ToolTip 'URL, domain, or wildcard domain.'
         }
         'ServerName' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '<server-name>') -ToolTip 'MCP server name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<server-name>') -ToolTip 'MCP server name.'
         }
         'EnvVarList' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'MY_KEY,OTHER_KEY') -ToolTip 'Comma-separated environment variable names.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('MY_KEY,OTHER_KEY') -ToolTip 'Comma-separated environment variable names.'
         }
         'GithubMcpTool' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '*') -ToolTip 'GitHub MCP tool name or "*".'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('*') -ToolTip 'GitHub MCP tool name or "*".'
         }
         'GithubMcpToolset' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + 'all') -ToolTip 'GitHub MCP toolset name or "all".'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('all') -ToolTip 'GitHub MCP toolset name or "all".'
         }
         'Count' {
-            return New-CopilotLiteralValueResults -CurrentValue ($Prefix + $typedValue) -Placeholder ($Prefix + '<count>') -ToolTip 'Numeric count.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<count>') -ToolTip 'Numeric count.'
         }
         default {
             return @()
@@ -1230,11 +1249,26 @@ function Get-CopilotSuggestions {
     }
 
     if ($currentWord.StartsWith('-')) {
-        return @(Get-CopilotOptionsForPath -Path $state.Path) |
-            Where-Object { $_.Token -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
-            ForEach-Object {
-                New-CopilotCompletionResult -CompletionText $_.Token -ResultType 'ParameterName' -ToolTip $_.Description
-            }
+        $optionResults = @(
+            Get-CopilotOptionsForPath -Path $state.Path |
+                Where-Object { $_.Token -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
+                ForEach-Object {
+                    New-CopilotCompletionResult -CompletionText $_.Token -ResultType 'ParameterName' -ToolTip $_.Description
+                }
+        )
+
+        # A combined short-flag cluster ('-sp') matches no single token; offer the option list
+        # rather than nothing so the slot does not fall back to filenames.
+        if ($optionResults.Count -eq 0 -and $currentWord -match '^-[A-Za-z]{2,}$') {
+            $optionResults = @(
+                Get-CopilotOptionsForPath -Path $state.Path |
+                    ForEach-Object {
+                        New-CopilotCompletionResult -CompletionText $_.Token -ResultType 'ParameterName' -ToolTip $_.Description
+                    }
+            )
+        }
+
+        return $optionResults
     }
 
     $results = New-Object System.Collections.Generic.List[object]
