@@ -130,7 +130,7 @@ function Get-CodexValueCompletion {
         [int]$CursorPosition
     )
 
-    $enumValues = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $enumValues = [System.Collections.Generic.Dictionary[string, string[]]]::new([System.StringComparer]::Ordinal)
     $enumValues['-s'] = @('read-only', 'workspace-write', 'danger-full-access')
     $enumValues['--sandbox'] = $enumValues['-s']
     $enumValues['-a'] = @('on-request', 'never')
@@ -207,6 +207,7 @@ function Get-CodexValueCompletion {
 
 function Invoke-CodexCompletion {
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
@@ -215,7 +216,8 @@ function Invoke-CodexCompletion {
 
     $valueResults = @(Get-CodexValueCompletion -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition)
     if ($valueResults.Count -gt 0) {
-        return $valueResults
+        $valueResults
+        return
     }
 
     $completionInvoker = Get-CodexCompletionInvoker
