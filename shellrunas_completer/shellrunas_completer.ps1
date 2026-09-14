@@ -16,7 +16,7 @@ function Get-ShellRunasCurrentToken {
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
     if ($prefix -match '\s$') { return '' }
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) { return $parts[-1] }
     $Fallback
 }
@@ -42,16 +42,16 @@ function Get-ShellRunasArgumentState {
     $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
     } else {
-        Get-ShellRunasCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-ShellRunasCurrentToken -Line $CommandAst.Extent.Text -CursorPosition ($CursorPosition - $CommandAst.Extent.StartOffset) -Fallback $WordToComplete
     }
-    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $tokensBeforeCurrent = @($tokens)
+    $tokensBeforeCurrent = @(
+        $CommandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -le $CursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
     if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
-        if ($tokensBeforeCurrent.Count -gt 1) {
-            $tokensBeforeCurrent = @($tokensBeforeCurrent[0..($tokensBeforeCurrent.Count - 2)])
-        } else {
-            $tokensBeforeCurrent = @()
-        }
+        $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -First ($tokensBeforeCurrent.Count - 1))
     }
     [pscustomobject]@{
         CurrentWord         = $currentWord
@@ -72,10 +72,15 @@ function Get-ShellRunasProgramCompletions {
     }
 
     if ($trimmed -match '[\\/]|^\.' -or $trimmed -match '^[A-Za-z]:') {
-        $parent = Split-Path -Path $trimmed -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
-        $leaf = Split-Path -Path $trimmed -Leaf
-        $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
+        if ($trimmed -match '[\\/]$') {
+            $parent = $trimmed
+            $filter = '*'
+        } else {
+            $parent = Split-Path -Path $trimmed -Parent
+            if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
+            $leaf = Split-Path -Path $trimmed -Leaf
+            $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
+        }
         foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)) {
             $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
                 Join-Path -Path $parent -ChildPath $item.Name
@@ -120,6 +125,7 @@ function Complete-ShellRunas {
     $tokensBeforeCurrent = @($state.TokensBeforeCurrent)
     $mode = $null
     $quiet = $false
+    $netOnly = $false
     $program = $null
 
     foreach ($token in $tokensBeforeCurrent) {
@@ -128,7 +134,7 @@ function Complete-ShellRunas {
         if ($lowerToken -eq '/regnetonly') { $mode = 'RegisterNetOnly'; continue }
         if ($lowerToken -eq '/unreg') { $mode = 'Unregister'; continue }
         if ($lowerToken -eq '/quiet') { $quiet = $true; continue }
-        if ($lowerToken -eq '/netonly' -and -not $mode) { continue }
+        if ($lowerToken -eq '/netonly' -and -not $mode) { $netOnly = $true; continue }
 
         if (-not $program) {
             $program = $token
@@ -146,14 +152,16 @@ function Complete-ShellRunas {
 
     $results = New-Object System.Collections.Generic.List[object]
     if (-not $mode) {
-        foreach ($item in @(
-                @{ Token = '/reg'; Description = 'Register the ShellRunas shell context-menu entry.' }
-                @{ Token = '/regnetonly'; Description = 'Register the Shell /netonly context-menu entry.' }
-                @{ Token = '/unreg'; Description = 'Unregister the ShellRunas shell context-menu entry.' }
-                @{ Token = '/netonly'; Description = 'Use specified credentials for remote access only when launching a program.' }
-            )) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $item.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-                [void]$results.Add((New-ShellRunasCompletionResult -CompletionText $item.Token -ResultType 'ParameterName' -ToolTip $item.Description))
+        if (-not $netOnly) {
+            foreach ($item in @(
+                    @{ Token = '/reg'; Description = 'Register the ShellRunas shell context-menu entry.' }
+                    @{ Token = '/regnetonly'; Description = 'Register the Shell /netonly context-menu entry.' }
+                    @{ Token = '/unreg'; Description = 'Unregister the ShellRunas shell context-menu entry.' }
+                    @{ Token = '/netonly'; Description = 'Use specified credentials for remote access only when launching a program.' }
+                )) {
+                if ([string]::IsNullOrWhiteSpace($currentWord) -or $item.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$results.Add((New-ShellRunasCompletionResult -CompletionText $item.Token -ResultType 'ParameterName' -ToolTip $item.Description))
+                }
             }
         }
 
@@ -166,8 +174,8 @@ function Complete-ShellRunas {
         return @($results.ToArray())
     }
 
-    if (($mode -in @('Register', 'RegisterNetOnly', 'Unregister')) -and -not $quiet) {
-        if ([string]::IsNullOrWhiteSpace($currentWord) -or '/quiet'.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($mode -in @('Register', 'RegisterNetOnly', 'Unregister')) {
+        if (-not $quiet -and ([string]::IsNullOrWhiteSpace($currentWord) -or '/quiet'.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase))) {
             [void]$results.Add((New-ShellRunasCompletionResult -CompletionText '/quiet' -ResultType 'ParameterName' -ToolTip 'Register or unregister without showing a result dialog.'))
         }
         return @($results.ToArray())

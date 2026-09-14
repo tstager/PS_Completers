@@ -23,15 +23,21 @@ shellrunas [/netonly] <program> [arguments]
   - `/reg`
   - `/regnetonly`
   - `/unreg`
+  - once one is present the grammar accepts only `/quiet`, so the completer offers `/quiet` and then nothing at all rather than falling through to a program list
 - optional quiet mode:
   - `/quiet`
 - launch mode option:
   - `/netonly`
+  - it belongs to the launch grammar alone, so after `/netonly` the registration switches and `/netonly` itself are suppressed and only `<program>` is offered
 - `<program>`:
   - local executable/path-aware completion
+  - a word ending in `\` or `/` lists that directory's contents instead of re-suggesting the directory itself
+  - an unterminated opening quote is kept whole, so `shellrunas "C:\Program Files\Com<TAB>` completes the real path
   - sample application names when the slot is blank
 - later `[arguments]`:
   - conservative placeholder/echo completion only, to suppress filesystem fallback without pretending to understand the target program's own syntax
+
+Parser state is built only from command elements that end at or before the cursor, and the cursor offset is rebased onto the command's own start offset, so completing in the middle of a line does not fold tokens to the right of the cursor into the state.
 
 ## Registration
 
