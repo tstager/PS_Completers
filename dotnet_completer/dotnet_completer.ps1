@@ -1,6 +1,122 @@
 using namespace System.Management.Automation
 using namespace System.Management.Automation.Language
 
+Set-StrictMode -Version 2.0
+
+if (-not (Get-Variable -Name DotnetCompletionCache -Scope Script -ErrorAction Ignore)) {
+    $script:DotnetCompletionCache = @{
+        ExecutableProbed = $false
+        ExecutablePath   = $null
+        Results          = @{}
+    }
+}
+
+function Get-DotnetCompletionCache {
+    $script:DotnetCompletionCache
+}
+
+function Get-DotnetExecutablePath {
+    $cache = Get-DotnetCompletionCache
+    if ($cache.ExecutableProbed) {
+        return $cache.ExecutablePath
+    }
+
+    $cache.ExecutableProbed = $true
+    $command = @(Get-Command -Name dotnet -CommandType Application -ErrorAction SilentlyContinue) |
+        Select-Object -First 1
+    if ($null -ne $command) {
+        $cache.ExecutablePath = $command.Source
+    }
+
+    $cache.ExecutablePath
+}
+
+function Get-DotnetLiveCompletion {
+    param(
+        [string]$Text,
+        [int]$Position
+    )
+
+    $cache = Get-DotnetCompletionCache
+    $key = "$Position|$Text"
+    if ($cache.Results.ContainsKey($key)) {
+        return $cache.Results[$key]
+    }
+
+    $executablePath = Get-DotnetExecutablePath
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+        $cache.Results[$key] = @()
+        return @()
+    }
+
+    # 'dotnet complete' is the SDK's own completion engine, so it always matches
+    # the installed SDK. It is run with standard input closed and a bounded
+    # budget, and every answer is cached, so a slow or hung call cannot stall the
+    # prompt or be paid for twice.
+    $output = ''
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($executablePath)
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        foreach ($argument in @('complete', '--position', $Position.ToString(), $Text)) {
+            [void]$process.StartInfo.ArgumentList.Add($argument)
+        }
+
+        [void]$process.Start()
+        $process.StandardInput.Close()
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+
+        if ($process.WaitForExit(2500)) {
+            $output = $standardOutput.GetAwaiter().GetResult()
+            [void]$standardError.GetAwaiter().GetResult()
+        } else {
+            $process.Kill($true)
+        }
+    } catch {
+        $output = ''
+    } finally {
+        $process.Dispose()
+    }
+
+    $values = @([regex]::Split($output, '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $cache.Results[$key] = $values
+    $values
+}
+
+function Test-DotnetOptionToken {
+    param([string]$Token)
+
+    -not [string]::IsNullOrEmpty($Token) -and ($Token.StartsWith('-') -or $Token.StartsWith('/'))
+}
+
+function Test-DotnetPathOption {
+    param([string]$Token)
+
+    $Token -in @(
+        '-o', '--output', '--project', '--file', '--config', '--configfile',
+        '--package-directory', '--artifacts-path', '--tool-manifest', '--tool-path',
+        '--manifest', '--solution', '--runtimeconfig', '--depsfile', '--output-dir'
+    )
+}
+
+function Get-DotnetProjectCompletion {
+    param(
+        [string]$WordToComplete,
+        [bool]$IncludeDirectories
+    )
+
+    @([System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)) |
+        Where-Object {
+            ($IncludeDirectories -and $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer) -or
+            $_.ListItemText -match '\.(?:cs|fs|vb)proj$|\.proj$|\.sln[fx]?$'
+        }
+}
+
 Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
@@ -623,10 +739,6 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show command line help.")
             )
             $completions += $staticCompletions
-            $text = $commandAst.ToString()
-            $dotnetCompleteResults = @(dotnet complete --position $cursorPosition "$text") | Where-Object { $_ -NotMatch "^-|^/" }
-            $dynamicCompletions = $dotnetCompleteResults | Foreach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
-            $completions += $dynamicCompletions
             break
         }
         'dotnet;package;list' {
@@ -783,10 +895,6 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show command line help.")
             )
             $completions += $staticCompletions
-            $text = $commandAst.ToString()
-            $dotnetCompleteResults = @(dotnet complete --position $cursorPosition "$text") | Where-Object { $_ -NotMatch "^-|^/" }
-            $dynamicCompletions = $dotnetCompleteResults | Foreach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
-            $completions += $dynamicCompletions
             break
         }
         'dotnet;restore' {
@@ -1038,10 +1146,6 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show command line help.")
             )
             $completions += $staticCompletions
-            $text = $commandAst.ToString()
-            $dotnetCompleteResults = @(dotnet complete --position $cursorPosition "$text") | Where-Object { $_ -NotMatch "^-|^/" }
-            $dynamicCompletions = $dotnetCompleteResults | Foreach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
-            $completions += $dynamicCompletions
             break
         }
         'dotnet;tool;uninstall' {
@@ -1082,10 +1186,6 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show command line help.")
             )
             $completions += $staticCompletions
-            $text = $commandAst.ToString()
-            $dotnetCompleteResults = @(dotnet complete --position $cursorPosition "$text") | Where-Object { $_ -NotMatch "^-|^/" }
-            $dynamicCompletions = $dotnetCompleteResults | Foreach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
-            $completions += $dynamicCompletions
             break
         }
         'dotnet;tool;list' {
@@ -1159,10 +1259,6 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show command line help.")
             )
             $completions += $staticCompletions
-            $text = $commandAst.ToString()
-            $dotnetCompleteResults = @(dotnet complete --position $cursorPosition "$text") | Where-Object { $_ -NotMatch "^-|^/" }
-            $dynamicCompletions = $dotnetCompleteResults | Foreach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
-            $completions += $dynamicCompletions
             break
         }
         'dotnet;vstest' {
@@ -1391,5 +1487,82 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
             break
         }
     }
-    $completions | Where-Object -FilterScript { $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } | Sort-Object -Property ListItemText
+    $word = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
+
+    # The vendored table lists every spelling of an option as its own row with the
+    # canonical name in CompletionText and the spelling in ListItemText. Match and
+    # insert the spelling, so -h is reachable and each alias is a distinct
+    # completion rather than N copies of --help.
+    $candidates = [ordered]@{}
+    foreach ($completion in @($completions)) {
+        $name = $completion.ListItemText
+        if (-not [string]::IsNullOrWhiteSpace($name) -and -not $candidates.Contains($name)) {
+            $candidates[$name] = $completion
+        }
+    }
+
+    # $cursorPosition is an offset into the whole line; the extent is
+    # command-relative and stops at the last token, so a cursor sitting after a
+    # trailing space needs the text padded back out to it.
+    $relativeCursor = [Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0)
+    $extentText = $commandAst.Extent.Text
+    if ($relativeCursor -gt $extentText.Length) {
+        $extentText = $extentText.PadRight($relativeCursor)
+    }
+
+    $safeCursor = [Math]::Min($relativeCursor, $extentText.Length)
+    $liveTokens = @(Get-DotnetLiveCompletion -Text $extentText.Substring(0, $safeCursor) -Position $safeCursor)
+
+    $settledTokens = @(
+        foreach ($element in @($commandElements | Select-Object -Skip 1)) {
+            if ($null -ne $element -and $null -ne $element.Extent -and $element.Extent.EndOffset -lt $cursorPosition) {
+                $element.Extent.Text
+            }
+        }
+    )
+    $previousToken = if ($settledTokens.Count -gt 0) { $settledTokens[$settledTokens.Count - 1] } else { '' }
+
+    if (Test-DotnetPathOption -Token $previousToken) {
+        return @(Get-DotnetProjectCompletion -WordToComplete $word -IncludeDirectories $true)
+    }
+
+    $liveOptionCount = @($liveTokens | Where-Object { Test-DotnetOptionToken -Token $_ }).Count
+    if ($liveTokens.Count -gt 0 -and $liveOptionCount -eq 0 -and (Test-DotnetOptionToken -Token $previousToken)) {
+        # Every live suggestion is a bare value, so this is an option's value slot
+        # and the option list must not be repeated into it.
+        return @(
+            foreach ($token in $liveTokens) {
+                if ($token.StartsWith($word, [System.StringComparison]::Ordinal)) {
+                    [CompletionResult]::new($token, $token, [CompletionResultType]::ParameterValue, "$previousToken $token")
+                }
+            }
+        )
+    }
+
+    foreach ($token in $liveTokens) {
+        if (-not $candidates.Contains($token)) {
+            $resultType = if (Test-DotnetOptionToken -Token $token) { [CompletionResultType]::ParameterName } else { [CompletionResultType]::ParameterValue }
+            $candidates[$token] = [CompletionResult]::new($token, $token, $resultType, $token)
+        }
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($candidates.Keys)) {
+        if (-not $name.StartsWith($word, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+
+        $source = $candidates[$name]
+        [void]$results.Add([CompletionResult]::new($name, $name, $source.ResultType, $source.ToolTip))
+    }
+
+    $ordered = @($results.ToArray() | Sort-Object -Property ListItemText)
+
+    if (-not (Test-DotnetOptionToken -Token $word)) {
+        # Project and solution operands: an empty word offers the projects here, a
+        # partial one also walks directories.
+        $ordered += @(Get-DotnetProjectCompletion -WordToComplete $word -IncludeDirectories (-not [string]::IsNullOrEmpty($word)))
+    }
+
+    $ordered
 }
