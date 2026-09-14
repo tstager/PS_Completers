@@ -32,7 +32,7 @@ Both names share the same completer scriptblock.
 
 ### Top-level commands
 
-`agents` · `auth` · `auto-mode` · `doctor` · `install` · `mcp` · `plugin` · `project` · `setup-token` · `ultrareview` · `update`
+`agents` · `attach` · `auth` · `auto-mode` · `doctor` · `gateway` · `import` · `install` · `logs` · `mcp` · `plugin` · `project` · `respawn` · `rm` · `setup-token` · `stop` · `ultrareview` · `update`
 
 Command aliases are normalised when routing context:
 
@@ -40,7 +40,9 @@ Command aliases are normalised when routing context:
 | --- | --- |
 | `plugins`    | `plugin` |
 | `upgrade`    | `update` |
+| `kill`       | `stop` |
 | `plugin i`   | `plugin install` |
+| `plugin new` | `plugin init` |
 | `plugin remove` | `plugin uninstall` |
 | `plugin autoremove` | `plugin prune` |
 | `plugin marketplace rm` | `plugin marketplace remove` |
@@ -50,11 +52,11 @@ Command aliases are normalised when routing context:
 | Command | Subcommands |
 | --- | --- |
 | `auth`      | `login` · `logout` · `status` · `help` |
-| `auto-mode` | `config` · `critique` · `defaults` · `help` |
-| `mcp`       | `add` · `add-json` · `add-from-claude-desktop` · `get` · `list` · `remove` · `reset-project-choices` · `serve` · `help` |
-| `plugin`    | `details` · `disable` · `enable` · `install` · `list` · `marketplace` · `prune` · `tag` · `uninstall` · `update` · `help` |
+| `auto-mode` | `config` · `critique` · `defaults` · `reset` · `help` |
+| `mcp`       | `add` · `add-json` · `add-from-claude-desktop` · `get` · `list` · `login` · `logout` · `remove` · `reset-project-choices` · `serve` · `help` |
+| `plugin`    | `details` · `disable` · `enable` · `eval` · `init` · `install` · `list` · `marketplace` · `prune` · `tag` · `uninstall` · `update` · `validate` · `help` |
 | `project`   | `purge` · `help` |
-| `agents` / `doctor` / `install` / `setup-token` / `ultrareview` / `update` | *(no L2 subcommands; own options/positionals)* |
+| `agents` / `attach` / `doctor` / `gateway` / `import` / `install` / `logs` / `respawn` / `rm` / `setup-token` / `stop` / `ultrareview` / `update` | *(no L2 subcommands; own options/positionals)* |
 
 ### Level-3 subcommands
 
@@ -64,7 +66,7 @@ Command aliases are normalised when routing context:
 
 ### Global flags
 
-All global flags from the CLI surface are included, categorised by type:
+All global flags from the CLI surface are offered at the root command only. Commander subcommands do not inherit them, so inside `claude <command> ...` the completer offers just that command's context flags (next section) plus `--help`/`-h`:
 
 | Type | Flags |
 | --- | --- |
@@ -84,25 +86,32 @@ All global flags from the CLI surface are included, categorised by type:
 
 | Context | Extra flags |
 | --- | --- |
-| `agents` | `--add-dir` · `--allow-dangerously-skip-permissions` · `--cwd` · `--dangerously-skip-permissions` · `--effort` · `--json` · `--mcp-config` · `--model` · `--permission-mode` · `--plugin-dir` · `--setting-sources` · `--settings` |
+| `agents` | `--add-dir` · `--agent` · `--all` · `--allow-dangerously-skip-permissions` · `--cwd` · `--dangerously-skip-permissions` · `--effort` · `--json` · `--mcp-config` · `--model` · `--permission-mode` · `--plugin-dir` · `--restricted` · `--setting-sources` · `--settings` · `--strict-mcp-config` |
 | `auth login` | `--claudeai` · `--console` · `--email` · `--sso` |
 | `auth status` | `--json` · `--text` |
 | `auto-mode critique` | `--model` |
+| `gateway` | `--config` |
+| `import` | `--dry-run` · `--yes` |
 | `mcp add` | `--callback-port` · `--client-id` · `--client-secret` · `--env` (`-e`) · `--header` (`-H`) · `--scope` (`-s`, local\|user\|project) · `--transport` (`-t`, stdio\|sse\|http) |
 | `mcp add-json` | `--client-secret` · `--scope` (`-s`) |
 | `mcp add-from-claude-desktop` | `--scope` (`-s`) |
+| `mcp login` | `--no-browser` |
 | `mcp remove` | `--scope` (`-s`) |
 | `mcp serve` | `--debug` (`-d`) · `--verbose` |
 | `install` | `--force` |
-| `plugin disable` | `--all` (`-a`) · `--scope` (`-s`, user\|project\|local) |
+| `plugin disable` | `--all` (`-a`) · `--json` · `--scope` (`-s`, user\|project\|local) |
 | `plugin enable` | `--scope` (`-s`) |
-| `plugin install` | `--config` · `--scope` (`-s`) |
+| `plugin eval` | `--ablation` (none\|with-without) · `--allow-real-servers` · `--allow-tools` · `--case` · `--concurrency` (`-j`) · `--eval-dir` · `--json` · `--judge-model` · `--keep-temp` · `--max-cost-usd` · `--mocks` (record\|off) · `--model` · `--no-publish` · `--no-scaffold` · `--output-dir` · `--publish-report` · `--report` · `--runs` · `--scaffold` · `--tag` · `--threshold` · `--trust-plugin` · `--verbose` |
+| `plugin init` | `--author` · `--author-email` · `--description` · `--force` (`-f`) · `--with` |
+| `plugin install` | `--config` · `--json` · `--scope` (`-s`) · `--yes` (`-y`) |
 | `plugin list` | `--available` · `--json` |
 | `plugin prune` | `--dry-run` · `--scope` (`-s`) · `--yes` (`-y`) |
 | `plugin tag` | `--dry-run` · `--force` (`-f`) · `--message` (`-m`) · `--push` · `--remote` |
-| `plugin validate` | `--strict` |
+| `plugin validate` | `--json` · `--strict` |
 | `project purge` | `--all` · `--dry-run` · `--interactive` (`-i`) · `--yes` (`-y`) |
-| `ultrareview` | `--json` · `--timeout` |
+| `respawn` | `--all` |
+| `rm` | `--discard-unpushed` · `--force-remove-worktree` |
+| `ultrareview` | `--json` · `--no-post` · `--post` · `--timeout` |
 
 ### Value slot completion
 
@@ -121,11 +130,14 @@ All global flags from the CLI surface are included, categorised by type:
 | Context | Positional behaviour |
 | --- | --- |
 | `install [target]` | `stable` · `latest` enum plus `<target>` placeholder |
+| `import [source]` | `codex` · `gemini` · `cursor` enum |
+| `attach` / `logs` / `respawn` / `rm` / `stop <id>` | `<id>` placeholder (background session id) |
 | `ultrareview [target]` | `<target>` placeholder (PR number / base branch) |
 | `mcp add <name> <commandOrUrl> [args...]` | `<name>` · `<commandOrUrl>` · `<arg>` placeholders |
 | `mcp add-json <name> <json>` | `<name>` · `<json>` placeholders |
-| `mcp get` / `mcp remove <name>` | `<name>` placeholder |
+| `mcp get` / `mcp login` / `mcp logout` / `mcp remove <name>` | `<name>` placeholder |
 | `plugin details/disable/enable/install/uninstall/update <plugin>` | `<plugin>` / `<name>` placeholder |
+| `plugin eval [target]` / `plugin init <name>` | `<target>` / `<name>` placeholder |
 | `plugin tag [path]` / `plugin validate <path>` / `project purge [path]` | First positional → `CompleteFilename` |
 | `plugin marketplace add <source>` | `<source>` placeholder |
 | `plugin marketplace remove/update <name>` | `<name>` placeholder |

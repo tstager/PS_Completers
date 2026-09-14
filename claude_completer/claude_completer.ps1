@@ -20,21 +20,24 @@ function Initialize-ClaudeCompleterData {
 
     # Top-level subcommands.
     $script:ClaudeTopCommands = @(
-        'agents', 'auth', 'auto-mode', 'doctor', 'install', 'mcp',
-        'plugin', 'project', 'setup-token', 'ultrareview', 'update'
+        'agents', 'attach', 'auth', 'auto-mode', 'doctor', 'gateway', 'import',
+        'install', 'logs', 'mcp', 'plugin', 'project', 'respawn', 'rm',
+        'setup-token', 'stop', 'ultrareview', 'update'
     )
 
     # Command alias normalisation (alias -> canonical) applied when walking args.
-    # Top-level: plugins == plugin, upgrade == update.
+    # Top-level: plugins == plugin, upgrade == update, kill == stop.
     $script:ClaudeCmdAliases = @{
         'plugins' = 'plugin'
         'upgrade' = 'update'
+        'kill'    = 'stop'
     }
 
     # Level-2 subcommand aliases keyed by "cmd": alias -> canonical.
     $script:ClaudeSubAliases = @{
         'plugin' = @{
             'i'          = 'install'
+            'new'        = 'init'
             'remove'     = 'uninstall'
             'autoremove' = 'prune'
         }
@@ -50,17 +53,26 @@ function Initialize-ClaudeCompleterData {
     # Level-2 subcommands per top-level command.
     $script:ClaudeSubSubcommands = @{
         'auth'      = @('login', 'logout', 'status', 'help')
-        'auto-mode' = @('config', 'critique', 'defaults', 'help')
+        'auto-mode' = @('config', 'critique', 'defaults', 'reset', 'help')
         'mcp'       = @('add', 'add-json', 'add-from-claude-desktop', 'get',
-                         'list', 'remove', 'reset-project-choices', 'serve', 'help')
-        'plugin'    = @('details', 'disable', 'enable', 'install', 'list',
-                         'marketplace', 'prune', 'tag', 'uninstall', 'update', 'help')
+                         'list', 'login', 'logout', 'remove', 'reset-project-choices',
+                         'serve', 'help')
+        'plugin'    = @('details', 'disable', 'enable', 'eval', 'init', 'install',
+                         'list', 'marketplace', 'prune', 'tag', 'uninstall', 'update',
+                         'validate', 'help')
         'project'   = @('purge', 'help')
         # Commands with no L2 subcommands (own options or positionals only).
         'agents'      = @()
+        'attach'      = @()
         'doctor'      = @()
+        'gateway'     = @()
+        'import'      = @()
         'install'     = @()
+        'logs'        = @()
+        'respawn'     = @()
+        'rm'          = @()
         'setup-token' = @()
+        'stop'        = @()
         'ultrareview' = @()
         'update'      = @()
     }
@@ -191,26 +203,38 @@ function Initialize-ClaudeCompleterData {
                                            '--env', '--header', '--scope', '--transport')
         'mcp.add-json'                = @('--client-secret', '--scope')
         'mcp.add-from-claude-desktop' = @('--scope')
+        'mcp.login'                   = @('--no-browser')
         'mcp.remove'                  = @('--scope')
         'mcp.serve'                   = @('--debug', '--verbose')
-        'plugin.disable'              = @('--all', '--scope')
+        'plugin.disable'              = @('--all', '--json', '--scope')
         'plugin.enable'               = @('--scope')
-        'plugin.install'              = @('--config', '--scope')
+        'plugin.eval'                 = @('--ablation', '--allow-real-servers', '--allow-tools', '--case',
+                                           '--concurrency', '--eval-dir', '--json', '--judge-model',
+                                           '--keep-temp', '--max-cost-usd', '--mocks', '--model',
+                                           '--no-publish', '--no-scaffold', '--output-dir',
+                                           '--publish-report', '--report', '--runs', '--scaffold',
+                                           '--tag', '--threshold', '--trust-plugin', '--verbose')
+        'plugin.init'                 = @('--author', '--author-email', '--description', '--force', '--with')
+        'plugin.install'              = @('--config', '--json', '--scope', '--yes')
         'plugin.list'                 = @('--available', '--json')
         'plugin.prune'                = @('--dry-run', '--scope', '--yes')
         'plugin.tag'                  = @('--dry-run', '--force', '--message', '--push', '--remote')
-        'plugin.validate'             = @('--strict')
+        'plugin.validate'             = @('--json', '--strict')
         'project.purge'               = @('--all', '--dry-run', '--interactive', '--yes')
     }
 
     # Flags for commands that take flags directly (no L2 subcommand): "cmd" -> @(flags).
     $script:ClaudeCmdContextFlags = @{
-        'agents'      = @('--add-dir', '--allow-dangerously-skip-permissions', '--cwd',
-                           '--dangerously-skip-permissions', '--effort', '--json',
+        'agents'      = @('--add-dir', '--agent', '--all', '--allow-dangerously-skip-permissions',
+                           '--cwd', '--dangerously-skip-permissions', '--effort', '--json',
                            '--mcp-config', '--model', '--permission-mode', '--plugin-dir',
-                           '--setting-sources', '--settings')
+                           '--restricted', '--setting-sources', '--settings', '--strict-mcp-config')
+        'gateway'     = @('--config')
+        'import'      = @('--dry-run', '--yes')
         'install'     = @('--force')
-        'ultrareview' = @('--json', '--timeout')
+        'respawn'     = @('--all')
+        'rm'          = @('--discard-unpushed', '--force-remove-worktree')
+        'ultrareview' = @('--json', '--no-post', '--post', '--timeout')
     }
 
     # Context-specific boolean flags (take no value when used in a subcommand).
@@ -219,7 +243,10 @@ function Initialize-ClaudeCompleterData {
     )
     @('--claudeai', '--console', '--sso', '--json', '--text', '--client-secret',
       '--verbose', '--debug', '--all', '--available', '--dry-run', '--yes',
-      '--force', '--push', '--strict', '--interactive') |
+      '--force', '--push', '--strict', '--interactive', '--no-browser', '--post',
+      '--no-post', '--restricted', '--allow-real-servers', '--keep-temp',
+      '--no-publish', '--no-scaffold', '--publish-report', '--scaffold',
+      '--trust-plugin') |
         ForEach-Object { $null = $script:ClaudeContextBoolFlagSet.Add($_) }
 
     # Context-specific enum values: "cmd.subcmd.--flag" -> @(choices).
@@ -231,6 +258,8 @@ function Initialize-ClaudeCompleterData {
         'mcp.remove.--scope'                  = @('local', 'user', 'project')
         'plugin.disable.--scope'              = @('user', 'project', 'local')
         'plugin.enable.--scope'               = @('user', 'project', 'local')
+        'plugin.eval.--ablation'              = @('none', 'with-without')
+        'plugin.eval.--mocks'                 = @('record', 'off')
         'plugin.install.--scope'              = @('user', 'project', 'local')
         'plugin.prune.--scope'                = @('user', 'project', 'local')
     }
@@ -240,14 +269,18 @@ function Initialize-ClaudeCompleterData {
         [System.StringComparer]::Ordinal
     )
     @('--callback-port', '--client-id', '--email', '--config', '--message',
-      '--remote', '--timeout') |
+      '--remote', '--timeout', '--discard-unpushed', '--force-remove-worktree',
+      '--allow-tools', '--case', '--concurrency', '--eval-dir', '--judge-model',
+      '--max-cost-usd', '--output-dir', '--report', '--runs', '--tag',
+      '--threshold', '--author', '--author-email', '--description', '--with') |
         ForEach-Object { $null = $script:ClaudeContextValueFlagSet.Add($_) }
 
     # Context-specific numeric flags.
     $script:ClaudeContextNumberFlagSet = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
-    @('--callback-port', '--timeout', '--max-budget-usd') |
+    @('--callback-port', '--timeout', '--max-budget-usd', '--concurrency',
+      '--max-cost-usd', '--runs', '--threshold') |
         ForEach-Object { $null = $script:ClaudeContextNumberFlagSet.Add($_) }
 
     # Context short aliases keyed by "cmd.subcmd" or "cmd".
@@ -259,7 +292,9 @@ function Initialize-ClaudeCompleterData {
         'mcp.serve'    = @{ '-d' = '--debug' }
         'plugin.disable'  = @{ '-a' = '--all'; '-s' = '--scope' }
         'plugin.enable'   = @{ '-s' = '--scope' }
-        'plugin.install'  = @{ '-s' = '--scope' }
+        'plugin.eval'     = @{ '-j' = '--concurrency' }
+        'plugin.init'     = @{ '-f' = '--force' }
+        'plugin.install'  = @{ '-s' = '--scope'; '-y' = '--yes' }
         'plugin.prune'    = @{ '-s' = '--scope'; '-y' = '--yes' }
         'plugin.tag'      = @{ '-f' = '--force'; '-m' = '--message' }
         'project.purge'   = @{ '-i' = '--interactive'; '-y' = '--yes' }
@@ -275,19 +310,29 @@ function Initialize-ClaudeCompleterData {
     # Positional enum values for specific subcommand paths.
     $script:ClaudePositionalEnums = @{
         'install' = @('stable', 'latest')
+        'import'  = @('codex', 'gemini', 'cursor')
     }
 
     # Placeholder values for free-form positional slots.
     $script:ClaudePositionalPlaceholders = @{
+        'attach'                        = @('<id>')
         'install'                       = @('<target>')
+        'logs'                          = @('<id>')
+        'respawn'                       = @('<id>')
+        'rm'                            = @('<id>')
+        'stop'                          = @('<id>')
         'ultrareview'                   = @('<target>')
         'mcp.add'                       = @('<name>', '<commandOrUrl>', '<arg>')
         'mcp.add-json'                  = @('<name>', '<json>')
         'mcp.get'                       = @('<name>')
+        'mcp.login'                     = @('<name>')
+        'mcp.logout'                    = @('<name>')
         'mcp.remove'                    = @('<name>')
         'plugin.details'                = @('<name>')
         'plugin.disable'                = @('<plugin>')
         'plugin.enable'                 = @('<plugin>')
+        'plugin.eval'                   = @('<target>')
+        'plugin.init'                   = @('<name>')
         'plugin.install'                = @('<plugin>')
         'plugin.uninstall'              = @('<plugin>')
         'plugin.update'                 = @('<plugin>')
@@ -326,15 +371,22 @@ function Initialize-ClaudeCompleterData {
     # ---- Descriptions --------------------------------------------------------------------------
 
     $script:ClaudeCmdDesc = @{
-        'agents'      = 'Run and manage agents'
+        'agents'      = 'Manage background agents'
+        'attach'      = 'Open a background session in this terminal'
         'auth'        = 'Manage authentication'
-        'auto-mode'   = 'Configure and run auto mode'
+        'auto-mode'   = 'Inspect or reset auto mode classifier configuration'
         'doctor'      = 'Diagnose and verify the installation'
+        'gateway'     = 'Run the enterprise auth/telemetry gateway'
+        'import'      = 'Import config from another AI coding agent'
         'install'     = 'Install the native Claude Code build'
+        'logs'        = 'Print a background session''s recent terminal output'
         'mcp'         = 'Configure and manage MCP servers'
         'plugin'      = 'Manage plugins and marketplaces'
         'project'     = 'Manage project-level state'
+        'respawn'     = 'Restart a background session (or all with --all)'
+        'rm'          = 'Delete a background session and its worktree'
         'setup-token' = 'Set up a long-lived authentication token'
+        'stop'        = 'Stop a background session (alias: kill)'
         'ultrareview' = 'Run an ultra-deep code review'
         'update'      = 'Update Claude Code to the latest version'
     }
@@ -347,12 +399,15 @@ function Initialize-ClaudeCompleterData {
         'auto-mode.config'            = 'Configure auto mode'
         'auto-mode.critique'          = 'Run an auto-mode critique'
         'auto-mode.defaults'          = 'Show or reset auto-mode defaults'
+        'auto-mode.reset'             = 'Reset auto mode configuration to the shipped defaults'
         'auto-mode.help'              = 'Show help for auto-mode'
         'mcp.add'                     = 'Add an MCP server'
         'mcp.add-json'                = 'Add an MCP server from a JSON definition'
         'mcp.add-from-claude-desktop' = 'Import MCP servers from Claude Desktop'
         'mcp.get'                     = 'Show details for an MCP server'
         'mcp.list'                    = 'List configured MCP servers'
+        'mcp.login'                   = 'Authenticate with an MCP server'
+        'mcp.logout'                  = 'Clear stored OAuth credentials for an MCP server'
         'mcp.remove'                  = 'Remove an MCP server'
         'mcp.reset-project-choices'   = 'Reset per-project MCP trust choices'
         'mcp.serve'                   = 'Run Claude Code as an MCP server'
@@ -360,6 +415,8 @@ function Initialize-ClaudeCompleterData {
         'plugin.details'              = 'Show details for a plugin'
         'plugin.disable'              = 'Disable a plugin'
         'plugin.enable'               = 'Enable a plugin'
+        'plugin.eval'                 = 'Run eval cases against a plugin and report scored results'
+        'plugin.init'                 = 'Scaffold a new plugin (alias: new)'
         'plugin.install'              = 'Install a plugin (alias: i)'
         'plugin.list'                 = 'List plugins'
         'plugin.marketplace'          = 'Manage plugin marketplaces'
@@ -367,6 +424,7 @@ function Initialize-ClaudeCompleterData {
         'plugin.tag'                  = 'Tag a plugin release'
         'plugin.uninstall'            = 'Uninstall a plugin (alias: remove)'
         'plugin.update'               = 'Update a plugin'
+        'plugin.validate'             = 'Validate a plugin or marketplace manifest, or a directory'
         'plugin.help'                 = 'Show help for plugin'
         'project.purge'               = 'Purge project-level state'
         'project.help'                = 'Show help for project'
@@ -467,6 +525,21 @@ function Initialize-ClaudeCompleterData {
         '--interactive'                              = '[boolean] Interactive mode'
         '--cwd'                                      = '[string]  Working directory'
         '--timeout'                                  = '[number]  Timeout in minutes'
+        '--no-browser'                               = '[boolean] Print the authorization URL instead of opening a browser'
+        '--post'                                     = '[boolean] Post the findings to the PR'
+        '--no-post'                                  = '[boolean] Do not post the findings to the PR'
+        '--restricted'                               = '[boolean] Start dispatched sessions in restricted mode'
+        '--discard-unpushed'                         = '[string]  <commit>@<worktree-id> to discard unpushed commits'
+        '--force-remove-worktree'                    = '[string]  <worktree-id> to delete even if removal failed'
+        '--ablation'                                 = '[string]  Baseline arm: none|with-without'
+        '--mocks'                                    = '[string]  MCP mock stand-ins: record|off'
+        '--concurrency'                              = '[number]  Concurrent agent runs (1-8, -j)'
+        '--eval-dir'                                 = '[string]  Directory holding the eval cases'
+        '--trust-plugin'                             = '[boolean] Skip the first-run trust prompt'
+        '--author'                                   = '[string]  Author name'
+        '--author-email'                             = '[string]  Author email'
+        '--description'                              = '[string]  Manifest description'
+        '--with'                                     = '[array]   Components to scaffold: skills, agents, hooks, mcp, ...'
     }
 }
 
@@ -616,26 +689,30 @@ function Get-ClaudeFlagSet {
     $set = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
-    # Global flags always available.
-    $script:ClaudeEnumFlags.Keys      | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeBoolFlags            | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeOptionalValueFlags   | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeStringFlags          | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeNumberFlags          | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeArrayFlags           | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeModelFlags           | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudePathFlags            | ForEach-Object { $null = $set.Add($_) }
-    $script:ClaudeDirFlags             | ForEach-Object { $null = $set.Add($_) }
 
-    # Command-only context flags (no L2 subcommand).
-    if ($Sub) {
-        $cmdFlags = $script:ClaudeCmdContextFlags[$Sub]
-        if ($cmdFlags) { $cmdFlags | ForEach-Object { $null = $set.Add($_) } }
+    # Root command: the full global flag surface.
+    if (-not $Sub) {
+        $script:ClaudeEnumFlags.Keys      | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeBoolFlags            | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeOptionalValueFlags   | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeStringFlags          | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeNumberFlags          | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeArrayFlags           | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeModelFlags           | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudePathFlags            | ForEach-Object { $null = $set.Add($_) }
+        $script:ClaudeDirFlags             | ForEach-Object { $null = $set.Add($_) }
+        return $set
     }
-    # L2 context flags.
-    if ($Sub -and $SubSub) {
+
+    # Commander subcommands do not inherit root options: only the context
+    # table for this exact command level plus --help applies.
+    $null = $set.Add('--help')
+    if ($SubSub) {
         $ctxFlags = $script:ClaudeContextFlags["$Sub.$SubSub"]
         if ($ctxFlags) { $ctxFlags | ForEach-Object { $null = $set.Add($_) } }
+    } else {
+        $cmdFlags = $script:ClaudeCmdContextFlags[$Sub]
+        if ($cmdFlags) { $cmdFlags | ForEach-Object { $null = $set.Add($_) } }
     }
     return $set
 }
@@ -781,22 +858,22 @@ function Complete-ClaudeNative {
     $isNativeConvention = $WordToComplete -match '^\d+$' -and
                           $ParameterName  -match '^\s*\S+'
 
+    # Line-absolute cursor offset (native convention only); $null otherwise.
+    $cursorCol = $null
+
     if ($isNativeConvention) {
         $nativePartialWord = $CommandName
         $cursorCol         = [int]$WordToComplete
 
         # $ParameterName is a CommandAst (TabExpansion2) or a string (ReadLine).
-        # In both cases we need a plain string for parsing and indexing.
         if ($ParameterName -is [System.Management.Automation.Language.CommandAst]) {
             # TabExpansion2: we already have the CommandAst — reuse it directly.
             $CommandAst = $ParameterName
-            $line       = $CommandAst.Extent.Text
         } else {
-            $line    = [string]$ParameterName
             $tokens  = $null
             $parseErrs = $null
             $parsedAst = [System.Management.Automation.Language.Parser]::ParseInput(
-                             $line, [ref]$tokens, [ref]$parseErrs)
+                             [string]$ParameterName, [ref]$tokens, [ref]$parseErrs)
             if ($parsedAst.EndBlock.Statements.Count -gt 0) {
                 $pipeline = $parsedAst.EndBlock.Statements[0]
                 if ($pipeline -is [System.Management.Automation.Language.PipelineAst] -and
@@ -808,46 +885,22 @@ function Complete-ClaudeNative {
         }
 
         if ($null -ne $CommandAst -and $CommandAst.CommandElements.Count -gt 1) {
-            $lastEl     = $CommandAst.CommandElements[-1]
-            $lastEnd    = $lastEl.Extent.EndOffset
-            # Use Extent.Text universally — works for both CommandParameterAst
-            # and StringConstantExpressionAst, and is safe under StrictMode.
-            $lastTokVal = $lastEl.Extent.Text
-            $cursorPastEnd  = $cursorCol -ge $line.Length
-            $cursorPastTok  = $cursorCol -gt $lastEnd -and
-                              ($cursorCol -gt $line.Length -or
-                               [char]::IsWhiteSpace($line[$cursorCol - 1]))
-            $isCompleteTok  = ($script:ClaudeTopCommands -contains $lastTokVal) -or
-                              (($lastTokVal -like '-*') -and
-                               $lastTokVal -notlike '*=*' -and
-                               $lastTokVal.Length -gt 1 -and
-                               $lastTokVal -ne '-')
-            $hasTrailingSpace = $cursorPastTok -or
-                              # Cursor at line end with a recognizable complete token means the
-                              # user pressed Tab after finishing that token (no space typed yet).
-                              # Only treat as trailing-space when cursor is actually PAST the
-                              # token's own end offset; when cursor == lastEnd the token is
-                              # still being completed as a prefix.
-                              ($cursorPastEnd -and $isCompleteTok -and $cursorCol -gt $lastEnd)
+            # Everything is derived from the text LEFT of the cursor. $cursorCol is
+            # line-absolute while Extent.Text is command-relative, so rebase first.
+            $line      = $CommandAst.Extent.Text
+            $relCursor = $cursorCol - $CommandAst.Extent.StartOffset
+            $hasTrailingSpace = ($relCursor -le 0) -or
+                                ($relCursor -gt $line.Length) -or
+                                [char]::IsWhiteSpace($line[$relCursor - 1])
 
             if ($hasTrailingSpace) {
                 $WordToComplete = ''
             } elseif (-not [string]::IsNullOrEmpty($nativePartialWord)) {
                 $WordToComplete = $nativePartialWord
             } else {
-                $pfx = if ($cursorCol -le $line.Length) {
-                           $line.Substring(0, $cursorCol)
-                       } else { $line }
-                $trimmed = $pfx.TrimEnd()
-                $spc     = $trimmed.LastIndexOf(' ')
-                if ($spc -ge 0) {
-                    $WordToComplete = $trimmed.Substring($spc + 1)
-                } else {
-                    $fspc = $trimmed.IndexOf(' ')
-                    $WordToComplete = if ($fspc -ge 0) {
-                                         $trimmed.Substring($fspc + 1)
-                                     } else { '' }
-                }
+                $pfx = $line.Substring(0, $relCursor)
+                $spc = $pfx.LastIndexOf(' ')
+                $WordToComplete = if ($spc -ge 0) { $pfx.Substring($spc + 1) } else { '' }
             }
         } else {
             $WordToComplete = ''
@@ -858,6 +911,10 @@ function Complete-ClaudeNative {
     if ($null -eq $CommandAst)     { return }
 
     $allElements = @($CommandAst.CommandElements)
+    if ($null -ne $cursorCol) {
+        # Ignore every element that starts at or after the cursor.
+        $allElements = @($allElements | Where-Object { $_.Extent.StartOffset -lt $cursorCol })
+    }
     if ($allElements.Count -eq 0) { return }
 
     # -------------------------------------------------------------------------
