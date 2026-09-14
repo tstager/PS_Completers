@@ -27,6 +27,7 @@ function Initialize-AutorunscCompletionCatalog {
             [pscustomobject]@{ Token = '-vt'; Description = 'Accept VirusTotal terms non-interactively.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-z'; Description = 'Scan an offline Windows system root and user profile.'; TakesValue = $true; ValueKind = 'OfflineRoot' }
             [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
+            [pscustomobject]@{ Token = '-accepteula'; Description = 'Accept the Sysinternals licence agreement non-interactively.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-?'; Description = 'Show Autorunsc help.'; TakesValue = $false }
             [pscustomobject]@{ Token = '/?'; Description = 'Show Autorunsc help.'; TakesValue = $false }
         )
@@ -49,6 +50,7 @@ function Initialize-AutorunscCompletionCatalog {
             [pscustomobject]@{ Token = 's'; Description = 'Services and non-disabled drivers.' }
             [pscustomobject]@{ Token = 't'; Description = 'Scheduled tasks.' }
             [pscustomobject]@{ Token = 'w'; Description = 'Winlogon entries.' }
+            [pscustomobject]@{ Token = 'x'; Description = 'Packaged (Store) app startups.' }
         )
         UserProfiles        = @()
         UserProfilesUpdated = [datetime]::MinValue
@@ -211,12 +213,36 @@ function Get-AutorunscPathCompletions {
     param(
         [string]$CurrentWord,
         [string]$ToolTip,
-        [string]$Placeholder = '<path>'
+        [string]$Placeholder = '<path>',
+        [switch]$DirectoriesOnly
     )
 
     $typedValue = Remove-AutorunscOuterQuotes -Value $CurrentWord
     $alwaysQuote = $CurrentWord.StartsWith('"')
     $results = New-Object System.Collections.Generic.List[object]
+
+    # The -z operands name an offline image, not something under the working
+    # directory, so start them at the volume roots instead of the cwd listing.
+    if ($DirectoriesOnly -and [string]::IsNullOrWhiteSpace($typedValue)) {
+        try {
+            foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
+                if (-not $drive.IsReady) {
+                    continue
+                }
+
+                [void]$results.Add((New-AutorunscCompletionResult -CompletionText $drive.Name -ListItemText $drive.Name -ResultType 'ParameterValue' -ToolTip $ToolTip))
+            }
+        } catch {
+            [void]$results.Clear()
+        }
+
+        if ($results.Count -gt 0) {
+            return @($results.ToArray())
+        }
+
+        [void]$results.Add((New-AutorunscCompletionResult -CompletionText $Placeholder -ListItemText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip))
+        return @($results.ToArray())
+    }
 
     $parentPath = '.'
     $leaf = ''
@@ -235,7 +261,11 @@ function Get-AutorunscPathCompletions {
     }
 
     try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
+        $items = if ($DirectoriesOnly) {
+            @(Get-ChildItem -LiteralPath $parentPath -Directory -Force -ErrorAction Stop)
+        } else {
+            @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
+        }
     } catch {
         $items = @()
     }
@@ -370,10 +400,11 @@ function Complete-Autorunsc {
     Initialize-AutorunscCompletionCatalog
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
+    $relativeCursor = $CursorPosition - $CommandAst.Extent.StartOffset
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
-    $tokenState = Get-AutorunscTokenState -Line $line -CursorPosition $CursorPosition
+    $tokenState = Get-AutorunscTokenState -Line $line -CursorPosition $relativeCursor
     $argumentsState = Get-AutorunscArgumentsFromTokenState -TokenState $tokenState
     $state = Get-AutorunscCommandState -ArgumentsBeforeCurrent $argumentsState.ArgumentsBeforeCurrent
     $currentWord = $argumentsState.CurrentArgument
@@ -381,7 +412,38 @@ function Complete-Autorunsc {
 
     switch ($state.ValueContext) {
         'Selection' {
+            # Help's usage line is '-a <*|bcdeghi klmnoprstw>': category letters may be
+            # concatenated, so a typed run of letters is a prefix to extend, not a token
+            # to match. Offer the run itself first, then every letter not yet in it.
             $typedValue = Remove-AutorunscOuterQuotes -Value $currentWord
+            if ($typedValue -match '^[A-Za-z]+$') {
+                $letterSpecs = @($script:AutorunscCompletionCatalog.SelectionValues | Where-Object { $_.Token -ne '*' })
+                $known = @{}
+                foreach ($selection in $letterSpecs) {
+                    $known[$selection.Token.ToLowerInvariant()] = $selection.Description
+                }
+
+                $typedLetters = @($typedValue.ToCharArray() | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                $unknown = @($typedLetters | Where-Object { -not $known.ContainsKey($_) })
+                if ($unknown.Count -gt 0) {
+                    return @()
+                }
+
+                $describedRun = (@($typedLetters | ForEach-Object { $known[$_] }) -join ' ')
+                [void]$results.Add((New-AutorunscCompletionResult -CompletionText $typedValue -ListItemText $typedValue -ResultType 'ParameterValue' -ToolTip $describedRun))
+
+                foreach ($selection in $letterSpecs) {
+                    if ($selection.Token.ToLowerInvariant() -in $typedLetters) {
+                        continue
+                    }
+
+                    $clustered = $typedValue + $selection.Token
+                    [void]$results.Add((New-AutorunscCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterValue' -ToolTip ('Add ' + $selection.Description)))
+                }
+
+                return Get-AutorunscUniqueCompletions -Results @($results.ToArray())
+            }
+
             foreach ($selection in $script:AutorunscCompletionCatalog.SelectionValues) {
                 if (-not [string]::IsNullOrWhiteSpace($typedValue) -and
                     -not $selection.Token.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -397,10 +459,10 @@ function Complete-Autorunsc {
             return Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Output file path.' -Placeholder '<output-file>'
         }
         'OfflineRoot' {
-            return Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline Windows system root path.' -Placeholder '<offline-systemroot>'
+            return Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline Windows system root path.' -Placeholder '<offline-systemroot>' -DirectoriesOnly
         }
         'OfflineUserProfile' {
-            return Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline user profile path.' -Placeholder '<offline-userprofile>'
+            return Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline user profile path.' -Placeholder '<offline-userprofile>' -DirectoriesOnly
         }
     }
 
@@ -429,11 +491,12 @@ function Complete-Autorunsc {
     if (-not $currentWord.StartsWith('-') -and -not $currentWord.StartsWith('/')) {
         if ($state.OfflineMode) {
             if ($state.OfflinePaths -eq 0) {
-                $results.AddRange((Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline Windows system root path.' -Placeholder '<offline-systemroot>'))
+                $results.AddRange((Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline Windows system root path.' -Placeholder '<offline-systemroot>' -DirectoriesOnly))
             } elseif ($state.OfflinePaths -eq 1) {
-                $results.AddRange((Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline user profile path.' -Placeholder '<offline-userprofile>'))
+                $results.AddRange((Get-AutorunscPathCompletions -CurrentWord $currentWord -ToolTip 'Offline user profile path.' -Placeholder '<offline-userprofile>' -DirectoriesOnly))
             } else {
-                $results.Add((New-AutorunscCompletionResult -CompletionText $currentWord -ListItemText $currentWord -ResultType 'ParameterValue' -ToolTip 'Autorunsc accepts no further positional arguments after -z <systemroot> <userprofile>.'))
+                $terminalText = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<no-more-arguments>' } else { $currentWord }
+                $results.Add((New-AutorunscCompletionResult -CompletionText $terminalText -ListItemText $terminalText -ResultType 'ParameterValue' -ToolTip 'Autorunsc accepts no further positional arguments after -z <systemroot> <userprofile>.'))
             }
         } else {
             Update-AutorunscUserProfiles

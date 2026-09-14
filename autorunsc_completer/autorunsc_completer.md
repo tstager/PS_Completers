@@ -46,6 +46,7 @@ The script completes the locally validated Autorunsc switches:
 - `-vt`
 - `-z`
 - `-nobanner`
+- `-accepteula`
 - `-?`
 - `/?`
 
@@ -58,11 +59,19 @@ It also handles the mutual-output variants cleanly:
 
 The completer adds targeted values for the main parameterized switches:
 
-- `-a` -> `*` and the validated category letters (`b`, `c`, `d`, `e`, `g`, `h`, `i`, `k`, `l`, `m`, `n`, `o`, `p`, `r`, `s`, `t`, `w`)
+- `-a` -> `*` and the validated category letters (`b`, `c`, `d`, `e`, `g`, `h`, `i`, `k`, `l`, `m`, `n`, `o`, `p`, `r`, `s`, `t`, `w`, `x`)
 - `-o` -> output-file path completion
-- `-z` -> two path-aware values:
+- `-z` -> two directory-only values:
   - offline Windows system root
   - offline user-profile path
+
+#### Concatenated `-a` categories
+
+Help's usage line is `-a <*|bcdeghi klmnoprstw>`, so category letters may be concatenated. A typed run of letters is therefore treated as a prefix to extend rather than a token to match: `autorunsc -a ls<TAB>` offers `ls` first and then `lsb`, `lsc`, `lsd` and every other category not already in the run. A run containing a letter that is not a category returns nothing rather than guessing.
+
+#### Offline `-z` operands
+
+Both `-z` operands name directories inside an offline image, so they are completed with directories only (including hidden ones) and an empty slot is seeded with the local volume roots (`C:\`, `D:\`, ...) rather than a listing of the working directory. Once both operands are supplied the completer emits a `<no-more-arguments>` placeholder instead of constructing a completion from an empty string.
 
 ### Positional `user` completion
 
@@ -82,7 +91,7 @@ This completer is static and does not invoke `autorunsc` during completion.
 It only depends on:
 
 - PowerShell native argument completer support
-- local filesystem access for `-o` and `-z`
+- local filesystem access for `-o` and `-z`, plus `[System.IO.DriveInfo]::GetDrives()` for the `-z` volume roots
 - cheap local inspection of `C:\Users` for profile-name hints
 
 ## Usage / loading example
@@ -101,4 +110,4 @@ autorunsc <TAB>
 
 - The completer does not query Autoruns or VirusTotal during completion.
 - The `user` positional is completed from local profile folders, not from domain or remote account discovery.
-- Offline path positions stay local-only and path-aware.
+- Offline path positions stay local-only and directory-aware.
