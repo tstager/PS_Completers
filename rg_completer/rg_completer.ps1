@@ -436,6 +436,7 @@ function Initialize-RgCompletionCatalog {
 
     $helpLines = Invoke-RgCapture -Arguments @('--help')
     $currentKeys = @()
+    $lastOptionKey = $null
 
     foreach ($line in @($helpLines)) {
         if ($line -match '^\s*(?:-[^,\s]+(?:\s+\S+)?\,\s+)?--[A-Za-z0-9][A-Za-z0-9\-]*(?:[= ]\S+)?\s*$') {
@@ -446,7 +447,18 @@ function Initialize-RgCompletionCatalog {
                 $currentKeys += Get-RgCanonicalOptionKey -Token $parsed.Token
             }
 
+            if ($currentKeys.Count -gt 0) {
+                $lastOptionKey = $currentKeys[-1]
+            }
+
             continue
+        }
+
+        # Hidden aliases (--maxdepth for --max-depth) are documented only in the prose paragraphs.
+        if ($lastOptionKey -and $line -match 'alternative spelling for this flag is (?<alias>--[A-Za-z0-9][A-Za-z0-9\-]*)') {
+            $aliasToken = $matches['alias']
+            $primary = $catalog.OptionByToken[$lastOptionKey]
+            Add-RgOptionSpec -Token $aliasToken -DisplayText $aliasToken -Description ('Alternative spelling of ' + $primary.Token + '.') -Placeholder $primary.Placeholder
         }
 
         if ($currentKeys.Count -gt 0 -and $line -match '^\s{8,}(?<text>\S.*)$') {
@@ -465,6 +477,19 @@ function Initialize-RgCompletionCatalog {
 
         if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^\S') {
             $currentKeys = @()
+        }
+    }
+
+    # ripgrep prints negation and alias spellings (--no-*, --maxdepth, --ignore, ...) only in
+    # prose, so harvest the remaining accepted flags from its own generated completion script.
+    $generated = @(Invoke-RgCapture -Arguments @('--generate', 'complete-powershell'))
+    foreach ($line in $generated) {
+        if ($line -match "\[CompletionResult\]::new\('(?<token>--?[A-Za-z0-9][A-Za-z0-9\-]*)',\s*'[^']*',\s*\[CompletionResultType\]::ParameterName,\s*'(?<desc>(?:[^']|'')*)'\)") {
+            $description = $matches['desc'].Replace("''", "'")
+            $key = Get-RgCanonicalOptionKey -Token $matches['token']
+            if (-not $catalog.OptionByToken.ContainsKey($key)) {
+                Add-RgOptionSpec -Token $matches['token'] -DisplayText $matches['token'] -Description $description
+            }
         }
     }
 
@@ -511,7 +536,7 @@ function Get-RgPathCompletions {
     }
 
     foreach ($item in $items) {
-        $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
+        $completionText = if (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
             if ($parent -eq '.') {
                 $item.Name
             } else {
@@ -749,19 +774,65 @@ function Get-RgOptionKey {
     $null
 }
 
-function Get-RgAttachedShortOption {
+function Resolve-RgShortToken {
+    # Decomposes a single-dash token into known short flags. A value-taking flag ends the
+    # cluster and the remainder of the token is its attached value (-tpy, -A5, -iA5).
     param([string]$Token)
 
     $cleanToken = Remove-RgOuterQuotes -Value $Token
-    if ($cleanToken -match '^(?<flag>-(?:t|T|g|e|f|r|E|A|B|C|j|m|M))(?<value>.+)$') {
-        [pscustomobject]@{
-            Flag  = $matches['flag']
-            Value = $matches['value']
-        }
-        return
+    if ($cleanToken.Length -lt 2 -or -not $cleanToken.StartsWith('-') -or $cleanToken.StartsWith('--')) {
+        return $null
     }
 
-    $null
+    $catalog = Get-RgCompletionCatalog
+    $flags = New-Object System.Collections.Generic.List[object]
+    $valueOption = $null
+    $value = ''
+    $prefix = '-'
+
+    for ($index = 1; $index -lt $cleanToken.Length; $index++) {
+        $key = Get-RgCanonicalOptionKey -Token ('-' + $cleanToken[$index])
+        if (-not $catalog.OptionByToken.ContainsKey($key)) {
+            return $null
+        }
+
+        $option = $catalog.OptionByToken[$key]
+        $flags.Add($option)
+        $prefix += $cleanToken[$index]
+        if ($option.ValueKind) {
+            $valueOption = $option
+            $value = $cleanToken.Substring($index + 1)
+            break
+        }
+    }
+
+    [pscustomobject]@{
+        Flags       = @($flags.ToArray())
+        ValueOption = $valueOption
+        Value       = $value
+        Prefix      = $prefix
+    }
+}
+
+function Get-RgShortClusterCompletion {
+    param([pscustomobject]$Cluster)
+
+    $catalog = Get-RgCompletionCatalog
+    $present = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($flag in $Cluster.Flags) {
+        [void]$present.Add($flag.Token)
+    }
+
+    New-RgCompletionResult -CompletionText $Cluster.Prefix -ResultType 'ParameterName' -ToolTip ('Flags: ' + (($Cluster.Flags | ForEach-Object { $_.Token }) -join ' '))
+
+    foreach ($option in $catalog.Options) {
+        if ($option.Token.Length -ne 2 -or $option.Token.StartsWith('--') -or $present.Contains($option.Token)) {
+            continue
+        }
+
+        $toolTip = if ([string]::IsNullOrWhiteSpace($option.Description)) { $option.DisplayText } else { $option.Description }
+        New-RgCompletionResult -CompletionText ($Cluster.Prefix + $option.Token.Substring(1)) -ListItemText ($Cluster.Prefix + $option.Token.Substring(1)) -ResultType 'ParameterName' -ToolTip $toolTip
+    }
 }
 
 function Get-RgCompletionContext {
@@ -804,12 +875,22 @@ function Get-RgCompletionContext {
             continue
         }
 
-        $attached = Get-RgAttachedShortOption -Token $cleanToken
-        $attachedKey = if ($attached) { Get-RgCanonicalOptionKey -Token $attached.Flag } else { $null }
-        if ($attachedKey -and $catalog.OptionByToken.ContainsKey($attachedKey)) {
-            $option = $catalog.OptionByToken[$attachedKey]
-            if ($option.ValueKind -in @('Pattern', 'PatternFilePathOrStdin')) {
-                $hasPatternSource = $true
+        $cluster = if ($cleanToken.Length -gt 2) { Resolve-RgShortToken -Token $cleanToken } else { $null }
+        if ($cluster) {
+            foreach ($flag in $cluster.Flags) {
+                if ($flag.Token -in @('-h', '-V')) {
+                    $terminalMode = $true
+                }
+            }
+
+            if ($cluster.ValueOption) {
+                if ($cluster.Value.Length -gt 0) {
+                    if ($cluster.ValueOption.ValueKind -in @('Pattern', 'PatternFilePathOrStdin')) {
+                        $hasPatternSource = $true
+                    }
+                } else {
+                    $pendingOption = $cluster.ValueOption
+                }
             }
             continue
         }
@@ -910,7 +991,13 @@ Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
     Initialize-RgCompletionCatalog
     $catalog = Get-RgCompletionCatalog
 
-    $currentToken = Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    # The AST extent stops at the last token, so an empty $wordToComplete is the only reliable
+    # signal that the cursor sits after whitespace and a fresh slot is being completed.
+    $currentToken = if ([string]::IsNullOrEmpty($wordToComplete)) {
+        ''
+    } else {
+        Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
     $tokensBeforeCurrent = Get-RgArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-RgCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -925,20 +1012,24 @@ Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
         }
     }
 
-    if ($currentToken -match '^(?<flag>-[tT])(?<value>.+)$') {
-        $optionKey = Get-RgCanonicalOptionKey -Token $matches['flag']
-        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
-            return @(Get-RgValueCompletions -OptionSpec $catalog.OptionByToken[$optionKey] -CurrentValue $matches['value'] -Prefix $matches['flag'])
+    if ($currentToken.Length -gt 2 -and -not $context.EndOfOptions) {
+        $cluster = Resolve-RgShortToken -Token $currentToken
+        if ($cluster) {
+            if ($cluster.ValueOption) {
+                return @(Get-RgValueCompletions -OptionSpec $cluster.ValueOption -CurrentValue $cluster.Value -Prefix $cluster.Prefix)
+            }
+
+            return @(Get-RgShortClusterCompletion -Cluster $cluster)
         }
     }
 
     if ($context.PendingOption) {
-        return @(Get-RgValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+        return @(Get-RgValueCompletions -OptionSpec $context.PendingOption -CurrentValue $currentToken)
     }
 
-    if ($currentToken.StartsWith('-')) {
-        return @(Get-RgOptionCompletions -CurrentWord $wordToComplete)
+    if ($currentToken.StartsWith('-') -and -not $context.EndOfOptions) {
+        return @(Get-RgOptionCompletions -CurrentWord $currentToken)
     }
 
-    @(Get-RgPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+    @(Get-RgPositionalCompletions -CurrentWord $currentToken -Context $context)
 }

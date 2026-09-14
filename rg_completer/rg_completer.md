@@ -6,10 +6,10 @@
 
 It is a help-driven completer that:
 
-- parses the local `rg.exe --help` surface once per session
+- parses the local `rg.exe --help` surface once per session and harvests the negation and alias spellings ripgrep only documents in prose (`--no-*`, `--maxdepth`) from `rg.exe --generate complete-powershell`
 - caches file type names from `rg.exe --type-list`
 - suggests both short and long options
-- supports inline `--option=value` completion and attached `-tTYPE` / `-TTYPE` type completion
+- supports inline `--option=value` completion and attached short values such as `-tTYPE`, `-A5` or `-iA5`, plus extension of boolean short clusters such as `-iF`
 - provides targeted enum hints for `--engine`, `--color`, `--sort`, `--generate`, `--hyperlink-format`, and common encodings
 - completes real filesystem paths for path-bearing operands and options like `-f` and `--ignore-file`
 - suppresses noisy filesystem fallback for regex, glob, replacement, separator, and command-valued slots with placeholder-oriented suggestions
@@ -29,7 +29,13 @@ Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
     Initialize-RgCompletionCatalog
     $catalog = Get-RgCompletionCatalog
 
-    $currentToken = Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    # The AST extent stops at the last token, so an empty $wordToComplete is the only reliable
+    # signal that the cursor sits after whitespace and a fresh slot is being completed.
+    $currentToken = if ([string]::IsNullOrEmpty($wordToComplete)) {
+        ''
+    } else {
+        Get-RgCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    }
     $tokensBeforeCurrent = Get-RgArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-RgCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -44,22 +50,26 @@ Register-ArgumentCompleter -Native -CommandName 'rg', 'rg.exe' -ScriptBlock {
         }
     }
 
-    if ($currentToken -match '^(?<flag>-[tT])(?<value>.+)$') {
-        $optionKey = Get-RgCanonicalOptionKey -Token $matches['flag']
-        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
-            return @(Get-RgValueCompletions -OptionSpec $catalog.OptionByToken[$optionKey] -CurrentValue $matches['value'] -Prefix $matches['flag'])
+    if ($currentToken.Length -gt 2 -and -not $context.EndOfOptions) {
+        $cluster = Resolve-RgShortToken -Token $currentToken
+        if ($cluster) {
+            if ($cluster.ValueOption) {
+                return @(Get-RgValueCompletions -OptionSpec $cluster.ValueOption -CurrentValue $cluster.Value -Prefix $cluster.Prefix)
+            }
+
+            return @(Get-RgShortClusterCompletion -Cluster $cluster)
         }
     }
 
     if ($context.PendingOption) {
-        return @(Get-RgValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+        return @(Get-RgValueCompletions -OptionSpec $context.PendingOption -CurrentValue $currentToken)
     }
 
-    if ($currentToken.StartsWith('-')) {
-        return @(Get-RgOptionCompletions -CurrentWord $wordToComplete)
+    if ($currentToken.StartsWith('-') -and -not $context.EndOfOptions) {
+        return @(Get-RgOptionCompletions -CurrentWord $currentToken)
     }
 
-    @(Get-RgPositionalCompletions -CurrentWord $wordToComplete -Context $context)
+    @(Get-RgPositionalCompletions -CurrentWord $currentToken -Context $context)
 }
 ```
 
@@ -133,6 +143,6 @@ rg -f .\
 
 ## Limitations / notes
 
-- The completer does not attempt to parse every combined short-flag form; it focuses on the most relevant attached ripgrep type form (`-tTYPE`, `-TTYPE`) plus long `--option=value`.
+- Short clusters are decomposed left to right against the live catalog; the first value-taking flag ends the cluster and the rest of the token is its value (`-iA5`, `-tpy`). A cluster with an unknown letter falls back to plain option matching.
 - Encoding suggestions use a curated common set instead of enumerating every WHATWG label.
 - `--colors` and `--type-add` use representative examples and placeholders rather than trying to fully validate ripgrep's mini-languages during completion.
