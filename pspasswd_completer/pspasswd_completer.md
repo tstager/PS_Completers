@@ -19,16 +19,20 @@ Instead, it focuses on the documented syntax shapes for both local-account and d
   - `\\localhost`
   - `\\*`
   - `@file`
-- Remote auth:
+- Remote auth (offered only after a remote target and before the account):
   - `-u` -> `<username>`, `<domain\user>`
   - `-p` -> `<password>`
+- Singleton switches: `-nobanner`, `-accepteula` (accepted by the binary, never printed by its help), `-?`, `/?`
 - Account slot:
   - `<account>`
   - `<domain\account>`
   - representative examples such as `Administrator`
+  - hints are filtered by the typed prefix, so `Adm<Tab>` narrows to `Administrator`
 - New password slot:
   - returns `<new-password>` when blank
   - echoes the user-typed token when not blank, to suppress filesystem fallback without exposing secret-specific behavior
+- Once both `<Account>` and `[NewPassword]` are present nothing else is offered, matching the usage line
+- Only tokens that end at or before the cursor count as prior state, so editing an earlier switch mid-line still offers the switch list
 
 ## Registration
 

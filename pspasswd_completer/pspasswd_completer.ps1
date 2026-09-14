@@ -39,19 +39,19 @@ function ConvertTo-PsPasswdQuotedValue {
 
 function Get-PsPasswdArgumentState {
     param([System.Management.Automation.Language.CommandAst]$CommandAst, [string]$WordToComplete, [int]$CursorPosition)
+    # $CursorPosition is line-absolute; the extent text is command-relative.
+    $relativeCursor = [Math]::Max(0, $CursorPosition - $CommandAst.Extent.StartOffset)
     $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
     } else {
-        Get-PsPasswdCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-PsPasswdCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $relativeCursor -Fallback $WordToComplete
     }
-    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
+    # Only elements that end at or before the cursor are established state; a token to the
+    # right of the caret must not be consumed as the Account or NewPassword positional.
+    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | Where-Object { $_.Extent.EndOffset -le $CursorPosition } | ForEach-Object { $_.Extent.Text })
     $tokensBeforeCurrent = @($tokens)
     if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
-        if ($tokensBeforeCurrent.Count -gt 1) {
-            $tokensBeforeCurrent = @($tokensBeforeCurrent[0..($tokensBeforeCurrent.Count - 2)])
-        } else {
-            $tokensBeforeCurrent = @()
-        }
+        $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -First ($tokensBeforeCurrent.Count - 1))
     }
     [pscustomobject]@{
         CurrentWord         = $currentWord
@@ -115,6 +115,7 @@ function Complete-PsPasswd {
         if ($lowerToken -eq '-u') { $used['-u'] = $true; if ($i -eq ($tokensBeforeCurrent.Count - 1)) { $valueContext = 'User'; break }; $i++; continue }
         if ($lowerToken -eq '-p') { $used['-p'] = $true; if ($i -eq ($tokensBeforeCurrent.Count - 1)) { $valueContext = 'Password'; break }; $i++; continue }
         if ($lowerToken -eq '-nobanner') { $used['-nobanner'] = $true; continue }
+        if ($lowerToken -eq '-accepteula') { $used['-accepteula'] = $true; continue }
         if ($lowerToken -eq '-?') { $used['-?'] = $true; continue }
         if ($lowerToken -eq '/?') { $used['/?'] = $true; continue }
 
@@ -146,6 +147,11 @@ function Complete-PsPasswd {
         return @(New-PsPasswdCompletionResult -CompletionText $(if ([string]::IsNullOrWhiteSpace($currentWord)) { '<new-password>' } else { $currentWord }) -ResultType 'ParameterValue' -ToolTip 'New password. Completion intentionally does not enumerate or transform secrets.')
     }
 
+    # pspasswd [\\computer|@file] [-u Username [-p Password]] <Account> [NewPassword]: nothing follows NewPassword.
+    if ($account -and $newPassword) {
+        return @()
+    }
+
     $results = New-Object System.Collections.Generic.List[object]
     if (-not $remoteTarget) {
         foreach ($target in @('\\<computer>', '\\localhost', '\\*', '@file')) {
@@ -156,21 +162,23 @@ function Complete-PsPasswd {
     }
 
     foreach ($switchSpec in @(
-            @{ Token = '-u'; Description = 'Optional user name for remote login.'; NeedsRemote = $true }
-            @{ Token = '-p'; Description = 'Optional password for remote login.'; NeedsRemote = $true }
+            @{ Token = '-u'; Description = 'Optional user name for remote login.'; NeedsRemote = $true; BeforeAccount = $true }
+            @{ Token = '-p'; Description = 'Optional password for remote login.'; NeedsRemote = $true; BeforeAccount = $true }
             @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.' }
+            @{ Token = '-accepteula'; Description = 'Suppress the Sysinternals EULA dialog on first run.' }
             @{ Token = '-?'; Description = 'Display PsPasswd help.' }
             @{ Token = '/?'; Description = 'Display PsPasswd help.' }
         )) {
         if ($used.ContainsKey($switchSpec.Token.ToLowerInvariant())) { continue }
         if ($switchSpec.ContainsKey('NeedsRemote') -and $switchSpec.NeedsRemote -and -not $remoteTarget) { continue }
+        if ($switchSpec.ContainsKey('BeforeAccount') -and $switchSpec.BeforeAccount -and $account) { continue }
         if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $switchSpec.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
         [void]$results.Add((New-PsPasswdCompletionResult -CompletionText $switchSpec.Token -ResultType 'ParameterName' -ToolTip $switchSpec.Description))
     }
 
     if (-not $account) {
         foreach ($hint in @('<account>', '<domain\account>', 'Administrator', 'CONTOSO\User')) {
-            if ([string]::IsNullOrWhiteSpace($currentWord) -or $hint.StartsWith((Remove-PsPasswdOuterQuotes -Value $currentWord), [System.StringComparison]::OrdinalIgnoreCase) -or -not $currentWord.StartsWith('-')) {
+            if ([string]::IsNullOrWhiteSpace($currentWord) -or $hint.StartsWith((Remove-PsPasswdOuterQuotes -Value $currentWord), [System.StringComparison]::OrdinalIgnoreCase)) {
                 [void]$results.Add((New-PsPasswdCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip 'Local account or domain account placeholder.'))
             }
         }
