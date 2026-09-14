@@ -89,6 +89,43 @@ function Get-PwshOptionMap {
     $map
 }
 
+function Resolve-PwshOptionSpec {
+    param([string]$Token)
+
+    if ([string]::IsNullOrEmpty($Token)) {
+        return $null
+    }
+
+    # pwsh accepts every parameter with a double dash as well (pwsh --noprofile --version).
+    $lookup = if ($Token.StartsWith('--')) { $Token.Substring(1) } else { $Token }
+    $optionMap = Get-PwshOptionMap
+    if ($optionMap.ContainsKey($lookup)) {
+        return $optionMap[$lookup]
+    }
+
+    $null
+}
+
+function Test-PwshOptionToken {
+    param(
+        [string]$Token,
+        [string[]]$Tokens
+    )
+
+    if ([string]::IsNullOrEmpty($Token)) {
+        return $false
+    }
+
+    $lookup = if ($Token.StartsWith('--')) { $Token.Substring(1) } else { $Token }
+    foreach ($candidate in $Tokens) {
+        if ([string]::Equals($lookup, $candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    $false
+}
+
 function Remove-PwshOuterQuotes {
     param([string]$Value)
 
@@ -110,22 +147,39 @@ function Get-PwshPathCompletions {
     param(
         [string]$InputPath,
         [string]$AttachedPrefix = '',
-        [string]$Placeholder = '<path>'
+        [string]$Placeholder = '<path>',
+        [string[]]$Extension = @(),
+        [switch]$ContainersOnly
     )
 
     $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($InputPath)) {
-        $completionText = if ([string]::IsNullOrEmpty($AttachedPrefix)) {
-            $item.CompletionText
-        } else {
-            "$AttachedPrefix$($item.CompletionText)"
+        $isContainer = $item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
+        if (-not $isContainer) {
+            if ($ContainersOnly) {
+                continue
+            }
+
+            if ($Extension.Count -gt 0) {
+                $leaf = Remove-PwshOuterQuotes -Value $item.ListItemText
+                $itemExtension = [System.IO.Path]::GetExtension($leaf)
+                if (-not ($Extension -contains $itemExtension)) {
+                    continue
+                }
+            }
         }
 
+        if ([string]::IsNullOrEmpty($AttachedPrefix)) {
+            $results.Add($item)
+            continue
+        }
+
+        $completionText = "$AttachedPrefix$($item.CompletionText)"
         $results.Add([System.Management.Automation.CompletionResult]::new(
             $completionText,
-            $completionText,
+            $item.ListItemText,
             $item.ResultType,
-            $completionText
+            $item.ToolTip
         ))
     }
 
@@ -161,10 +215,9 @@ function Get-PwshPendingOption {
         return $null
     }
 
-    $optionMap = Get-PwshOptionMap
-    $lastToken = $TokensBeforeCurrent[-1]
-    if ($optionMap.ContainsKey($lastToken) -and -not [string]::IsNullOrWhiteSpace($optionMap[$lastToken].ValueKind)) {
-        return $optionMap[$lastToken]
+    $spec = Resolve-PwshOptionSpec -Token $TokensBeforeCurrent[-1]
+    if ($spec -and -not [string]::IsNullOrWhiteSpace($spec.ValueKind)) {
+        return $spec
     }
 
     $null
@@ -179,22 +232,57 @@ function Get-PwshClosedValueCompletions {
     )
 
     foreach ($value in $Values) {
-        $completionText = if ([string]::IsNullOrEmpty($AttachedPrefix)) { $value } else { "$AttachedPrefix$value" }
-        if (Test-PwshStartsWith -Candidate $completionText -Prefix $CurrentWord) {
-            New-PwshCompletionResult -CompletionText $completionText -ToolTip $(if ($ToolTip) { $ToolTip } else { $value })
+        if (Test-PwshStartsWith -Candidate $value -Prefix $CurrentWord) {
+            $completionText = if ([string]::IsNullOrEmpty($AttachedPrefix)) { $value } else { "$AttachedPrefix$value" }
+            New-PwshCompletionResult -CompletionText $completionText -ToolTip $(if ($ToolTip) { $ToolTip } else { $value }) -ListItemText $value
         }
     }
 }
 
 function Get-PwshCommandTextCompletions {
-    param([string]$CurrentWord)
+    param(
+        [string]$CurrentWord,
+        [string]$AttachedPrefix = ''
+    )
 
-    $suggestions = @('-', 'Get-Command', 'Get-Help', 'Get-Location', 'Get-Process', 'Get-Date', '& { <script> }', '<command>')
-    foreach ($value in $suggestions) {
-        if (Test-PwshStartsWith -Candidate $value -Prefix $CurrentWord) {
-            New-PwshCompletionResult -CompletionText $value -ToolTip 'PowerShell command text.'
+    $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
+    $extras = @(
+        @{ Text = '-';              ToolTip = 'Read the command text from standard input.' }
+        @{ Text = '& { <script> }'; ToolTip = 'Run an inline script block.' }
+    )
+
+    foreach ($extra in $extras) {
+        if (Test-PwshStartsWith -Candidate $extra.Text -Prefix $CurrentWord) {
+            $completionText = if ([string]::IsNullOrEmpty($AttachedPrefix)) { $extra.Text } else { "$AttachedPrefix$($extra.Text)" }
+            $results.Add((New-PwshCompletionResult -CompletionText $completionText -ToolTip $extra.ToolTip -ListItemText $extra.Text))
         }
     }
+
+    if ([string]::IsNullOrEmpty($CurrentWord)) {
+        $completionText = if ([string]::IsNullOrEmpty($AttachedPrefix)) { '<command>' } else { "$AttachedPrefix<command>" }
+        $results.Add((New-PwshCompletionResult -CompletionText $completionText -ToolTip 'PowerShell command text.' -ListItemText '<command>'))
+        return $results
+    }
+
+    # Real command names from the session the completer runs in (in-process, no child process).
+    try {
+        foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteCommand($CurrentWord)) {
+            if ([string]::IsNullOrEmpty($AttachedPrefix)) {
+                $results.Add($item)
+            } else {
+                $results.Add([System.Management.Automation.CompletionResult]::new(
+                    "$AttachedPrefix$($item.CompletionText)",
+                    $item.ListItemText,
+                    $item.ResultType,
+                    $item.ToolTip
+                ))
+            }
+        }
+    } catch {
+        Write-Debug "pwsh completer: CompleteCommand failed: $($_.Exception.Message)"
+    }
+
+    $results
 }
 
 function Get-PwshValueCompletions {
@@ -205,11 +293,11 @@ function Get-PwshValueCompletions {
     )
 
     switch ($Spec.ValueKind) {
-        'ScriptPath'      { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<script.ps1>') }
-        'ConfigPath'      { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<configuration.pssc>') }
-        'SettingsPath'    { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<settings.json>') }
-        'DirectoryPath'   { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<directory>') }
-        'CommandText'     { return @(Get-PwshCommandTextCompletions -CurrentWord $CurrentWord) }
+        'ScriptPath'      { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<script.ps1>' -Extension @('.ps1')) }
+        'ConfigPath'      { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<configuration.pssc>' -Extension @('.pssc')) }
+        'SettingsPath'    { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<settings.json>' -Extension @('.json')) }
+        'DirectoryPath'   { return @(Get-PwshPathCompletions -InputPath $CurrentWord -AttachedPrefix $AttachedPrefix -Placeholder '<directory>' -ContainersOnly) }
+        'CommandText'     { return @(Get-PwshCommandTextCompletions -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix) }
         'ConfigurationName' { return @(Get-PwshClosedValueCompletions -Values @('PowerShell.7', 'Microsoft.PowerShell', '<configuration-name>') -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix -ToolTip 'PowerShell session configuration name.') }
         'PipeName'        { return @(Get-PwshClosedValueCompletions -Values @('pwsh-debug', 'mydebugpipe', '<pipe-name>') -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix -ToolTip 'Custom named pipe.') }
         'EncodedCommand'  { return @(Get-PwshClosedValueCompletions -Values @('<base64-encoded-command>') -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix -ToolTip 'UTF-16LE Base64-encoded command.') }
@@ -224,10 +312,20 @@ function Get-PwshValueCompletions {
 function Get-PwshOptionCompletions {
     param([string]$CurrentWord)
 
+    $doubleDash = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('--')
     foreach ($spec in Get-PwshOptionSpecs) {
         foreach ($token in $spec.Tokens) {
-            if (Test-PwshStartsWith -Candidate $token -Prefix $CurrentWord) {
-                New-PwshCompletionResult -CompletionText $token -ToolTip $spec.Description -ResultType 'ParameterName'
+            $candidate = $token
+            if ($doubleDash) {
+                if (-not $token.StartsWith('-')) {
+                    continue
+                }
+
+                $candidate = '-' + $token
+            }
+
+            if (Test-PwshStartsWith -Candidate $candidate -Prefix $CurrentWord) {
+                New-PwshCompletionResult -CompletionText $candidate -ToolTip $spec.Description -ResultType 'ParameterName'
             }
         }
     }
@@ -239,7 +337,6 @@ function Test-PwshHasTerminalOption {
         [string[]]$TerminalOptions
     )
 
-    $optionMap = Get-PwshOptionMap
     $skipNext = $false
     foreach ($token in $TokensBeforeCurrent) {
         if ($skipNext) {
@@ -247,16 +344,45 @@ function Test-PwshHasTerminalOption {
             continue
         }
 
-        if ($TerminalOptions -contains $token) {
+        if (Test-PwshOptionToken -Token $token -Tokens $TerminalOptions) {
             return $true
         }
 
-        if ($optionMap.ContainsKey($token) -and -not [string]::IsNullOrWhiteSpace($optionMap[$token].ValueKind)) {
+        $spec = Resolve-PwshOptionSpec -Token $token
+        if ($spec -and -not [string]::IsNullOrWhiteSpace($spec.ValueKind)) {
             $skipNext = $true
         }
     }
 
     $false
+}
+
+function Get-PwshParameterValueContext {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # 'pwsh -ExecutionPolicy:By' parses into a CommandParameterAst; the engine then hands the
+    # completer only the value ('By'), so the option name must be recovered from the AST.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) {
+            continue
+        }
+
+        if ($null -eq $element.Argument) {
+            continue
+        }
+
+        if ($element.Extent.StartOffset -le $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            $spec = Resolve-PwshOptionSpec -Token ('-' + $element.ParameterName)
+            if ($spec -and -not [string]::IsNullOrWhiteSpace($spec.ValueKind)) {
+                return $spec
+            }
+        }
+    }
+
+    $null
 }
 
 function Complete-Pwsh {
@@ -268,13 +394,18 @@ function Complete-Pwsh {
 
     $currentWord = if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
     $tokensBeforeCurrent = @(Get-PwshArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
-    $optionMap = Get-PwshOptionMap
 
     if ($currentWord -match '^(?<option>-[^:=]+|/[^:=]+)(?<separator>[:=])(?<value>.*)$') {
         $optionName = $Matches.option
-        if ($optionMap.ContainsKey($optionName) -and -not [string]::IsNullOrWhiteSpace($optionMap[$optionName].ValueKind)) {
-            return @(Get-PwshValueCompletions -Spec $optionMap[$optionName] -CurrentWord $Matches.value -AttachedPrefix "$optionName$($Matches.separator)")
+        $attachedSpec = Resolve-PwshOptionSpec -Token $optionName
+        if ($attachedSpec -and -not [string]::IsNullOrWhiteSpace($attachedSpec.ValueKind)) {
+            return @(Get-PwshValueCompletions -Spec $attachedSpec -CurrentWord $Matches.value -AttachedPrefix "$optionName$($Matches.separator)")
         }
+    }
+
+    $parameterValueSpec = Get-PwshParameterValueContext -CommandAst $CommandAst -CursorPosition $CursorPosition
+    if ($parameterValueSpec) {
+        return @(Get-PwshValueCompletions -Spec $parameterValueSpec -CurrentWord $currentWord)
     }
 
     $pendingOption = Get-PwshPendingOption -TokensBeforeCurrent $tokensBeforeCurrent
@@ -303,7 +434,11 @@ function Complete-Pwsh {
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {
-        return @(Get-PwshOptionCompletions -CurrentWord $currentWord)
+        # -File is the default parameter, so the bare operand slot offers scripts alongside the options.
+        return @(
+            Get-PwshOptionCompletions -CurrentWord $currentWord
+            Get-PwshPathCompletions -InputPath $currentWord -Placeholder '' -Extension @('.ps1')
+        )
     }
 
     @(Get-PwshPathCompletions -InputPath $currentWord -Placeholder '<script.ps1>')

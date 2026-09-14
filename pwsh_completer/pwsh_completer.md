@@ -23,8 +23,11 @@ Covered parameters include:
 
 ## Completion Behavior
 
-- `-File`, `-ConfigurationFile`, `-SettingsFile`, and `-WorkingDirectory` complete filesystem paths.
-- `-Command` and `-CommandWithArgs` provide conservative PowerShell command-text suggestions.
+- Every parameter is also offered in its double-dash spelling (`pwsh --nop<Tab>` -> `--NoProfile`), which pwsh accepts.
+- `pwsh <Tab>` on an empty word offers the options plus the `.ps1` scripts and directories in the current directory, because `-File` is pwsh's default parameter.
+- `-File`, `-ConfigurationFile`, and `-SettingsFile` complete directories plus files with the matching extension (`.ps1`, `.pssc`, `.json`); `-WorkingDirectory` completes directories only.
+- `-Command` and `-CommandWithArgs` complete real command names from the current session (`[CompletionCompleters]::CompleteCommand`), plus `-` and `& { <script> }` as the documented stdin and script-block forms.
+- Values are completed in the separate (`-ExecutionPolicy By`), attached `=` (`-ExecutionPolicy=By`) and attached `:` (`-ExecutionPolicy:By`) forms; the `=` form keeps the `-Option=` prefix on every suggestion.
 - `-ExecutionPolicy` completes `Restricted`, `AllSigned`, `RemoteSigned`, `Unrestricted`, `Bypass`, `Undefined`, and `Default`.
 - `-InputFormat` and `-OutputFormat` complete `Text` and `XML`.
 - After `-File <path>`, remaining values are treated as script arguments and use placeholders rather than guessing script-specific parameters.
