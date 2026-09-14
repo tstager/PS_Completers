@@ -46,6 +46,11 @@ The file keeps its top level compatible with `CompleterActions`:
 - `--help` is not real help for `wpr.exe`; `-help`, `/?`, and `-?` are the relevant help forms.
 - Local profile discovery comes from `wpr -profiles` and is cached briefly.
 - Several value-bearing commands accept free-form strings, so the completer intentionally emits placeholders rather than speculative parsing.
+- File slots (`-stop`, `-merge`, `-profiles`, `-exportprofile`, `-addboot -export`) keep directories in the list so a path can be steered into a subfolder.
+- Command tokens match case-insensitively (`-Stop`, `-HeapTracingConfig`), and the cursor is rebased onto the command so completion works when `wpr` is not the first statement on the line.
+- `-start`/`-addboot` offer profile names only until the first profile operand is typed; after that every further profile must be reintroduced with `-start`/`-addboot`, so only the command's options are offered. `-shutdown` completes its optional `KSR` value.
+- `-snapshotconfig <option>` offers the required `-name`/`-pid` selector alongside `enable`/`disable`.
+- `-container` and `-instancename` complete as `<container-id>`/`<instance-name>` placeholders in every command that documents them (start, stop, cancel, merge, status, flush, capturestateondemand).
 
 ## Validation examples
 

@@ -282,11 +282,9 @@ function Get-WprPathCompletions {
     }
 
     foreach ($item in $items) {
+        # Directories are always kept so a file slot can be steered into a subfolder;
+        # only leaf items are filtered by Kind.
         if ($Kind -eq 'Directory' -and -not $item.PSIsContainer) {
-            continue
-        }
-
-        if ($Kind -eq 'File' -and $item.PSIsContainer) {
             continue
         }
 
@@ -541,6 +539,55 @@ function Get-WprOptionCompletions {
     }
 }
 
+function Get-WprCommonParameterValueCompletionList {
+    param(
+        [string]$PreviousToken,
+        [string]$CurrentWord
+    )
+
+    # -container and -instancename are the common parameters wpr documents for every
+    # session-bound command; their values are opaque, so they complete as placeholders.
+    switch ($PreviousToken) {
+        '-container' {
+            return @(Get-WprPlaceholderCompletions -CurrentWord $CurrentWord -Placeholder '<container-id>' -ToolTip 'Container ID.')
+        }
+        '-instancename' {
+            return @(Get-WprPlaceholderCompletions -CurrentWord $CurrentWord -Placeholder '<instance-name>' -ToolTip 'Unique WPR instance name.')
+        }
+    }
+
+    @()
+}
+
+function Test-WprProfileOperandPresent {
+    param(
+        [string[]]$TokensAfterCommand,
+        [string[]]$ValueOptions
+    )
+
+    # A token that is neither an option nor an option's value is a profile operand;
+    # once one is present, further profiles must be reintroduced with -start/-addboot.
+    $tokens = @($TokensAfterCommand)
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        $token = $tokens[$index]
+        if ($token.StartsWith('-')) {
+            if ($token -eq '-shutdown') {
+                if (($index + 1) -lt $tokens.Count -and $tokens[$index + 1] -eq 'KSR') {
+                    $index++
+                }
+            } elseif ($token -in $ValueOptions) {
+                $index++
+            }
+
+            continue
+        }
+
+        return $true
+    }
+
+    $false
+}
+
 function Get-WprEnumOrPlaceholderCompletions {
     param(
         [string]$CurrentWord,
@@ -565,7 +612,8 @@ function Complete-Wpr {
     )
 
     $commandLookup = Get-WprCommandLookup
-    $tokenState = Get-WprTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    # $cursorPosition is a whole-line offset; the command text is command-relative.
+    $tokenState = Get-WprTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-WprArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
@@ -593,7 +641,15 @@ function Complete-Wpr {
         return @()
     }
 
-    $commandIndex = [Array]::IndexOf($argumentsBeforeCurrent, $activeCommand.Token)
+    # The lookup above is case-insensitive, so the index scan must be too (-Stop, -HeapTracingConfig).
+    $commandIndex = -1
+    for ($index = 0; $index -lt $argumentsBeforeCurrent.Count; $index++) {
+        if ([string]::Equals($argumentsBeforeCurrent[$index], $activeCommand.Token, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $commandIndex = $index
+            break
+        }
+    }
+
     $tokensAfterCommand = @(
         if ($commandIndex -ge 0 -and $commandIndex -lt ($argumentsBeforeCurrent.Count - 1)) {
             $argumentsBeforeCurrent[($commandIndex + 1)..($argumentsBeforeCurrent.Count - 1)]
@@ -609,6 +665,7 @@ function Complete-Wpr {
             return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder ' ' -ToolTip 'No further arguments are valid after -help <topic>.')
         }
         'Start' {
+            $valueOptions = @('-start', '-recordtempto', '-container', '-instancename')
             if ($tokensAfterCommand.Count -gt 0) {
                 $previousToken = $tokensAfterCommand[-1]
                 if ($previousToken -in @('-start')) {
@@ -617,21 +674,25 @@ function Complete-Wpr {
                 if ($previousToken -eq '-recordtempto') {
                     return @(Get-WprPathCompletions -CurrentWord $currentWord -Kind 'Directory' -ToolTip 'Temporary recording folder.' -Placeholder '<temp-folder>')
                 }
-                if ($previousToken -eq '-container') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<container-id>' -ToolTip 'Container ID.')
+                if ($previousToken -eq '-shutdown' -and -not $currentWord.StartsWith('-')) {
+                    return @(Get-WprEnumCompletions -CurrentWord $currentWord -Values @('KSR') -ToolTip 'Trace for Kernel Soft Reboot (optional).')
                 }
-                if ($previousToken -eq '-instancename') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<instance-name>' -ToolTip 'Unique WPR instance name.')
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $previousToken -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
                 }
             }
 
-            if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
+            # After the first profile operand every further profile needs -start, so only options remain.
+            if ((-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) -or
+                (Test-WprProfileOperandPresent -TokensAfterCommand $tokensAfterCommand -ValueOptions $valueOptions)) {
                 return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
             }
 
             return @(Get-WprProfileSpecCompletions -CurrentWord $currentWord)
         }
         'AddBoot' {
+            $valueOptions = @('-addboot', '-recordtempto', '-export')
             if ($tokensAfterCommand.Count -gt 0) {
                 $previousToken = $tokensAfterCommand[-1]
                 if ($previousToken -eq '-addboot') {
@@ -645,13 +706,21 @@ function Complete-Wpr {
                 }
             }
 
-            if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
+            if ((-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) -or
+                (Test-WprProfileOperandPresent -TokensAfterCommand $tokensAfterCommand -ValueOptions $valueOptions)) {
                 return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
             }
 
             return @(Get-WprProfileSpecCompletions -CurrentWord $currentWord)
         }
         'Stop' {
+            if ($tokensAfterCommand.Count -gt 0) {
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
+                }
+            }
+
             if ($tokensAfterCommand.Count -eq 0) {
                 return @(Get-WprPathCompletions -CurrentWord $currentWord -Kind 'File' -ToolTip 'Recording output file.' -Placeholder '<recording.etl>')
             }
@@ -671,18 +740,22 @@ function Complete-Wpr {
         }
         'Cancel' {
             if ($tokensAfterCommand.Count -gt 0) {
-                $previousToken = $tokensAfterCommand[-1]
-                if ($previousToken -eq '-container') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<container-id>' -ToolTip 'Container ID.')
-                }
-                if ($previousToken -eq '-instancename') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<instance-name>' -ToolTip 'Unique WPR instance name.')
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
                 }
             }
 
             return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
         }
         'Merge' {
+            if ($tokensAfterCommand.Count -gt 0) {
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
+                }
+            }
+
             if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
                 return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
             }
@@ -690,6 +763,13 @@ function Complete-Wpr {
             return @(Get-WprPathCompletions -CurrentWord $currentWord -Kind 'File' -ToolTip 'Trace file path.' -Placeholder '<trace.etl>')
         }
         'Status' {
+            if ($tokensAfterCommand.Count -gt 0) {
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
+                }
+            }
+
             if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
                 return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
             }
@@ -736,20 +816,20 @@ function Complete-Wpr {
         }
         'Flush' {
             if ($tokensAfterCommand.Count -gt 0) {
-                $previousToken = $tokensAfterCommand[-1]
-                if ($previousToken -eq '-container') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<container-id>' -ToolTip 'Container ID.')
-                }
-                if ($previousToken -eq '-instancename') {
-                    return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<instance-name>' -ToolTip 'Unique WPR instance name.')
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
                 }
             }
 
             return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
         }
         'CaptureStateOnDemand' {
-            if ($tokensAfterCommand.Count -gt 0 -and $tokensAfterCommand[-1] -eq '-instancename') {
-                return @(Get-WprPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<instance-name>' -ToolTip 'Unique WPR instance name.')
+            if ($tokensAfterCommand.Count -gt 0) {
+                $commonResults = @(Get-WprCommonParameterValueCompletionList -PreviousToken $tokensAfterCommand[-1] -CurrentWord $currentWord)
+                if ($commonResults.Count -gt 0) {
+                    return $commonResults
+                }
             }
 
             return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
@@ -776,6 +856,18 @@ function Complete-Wpr {
 
             if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
                 return @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)
+            }
+
+            # Right after the snapshot option the required {-name | -pid} selector is still open.
+            if ($tokensAfterCommand.Count -eq 1) {
+                $results = New-Object System.Collections.Generic.List[object]
+                foreach ($value in @(Get-WprOptionCompletions -CurrentWord $currentWord -Options $activeCommand.Options)) {
+                    [void]$results.Add($value)
+                }
+                foreach ($value in @(Get-WprEnumCompletions -CurrentWord $currentWord -Values (Get-WprEnableDisableValues) -ToolTip 'Enable or disable snapshot capture.')) {
+                    [void]$results.Add($value)
+                }
+                return @(Get-WprUniqueResults -Results $results.ToArray())
             }
 
             return @(Get-WprEnumOrPlaceholderCompletions -CurrentWord $currentWord -EnumValues (Get-WprEnableDisableValues) -Placeholder '<mode>' -ToolTip 'Enable or disable snapshot capture.')
