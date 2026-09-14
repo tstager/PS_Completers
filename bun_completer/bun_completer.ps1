@@ -177,12 +177,15 @@ function New-BunPathData {
         [string[]]$OptionsExpectingValue = @()
     )
 
+    # Each list stays wrapped in @(): a bare command result collapses on assignment, so an empty
+    # list would read back as $null and a single-element list as a bare string that '+=' then
+    # concatenates instead of appending.
     @{
-        Commands              = Get-BunUniqueStrings -Items $Commands
+        Commands              = @(Get-BunUniqueStrings -Items $Commands)
         CommandDescriptions   = $CommandDescriptions
-        Options               = Get-BunUniqueStrings -Items $Options
+        Options               = @(Get-BunUniqueStrings -Items $Options)
         ValuesByOption        = $ValuesByOption
-        OptionsExpectingValue = Get-BunUniqueStrings -Items $OptionsExpectingValue
+        OptionsExpectingValue = @(Get-BunUniqueStrings -Items $OptionsExpectingValue)
     }
 }
 
@@ -313,12 +316,40 @@ function Add-BunPossibleValues {
             $ValueMap[$token] = @()
         }
 
-        $ValueMap[$token] = Get-BunUniqueStrings -Items ($ValueMap[$token] + $uniqueValues)
+        $ValueMap[$token] = @(Get-BunUniqueStrings -Items ($ValueMap[$token] + $uniqueValues))
     }
 }
 
+function Get-BunHelpTreeCommandPath {
+    param([string]$Text)
+
+    $head = @($Text -split '\s{2,}')[0]
+    $words = New-Object System.Collections.Generic.List[string]
+    foreach ($word in @($head -split '\s+' | Where-Object { $_ })) {
+        # '...' marks the word before it as a repeated argument, not a subcommand.
+        if ($word -eq '...') {
+            if ($words.Count -gt 0) {
+                $words.RemoveAt($words.Count - 1)
+            }
+
+            break
+        }
+
+        if ($word -notmatch '^[a-z][a-z0-9-]*$') {
+            break
+        }
+
+        [void]$words.Add($word)
+    }
+
+    ($words -join ' ')
+}
+
 function Get-BunParsedHelpData {
-    param([string[]]$HelpLines)
+    param(
+        [string[]]$HelpLines,
+        [string[]]$Path = @()
+    )
 
     $commands = New-Object System.Collections.Generic.List[string]
     $commandDescriptions = @{}
@@ -326,6 +357,8 @@ function Get-BunParsedHelpData {
     $valuesByOption = @{}
     $optionsExpectingValue = New-Object System.Collections.Generic.List[string]
     $section = ''
+    $pathKey = (@($Path) -join ' ').ToLowerInvariant()
+    $treeCommandPath = ''
 
     foreach ($line in @($HelpLines)) {
         if ($line -match '^\s*Commands:\s*$') {
@@ -345,7 +378,49 @@ function Get-BunParsedHelpData {
 
         if ($section -eq 'commands') {
             $trimmedLine = $line.Trim()
-            if ($trimmedLine.StartsWith('bun ', [System.StringComparison]::OrdinalIgnoreCase)) {
+
+            # 'bun pm --help' prints a tree: each 'bun pm <sub>  <description>' row is followed by
+            # that subcommand's own flags as box-drawing rows.
+            if ($trimmedLine -match '^bun\s+(.+)$') {
+                $treeRow = $matches[1]
+                $treeCommandPath = Get-BunHelpTreeCommandPath -Text $treeRow
+                if ($pathKey -and $treeCommandPath.StartsWith("$pathKey ", [System.StringComparison]::Ordinal)) {
+                    $childName = @($treeCommandPath.Substring($pathKey.Length + 1) -split ' ')[0]
+                    if (-not [string]::IsNullOrWhiteSpace($childName)) {
+                        [void]$commands.Add($childName)
+                        if ($treeRow -match '\s{2,}(.+)$') {
+                            $commandDescriptions[$childName] = $matches[1].Trim()
+                        }
+                    }
+                }
+
+                continue
+            }
+
+            # U+251C and U+2514 are the box-drawing glyphs bun hangs a subcommand's flags off; they
+            # are written as escapes so this file stays ASCII.
+            if ($trimmedLine -match '^[\u251C\u2514]\s*(.+)$') {
+                if ($treeCommandPath -ne $pathKey) {
+                    continue
+                }
+
+                $treeOptionLine = $matches[1].Trim()
+                $treeOptionTokens = @(Get-BunOptionTokensFromLine -Line $treeOptionLine)
+                if ($treeOptionTokens.Count -eq 0) {
+                    continue
+                }
+
+                foreach ($token in $treeOptionTokens) {
+                    [void]$options.Add($token)
+                }
+
+                if (Test-BunOptionLineExpectsValue -Line $treeOptionLine -OptionTokens $treeOptionTokens) {
+                    foreach ($token in $treeOptionTokens) {
+                        [void]$optionsExpectingValue.Add($token)
+                    }
+                }
+
+                Add-BunPossibleValues -ValueMap $valuesByOption -OptionTokens $treeOptionTokens -RawLine $treeOptionLine
                 continue
             }
 
@@ -423,7 +498,7 @@ function Get-BunHelpData {
     }
 
     if (@($helpLines).Count -gt 0) {
-        $parsedData = Get-BunParsedHelpData -HelpLines $helpLines
+        $parsedData = Get-BunParsedHelpData -HelpLines $helpLines -Path $Path
 
         foreach ($command in @($parsedData.Commands)) {
             if (-not [string]::IsNullOrWhiteSpace($command)) {
@@ -443,13 +518,13 @@ function Get-BunHelpData {
                 $helpData.ValuesByOption[$entry.Key] = @()
             }
 
-            $helpData.ValuesByOption[$entry.Key] = Get-BunUniqueStrings -Items ($helpData.ValuesByOption[$entry.Key] + $entry.Value)
+            $helpData.ValuesByOption[$entry.Key] = @(Get-BunUniqueStrings -Items ($helpData.ValuesByOption[$entry.Key] + $entry.Value))
         }
     }
 
-    $helpData.Commands = Get-BunUniqueStrings -Items $helpData.Commands
-    $helpData.Options = Get-BunUniqueStrings -Items $helpData.Options
-    $helpData.OptionsExpectingValue = Get-BunUniqueStrings -Items $helpData.OptionsExpectingValue
+    $helpData.Commands = @(Get-BunUniqueStrings -Items $helpData.Commands)
+    $helpData.Options = @(Get-BunUniqueStrings -Items $helpData.Options)
+    $helpData.OptionsExpectingValue = @(Get-BunUniqueStrings -Items $helpData.OptionsExpectingValue)
 
     $script:BunCompletionCache.HelpDataByPath[$cacheKey] = $helpData
     $helpData
@@ -1132,15 +1207,17 @@ function Get-BunOptionExpectsValue {
         return $false
     }
 
+    # An empty option list collapses to AutomationNull on its way into the cache, so @() around it
+    # yields a single $null element; drop that before calling a method on it.
     $staticOptions = Get-BunStaticOptionsExpectingValue -Path $Path
-    foreach ($candidate in @($staticOptions)) {
+    foreach ($candidate in @($staticOptions | Where-Object { $_ })) {
         if ($candidate.Equals($Option, [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
     }
 
     $helpData = Get-BunHelpData -Path $Path
-    foreach ($candidate in @($helpData.OptionsExpectingValue)) {
+    foreach ($candidate in @($helpData.OptionsExpectingValue | Where-Object { $_ })) {
         if ($candidate.Equals($Option, [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
@@ -1513,7 +1590,8 @@ function Get-BunPositionalSuggestions {
     param(
         [string[]]$Path,
         [string[]]$Positionals,
-        [bool]$AfterDoubleDash
+        [bool]$AfterDoubleDash,
+        [string]$WordToComplete = ''
     )
 
     if ($AfterDoubleDash) {
@@ -1535,7 +1613,7 @@ function Get-BunPositionalSuggestions {
                 }
             }
 
-            foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions $sourceExtensions)) {
+            foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions $sourceExtensions)) {
                 [void]$items.Add($item)
             }
         }
@@ -1555,24 +1633,24 @@ function Get-BunPositionalSuggestions {
                     }
                 }
 
-                foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions $sourceExtensions)) {
+                foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions $sourceExtensions)) {
                     [void]$items.Add($item)
                 }
             }
         }
         'build' {
-            foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions $sourceExtensions)) {
+            foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions $sourceExtensions)) {
                 [void]$items.Add($item)
             }
         }
         'test' {
-            foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions $sourceExtensions)) {
+            foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions $sourceExtensions)) {
                 [void]$items.Add($item)
             }
         }
         'init' {
             if ($positionIndex -eq 0) {
-                foreach ($item in @(Get-BunPathSuggestions -InputText '' -DirectoryOnly)) {
+                foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -DirectoryOnly)) {
                     [void]$items.Add($item)
                 }
             }
@@ -1586,11 +1664,11 @@ function Get-BunPositionalSuggestions {
                     }
                 }
 
-                foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions @('.jsx', '.tsx'))) {
+                foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions @('.jsx', '.tsx'))) {
                     [void]$items.Add($item)
                 }
             } elseif ($positionIndex -eq 1) {
-                foreach ($item in @(Get-BunPathSuggestions -InputText '' -DirectoryOnly)) {
+                foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -DirectoryOnly)) {
                     [void]$items.Add($item)
                 }
             }
@@ -1674,7 +1752,7 @@ function Get-BunPositionalSuggestions {
         }
         'publish' {
             if ($positionIndex -eq 0) {
-                foreach ($item in @(Get-BunPathSuggestions -InputText '' -PreferredExtensions $tarballExtensions)) {
+                foreach ($item in @(Get-BunPathSuggestions -InputText $WordToComplete -PreferredExtensions $tarballExtensions)) {
                     [void]$items.Add($item)
                 }
             }
@@ -1765,7 +1843,8 @@ function ConvertTo-BunCompletionResults {
             continue
         }
 
-        if (-not [string]::IsNullOrEmpty($WordToComplete) -and $item.CompletionText -notlike "$WordToComplete*") {
+        if (-not [string]::IsNullOrEmpty($WordToComplete) -and
+            $item.CompletionText -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             continue
         }
 
@@ -1832,7 +1911,7 @@ function Complete-Bun {
             }
         }
 
-        foreach ($item in @(Get-BunPositionalSuggestions -Path $path -Positionals $positionals -AfterDoubleDash $context.AfterDoubleDash)) {
+        foreach ($item in @(Get-BunPositionalSuggestions -Path $path -Positionals $positionals -AfterDoubleDash $context.AfterDoubleDash -WordToComplete $effectiveWordToComplete)) {
             [void]$items.Add($item)
         }
     }

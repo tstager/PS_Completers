@@ -148,6 +148,8 @@ It also seeds important nested paths:
 - `pm cache` → `rm`
 - `pm pkg` → `get`, `set`, `delete`, `fix`
 
+`bun pm --help` prints its subcommands as a tree, with each subcommand's flags hanging off it as box-drawing rows. The help parser reads that shape, so the `pm` subcommand list (including `licenses`) and the flags of `pm pack`, `pm ls`, `pm licenses`, `pm bin` and `pm trust` come from the live help rather than the static seed.
+
 ### Help-driven option completion
 
 Option names are primarily discovered from the local Bun help text for the active command path.
@@ -210,6 +212,8 @@ The script adds positional suggestions for several commands:
 - `bun init <TAB>` suggests directories
 - `bun create <TAB>` suggests local `.bun-create` template names and `.jsx` / `.tsx` entries for the first positional argument, then directories for the second positional argument
 - `bun publish <TAB>` suggests `.tgz` / `.tar.gz` tarball paths
+
+Each of these passes the word being typed into path discovery, so a partially typed path such as `bun run src\<TAB>` lists what is inside that directory instead of echoing the directory back.
 
 For path-valued options, the completer returns filesystem suggestions and prefers relevant extensions for some arguments, for example:
 
