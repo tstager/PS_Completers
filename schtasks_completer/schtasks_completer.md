@@ -16,54 +16,31 @@ Register-ArgumentCompleter -Native -CommandName 'schtasks', 'schtasks.exe' -Scri
 
     Initialize-SchtasksCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) {
         Get-SchtasksCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
         $wordToComplete
     }
-    $hasTrailingSpace = ($line -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
 
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
-    }
+    # Only elements that end before the cursor are consumed, so completing inside an
+    # earlier token sees the same context as typing it fresh.
+    $tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     $activeSubcommand = Get-SchtasksActiveSubcommand -Tokens $tokensBeforeCurrent -KnownSubcommands $script:SchtasksCompletionCatalog.Subcommands
     $expectedValueOption = Get-SchtasksExpectedValueOption -TokensBeforeCurrent $tokensBeforeCurrent -KnownSubcommands $script:SchtasksCompletionCatalog.Subcommands
 
     if ($expectedValueOption) {
-        switch ($expectedValueOption.ToLowerInvariant()) {
-            '/tn' {
-                if ($activeSubcommand -and -not $activeSubcommand.Equals('/Create', [System.StringComparison]::OrdinalIgnoreCase)) {
-                    return Get-SchtasksTaskNameCompletions -WordToComplete $currentWord |
-                        ForEach-Object {
-                            New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                        }
-                }
-            }
-        }
-
-        if (Test-SchtasksPathLikeOption -Option $expectedValueOption) {
-            $allowedExtensions = Get-SchtasksAllowedExtensionsForOption -Option $expectedValueOption
-            return Get-SchtasksPathCompletions -InputPath $currentWord -AllowedExtensions $allowedExtensions |
-                ForEach-Object {
-                    New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
-        }
-
-        $optionKey = $expectedValueOption.ToLowerInvariant()
-        if ($script:SchtasksCompletionCatalog.ValueHintsByOption.ContainsKey($optionKey)) {
-            return $script:SchtasksCompletionCatalog.ValueHintsByOption[$optionKey] |
-                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
-                ForEach-Object {
-                    New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
+        $slot = Get-SchtasksValueSlot -Subcommand $activeSubcommand -Option $expectedValueOption
+        $yieldsToSwitch = $slot -and $slot.ContainsKey('Optional') -and $slot.Optional -and $currentWord.StartsWith('/')
+        if ($slot -and -not $yieldsToSwitch) {
+            # A value slot is terminal: never fall through to the option-name list.
+            return @(Get-SchtasksValueSlotCompletionList -Slot $slot -Option $expectedValueOption -Subcommand $activeSubcommand -CurrentWord $currentWord -TokensBeforeCurrent $tokensBeforeCurrent)
         }
     }
 
@@ -135,12 +112,17 @@ After a subcommand is present, it offers only the option tokens collected for th
 
 When the previous token is an option that expects a value, the script switches to value completion instead of more option names.
 
-The script has dedicated handling for:
+A per-subcommand value-slot table (`Get-SchtasksValueOptionTable`) decides how each value-bearing option completes, and a value slot is terminal: option names are never offered where a value is required. The table covers:
 
-- `/TN` task names
+- `/TN` task names (a `<path\taskname>` placeholder under `/Create`)
 - `/TR` path completion
-- `/XML` path completion restricted to `.xml` files
-- several static enumerated value sets
+- `/XML` path completion restricted to `.xml` files under `/Create`; the `ONE` hint under `/Query`, where the help documents `[xml_type]`
+- `/I` as `<idle-minutes>` under `/Create` and as a bare switch under `/Run`
+- `/MO` modifiers parsed from the `Modifiers:` block of the `/Create` help and selected by the `/SC` value already on the line (`<1-1439>` for MINUTE, `FIRST`..`LASTDAY` for MONTHLY, the union when `/SC` has not been typed, `<no-modifier>` for ONCE/ONSTART/ONLOGON/ONIDLE)
+- the static enumerated value sets below
+- placeholders for the free-form slots (`<system>`, `<domain\user>`, `<password>`, `<HH:mm>`, `<mm/dd/yyyy>`, `<minutes>`, `<mmmm:ss>`, `<channel-name>`)
+
+`/P`, `/RP` and `/Query /XML` take optional values, so a `/`-prefixed word in their slot completes the next option instead.
 
 ### Quoting behavior
 
@@ -174,18 +156,20 @@ schtasks.exe /Query /FO CSV
 
 It extracts the first CSV column as task names, sorts them uniquely, and caches them for 60 seconds.
 
-Task-name suggestions are only returned for `/TN` when the active subcommand is **not** `/Create`.
+Task-name suggestions are only returned for `/TN` when the active subcommand is **not** `/Create`. A typed prefix matches with or without the leading `\` (`Mic` finds `\Microsoft\...`).
 
 ### Path completion
 
 The completer uses filesystem completion for:
 
 - `/TR` with general file or directory suggestions
-- `/XML` with suggestions limited to `.xml` files and directories
+- `/XML` with suggestions limited to `.xml` files and directories (under `/Create`)
+
+Relative input stays relative, a trailing separator lists that directory, and an empty word lists the current directory.
 
 ### Token parsing behavior
 
-The script derives the current token from the command line text so it can continue suggesting values correctly when the cursor is on a partially typed token or after trailing whitespace.
+The script derives the current token from the command line text so it can continue suggesting values correctly when the cursor is on a partially typed token or after trailing whitespace. Only command elements that end before the cursor count as already typed, so completing inside an earlier token (for example inside `/Query`) sees the same context as typing it fresh.
 
 ## Dependencies or external command expectations
 
@@ -210,7 +194,7 @@ schtasks /Create /XML <TAB>
 
 ## Limitations / notes
 
-- The script only provides explicit value suggestions for the options listed in its static hint table.
+- Free-form value slots complete as placeholders; only the options in the static hint table and the parsed `/MO` modifiers get real value lists.
 - `/TN` completion is intentionally skipped for `/Create`.
 - Path completion is only specialized for `/TR` and `/XML`.
 - The available subcommands and option tokens depend on the help text exposed by the installed `schtasks.exe`.
