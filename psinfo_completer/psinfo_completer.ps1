@@ -16,10 +16,17 @@ function Initialize-PsInfoCompletionCatalog {
             [pscustomobject]@{ Token = '-c'; Description = 'Print in CSV format.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-t'; Description = 'Delimiter used with -c. Use "\t" for tab.'; TakesValue = $true; ValueKind = 'Delimiter' }
             [pscustomobject]@{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.'; TakesValue = $false }
+            [pscustomobject]@{ Token = '-accepteula'; Description = 'Suppress the Sysinternals license dialog.'; TakesValue = $false }
             [pscustomobject]@{ Token = '-?'; Description = 'Display PsInfo help.'; TakesValue = $false; Terminal = $true }
             [pscustomobject]@{ Token = '/?'; Description = 'Display PsInfo help.'; TakesValue = $false; Terminal = $true }
         )
-        FilterHints = @('host', 'uptime', 'kernel', 'processor', 'memory', 'service pack', 'build', 'install date')
+        # PsInfo filters by field-label prefix; these are the labels PsInfo v1.79 prints.
+        FilterHints = @(
+            'uptime', 'kernel version', 'product type', 'product version', 'service pack', 'kernel build number',
+            'registered organization', 'registered owner', 'ie version', 'system root',
+            'processors', 'processor speed', 'processor type', 'physical memory', 'video driver'
+        )
+        # ',' ';' and '|' are PowerShell syntax, so every delimiter except \t must reach PsInfo quoted.
         DelimiterHints = @(',', ';', '|', ':', '\t')
     }
 }
@@ -63,17 +70,15 @@ function Get-PsInfoArgumentState {
     $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
         ''
     } else {
-        Get-PsInfoCurrentToken -Line $CommandAst.Extent.Text -CursorPosition $CursorPosition -Fallback $WordToComplete
+        Get-PsInfoCurrentToken -Line $CommandAst.Extent.Text -CursorPosition ($CursorPosition - $CommandAst.Extent.StartOffset) -Fallback $WordToComplete
     }
-    $tokens = @($CommandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-    $tokensBeforeCurrent = @($tokens)
-    if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
-        if ($tokensBeforeCurrent.Count -gt 1) {
-            $tokensBeforeCurrent = @($tokensBeforeCurrent[0..($tokensBeforeCurrent.Count - 2)])
-        } else {
-            $tokensBeforeCurrent = @()
-        }
-    }
+    # Only elements that end before the cursor are consumed; the token under the cursor and anything after it are not.
+    $tokensBeforeCurrent = @(
+        $CommandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $CursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     [pscustomobject]@{
         CurrentWord         = $currentWord
@@ -164,6 +169,9 @@ function Complete-PsInfo {
 
     switch ($valueContext) {
         'User' {
+            if (-not [string]::IsNullOrWhiteSpace($currentWord)) {
+                return @(New-PsInfoCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'Remote user name.')
+            }
             return @(
                 New-PsInfoCompletionResult -CompletionText '<username>' -ResultType 'ParameterValue' -ToolTip 'Remote user name.'
                 New-PsInfoCompletionResult -CompletionText '<domain\user>' -ResultType 'ParameterValue' -ToolTip 'Remote user name in Domain\User syntax.'
@@ -173,7 +181,10 @@ function Complete-PsInfo {
             return @(New-PsInfoCompletionResult -CompletionText $(if ([string]::IsNullOrWhiteSpace($currentWord)) { '<password>' } else { $currentWord }) -ResultType 'ParameterValue' -ToolTip 'Remote password value.')
         }
         'Delimiter' {
-            return @($script:PsInfoCompletionCatalog.DelimiterHints | ForEach-Object { New-PsInfoCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Delimiter used with -c.' })
+            return @($script:PsInfoCompletionCatalog.DelimiterHints | ForEach-Object {
+                $text = if ($_ -eq '\t') { $_ } else { ConvertTo-PsInfoQuotedValue -Value $_ -AlwaysQuote $true }
+                New-PsInfoCompletionResult -CompletionText $text -ListItemText $_ -ResultType 'ParameterValue' -ToolTip 'Delimiter used with -c.'
+            })
         }
     }
 
@@ -205,7 +216,8 @@ function Complete-PsInfo {
     if (-not $filter) {
         foreach ($hint in $script:PsInfoCompletionCatalog.FilterHints) {
             if ([string]::IsNullOrWhiteSpace($currentWord) -or $hint.StartsWith((Remove-PsInfoOuterQuotes -Value $currentWord), [System.StringComparison]::OrdinalIgnoreCase)) {
-                [void]$results.Add((New-PsInfoCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip 'Sample PsInfo filter field hint.'))
+                $alwaysQuote = -not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('"')
+                [void]$results.Add((New-PsInfoCompletionResult -CompletionText (ConvertTo-PsInfoQuotedValue -Value $hint -AlwaysQuote $alwaysQuote) -ListItemText $hint -ResultType 'ParameterValue' -ToolTip 'PsInfo field label prefix; only the matching field is printed.'))
             }
         }
     }
