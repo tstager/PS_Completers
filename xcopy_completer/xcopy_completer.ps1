@@ -117,6 +117,12 @@ function Get-XcopyStaticOptionMetadata {
             CompletionText = '/-SPARSE'
             Description    = 'Disable retaining the sparse state of files during copy.'
         }
+        '/?' = @{
+            Key            = '/?'
+            Display        = '/?'
+            CompletionText = '/?'
+            Description    = 'Displays this help message.'
+        }
     }
 }
 
@@ -166,7 +172,9 @@ function ConvertFrom-XcopyHelpToken {
 function Get-XcopyOptionLineMatch {
     param([string]$Line)
 
-    [regex]::Match($Line, '^\s*(?<token>/\S+)\s{2,}(?<description>.+?)\s*$')
+    # Either '/TOKEN   description' or a token alone on its line (help prints
+    # '/EXCLUDE:file1[+file2][+file3]...' that way, with the description on the next lines).
+    [regex]::Match($Line, '^\s*(?<token>/\S+)(?:\s{2,}(?<description>.+?))?\s*$')
 }
 
 function Initialize-XcopyCompletionCatalog {
@@ -212,8 +220,13 @@ function Initialize-XcopyCompletionCatalog {
         if ($currentKeys.Count -gt 0 -and $line -match '^\s{2,}(?<continuation>\S.*)$') {
             $continuation = $matches['continuation'].Trim()
             foreach ($key in $currentKeys) {
-                if (-not [string]::IsNullOrWhiteSpace($continuation) -and
-                    -not $catalog[$key]['Description'].EndsWith($continuation, [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ([string]::IsNullOrWhiteSpace($continuation)) {
+                    continue
+                }
+
+                if ([string]::IsNullOrEmpty($catalog[$key]['Description'])) {
+                    $catalog[$key]['Description'] = $continuation
+                } elseif (-not $catalog[$key]['Description'].EndsWith($continuation, [System.StringComparison]::OrdinalIgnoreCase)) {
                     $catalog[$key]['Description'] += ' ' + $continuation
                 }
             }
@@ -333,7 +346,7 @@ function Get-XcopyUniqueCompletions {
     param([System.Management.Automation.CompletionResult[]]$Results)
 
     $seen = @{}
-    $unique = @()
+    $unique = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
 
     foreach ($result in $Results) {
         if ($null -eq $result) {
@@ -345,10 +358,10 @@ function Get-XcopyUniqueCompletions {
         }
 
         $seen[$result.CompletionText] = $true
-        $unique += $result
+        $unique.Add($result)
     }
 
-    $unique
+    @($unique.ToArray())
 }
 
 function Get-XcopyPathCompletions {
@@ -377,14 +390,19 @@ function Get-XcopyPathCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
-    if ($Kind -eq 'Directory') {
-        $items = $items | Where-Object { $_.PSIsContainer }
-    } elseif ($Kind -eq 'File') {
-        $items = $items | Where-Object { -not $_.PSIsContainer }
-    }
+    # Filter during enumeration and cap the result: a completion menu past a few hundred
+    # entries is unusable, and %TEMP%-sized directories (30k entries) must not take seconds.
+    $maxResults = 500
+    $items = @(
+        Get-ChildItem -LiteralPath $parent -Filter ($leaf + '*') -ErrorAction Ignore |
+            Where-Object {
+                if ($Kind -eq 'Directory') { $_.PSIsContainer }
+                elseif ($Kind -eq 'File') { -not $_.PSIsContainer }
+                else { $true }
+            } |
+            Select-Object -First $maxResults
+    )
 
     foreach ($item in $items | Sort-Object -Property Name) {
         if ($inputIsRooted) {
@@ -476,7 +494,9 @@ function Get-XcopyInlineValueCompletions {
             return @(Get-XcopyPrefixedSuggestions -Prefix $prefix -CurrentValue $currentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
         }
         'PathChain' {
-            return @(Get-XcopyChainedPathCompletions -Prefix $prefix -CurrentValue $currentValue -Kind 'File')
+            # The value is a path to an exclude-list file; directories are offered (with a
+            # trailing backslash) so the user can navigate to a file outside the current directory.
+            return @(Get-XcopyChainedPathCompletions -Prefix $prefix -CurrentValue $currentValue -Kind 'Any')
         }
     }
 
@@ -536,14 +556,18 @@ function Complete-Xcopy {
     $context = Get-XcopyCompletionContext -Arguments $arguments
 
     if ($context.Positionals.Count -lt 2) {
-        $results = @()
-        $results += @(Get-XcopyPathCompletions -InputPath $currentWord -Kind 'Any')
-
-        if ([string]::IsNullOrWhiteSpace($currentWord)) {
-            $results += @(Get-XcopyOptionCompletions -WordToComplete $currentWord)
+        $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
+        foreach ($result in @(Get-XcopyPathCompletions -InputPath $currentWord -Kind 'Any')) {
+            $results.Add($result)
         }
 
-        return @(Get-XcopyUniqueCompletions -Results $results)
+        if ([string]::IsNullOrWhiteSpace($currentWord)) {
+            foreach ($result in @(Get-XcopyOptionCompletions -WordToComplete $currentWord)) {
+                $results.Add($result)
+            }
+        }
+
+        return @(Get-XcopyUniqueCompletions -Results $results.ToArray())
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {

@@ -36,9 +36,9 @@ Load it into the current session with:
 On first use, the script creates `$script:XcopyCompletionCatalog` and:
 
 - runs `xcopy.exe /?`
-- parses option tokens and their descriptions from the local help text
+- parses option tokens and their descriptions from the local help text, including a token printed alone on its line (`/EXCLUDE:file1[+file2][+file3]...`) whose description starts on the following lines
 - expands the documented `/[-]SPARSE` syntax into separate `/SPARSE` and `/-SPARSE` entries
-- merges help-derived options with small static metadata for `/D` and `/EXCLUDE`
+- merges help-derived options with small static metadata for `/D`, `/EXCLUDE` and `/?` (help never lists `/?` as an option line)
 
 The resulting cache is reused on later completions in the same session.
 
@@ -51,7 +51,7 @@ The completer treats the first two non-switch arguments as:
 
 While fewer than two positional arguments have been supplied:
 
-- non-switch completion returns filesystem path suggestions
+- non-switch completion returns filesystem path suggestions, filtered during enumeration on the typed leaf and capped at 500 entries so very large directories such as `%TEMP%` stay responsive
 - a blank token also includes option suggestions, because `xcopy` switches remain valid anywhere on the command line
 
 After both positional arguments are present, a blank token returns option suggestions only.
@@ -63,7 +63,7 @@ If the current token starts with `/`, the completer first checks for inline-valu
 Supported inline-value completions:
 
 - `/D:` suggests a few reasonable `m-d-yyyy` and `MM-dd-yyyy` samples
-- `/EXCLUDE:` completes file paths
+- `/EXCLUDE:` completes paths to exclude-list files; directories are offered with a trailing `\` so the file can live outside the current directory
 - `/EXCLUDE:file1+...` continues completing the segment after the last `+`
 
 Regular switch-name completion comes from the parsed local help surface, so entries such as `/A`, `/M`, `/COMPRESS`, `/NOCLONE`, `/SPARSE`, and `/-SPARSE` track the installed `xcopy.exe`.
