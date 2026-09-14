@@ -47,6 +47,7 @@ The script completes the validated switches:
 - `-n`
 - `-o`
 - `-p`
+- `-q`
 - `-r`
 - `-s`
 - `-t`
@@ -62,13 +63,18 @@ The script completes the validated switches:
 - `-w`
 - `-nobanner`
 - `-?`
-- `/?`
+
+Sysinternals accepts `/x` for every `-x` switch, so a word starting with `/`
+completes the whole catalog in its slash spelling (`/a`, `/nobanner`, `/?`, ...)
+and a `/x` already on the line is normalised to `-x` for mode detection. The
+slash forms are offered only once the typed word starts with `/`.
 
 ### Value-aware slots
 
 The completer handles the main separate-value switches:
 
-- `-f` -> catalog-file path completion
+- `-f` -> catalog-file path completion, restricted to `.cat` / `.cab` files, with
+  the two `%SystemRoot%\System32\CatRoot` store folders seeded in
 - `-p` -> policy GUID or policy-file hints
 - `-w` -> output-file path completion
 
@@ -77,9 +83,14 @@ The completer handles the main separate-value switches:
 The trailing positional slot changes by mode:
 
 - default mode -> file or directory to inspect
-- `-d` -> catalog file or directory
-- `-o` -> previously captured Sigcheck CSV file
+- `-d` -> catalog file or directory, restricted to `.cat` / `.cab` files
+- `-o` -> previously captured Sigcheck CSV file, restricted to `.csv`
 - `-t*` -> certificate store name or `*`
+
+Directories are always kept so the tree stays navigable; only the file kinds the
+option accepts are listed. Store names that contain spaces (`AAD Token Issuer`,
+`Local NonRemovable Certificates`) are emitted quoted, so accepting one produces
+a single operand.
 
 For certificate-store modes, the completer reads store names from:
 
@@ -116,3 +127,4 @@ sigcheck .\<TAB>
 - The completer does not perform any VirusTotal queries.
 - Policy completion uses a placeholder/sample GUID plus local path hints rather than live policy discovery.
 - Store-name hints are local-only.
+- The cursor is rebased on the command's start offset before tokenizing, so a mid-line cursor is classified from the text to its left.

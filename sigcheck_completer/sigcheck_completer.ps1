@@ -20,6 +20,7 @@ if (-not (Get-Variable -Name SigcheckCompletionCatalog -Scope Script -ErrorActio
             @{ Token = '-n'; Description = 'Only show file version number.'; TakesValue = $false }
             @{ Token = '-o'; Description = 'Query VirusTotal using a previously captured CSV file.'; TakesValue = $false }
             @{ Token = '-p'; Description = 'Verify signatures against the specified policy GUID or policy file.'; TakesValue = $true; ValueKind = 'Policy' }
+            @{ Token = '-q'; Description = 'Quiet - suppress per-file output detail.'; TakesValue = $false }
             @{ Token = '-r'; Description = 'Disable certificate revocation checking.'; TakesValue = $false }
             @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
             @{ Token = '-t'; Description = 'Dump machine certificate stores.'; TakesValue = $false }
@@ -199,7 +200,9 @@ function Get-SigcheckPathCompletions {
     param(
         [string]$CurrentWord,
         [string]$ToolTip,
-        [string]$Placeholder = '<path>'
+        [string]$Placeholder = '<path>',
+        [string[]]$Extension = @(),
+        [string[]]$Seed = @()
     )
 
     $typedValue = Remove-SigcheckOuterQuotes -Value $CurrentWord
@@ -228,9 +231,25 @@ function Get-SigcheckPathCompletions {
         $items = @()
     }
 
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($seedPath in $Seed) {
+        if ([string]::IsNullOrWhiteSpace($typedValue) -or $seedPath.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $seedText = ConvertTo-SigcheckQuotedValue -Value $seedPath -AlwaysQuote $alwaysQuote
+            if ($seenPaths.Add($seedText)) {
+                [void]$results.Add((New-SigcheckCompletionResult -CompletionText $seedText -ListItemText $seedPath -ResultType 'ParameterValue' -ToolTip $ToolTip))
+            }
+        }
+    }
+
     foreach ($item in $items) {
         if (-not [string]::IsNullOrWhiteSpace($leaf) -and
             -not $item.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        # Keep every directory so the tree stays navigable, but keep only the
+        # file kinds the option actually accepts.
+        if ($Extension.Count -gt 0 -and -not $item.PSIsContainer -and $item.Extension -notin $Extension) {
             continue
         }
 
@@ -240,6 +259,10 @@ function Get-SigcheckPathCompletions {
         }
 
         $completionText = ConvertTo-SigcheckQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        if (-not $seenPaths.Add($completionText)) {
+            continue
+        }
+
         [void]$results.Add((New-SigcheckCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
@@ -252,6 +275,17 @@ function Get-SigcheckPathCompletions {
     }
 
     @($results.ToArray())
+}
+
+function Get-SigcheckCatalogRoot {
+    $root = Join-Path -Path $env:SystemRoot -ChildPath 'System32\CatRoot'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        return @()
+    }
+
+    @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction Ignore |
+        Sort-Object -Property Name |
+        ForEach-Object { $_.FullName + '\' })
 }
 
 function Update-SigcheckStoreNames {
@@ -300,7 +334,13 @@ function Get-SigcheckCommandState {
             continue
         }
 
+        # Sysinternals tools accept /x for every -x switch; normalise so mode
+        # detection and the used-token bookkeeping see one spelling.
         $lookup = $token.ToLowerInvariant()
+        if ($lookup.Length -gt 1 -and $lookup.StartsWith('/')) {
+            $lookup = '-' + $lookup.Substring(1)
+        }
+
         $usedTokens[$lookup] = $true
 
         switch ($lookup) {
@@ -386,16 +426,21 @@ function Complete-Sigcheck {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
+    # $CursorPosition indexes the whole input line; $line is command-relative.
+    $relativeCursor = $CursorPosition - $CommandAst.Extent.StartOffset
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
-    $tokenState = Get-SigcheckTokenState -Line $line -CursorPosition $CursorPosition
+    $relativeCursor = [Math]::Min([Math]::Max($relativeCursor, 0), $line.Length)
+    $tokenState = Get-SigcheckTokenState -Line $line -CursorPosition $relativeCursor
     $argumentsState = Get-SigcheckArgumentsFromTokenState -TokenState $tokenState
     $state = Get-SigcheckCommandState -ArgumentsBeforeCurrent $argumentsState.ArgumentsBeforeCurrent
     $currentWord = $argumentsState.CurrentArgument
 
     switch ($state.ValueContext) {
-        'CatalogFile' { return Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Catalog file path.' -Placeholder '<catalog-file>' }
+        'CatalogFile' {
+            return Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Catalog file path.' -Placeholder '<catalog-file>' -Extension @('.cat', '.cab') -Seed @(Get-SigcheckCatalogRoot)
+        }
         'OutputFile' { return Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Output file path.' -Placeholder '<output-file>' }
         'Policy' {
             $typedValue = Remove-SigcheckOuterQuotes -Value $currentWord
@@ -426,46 +471,68 @@ function Complete-Sigcheck {
                 Update-SigcheckStoreNames
                 $typedValue = Remove-SigcheckOuterQuotes -Value $currentWord
                 $storeNames = if ($state.StoreMode -eq 'user') { $script:SigcheckCompletionCatalog.UserStoreNames } else { $script:SigcheckCompletionCatalog.MachineStoreNames }
+                $alwaysQuote = $currentWord.StartsWith('"')
                 foreach ($storeName in @('*') + $storeNames + @('<store-name>')) {
                     if (-not [string]::IsNullOrWhiteSpace($typedValue) -and
                         -not $storeName.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
                         continue
                     }
 
-                    [void]$results.Add((New-SigcheckCompletionResult -CompletionText $storeName -ListItemText $storeName -ResultType 'ParameterValue' -ToolTip 'Certificate store name or * for all stores.'))
+                    # Store names such as 'AAD Token Issuer' contain spaces.
+                    $storeText = if ($storeName -eq '*') { $storeName } else { ConvertTo-SigcheckQuotedValue -Value $storeName -AlwaysQuote $alwaysQuote }
+                    [void]$results.Add((New-SigcheckCompletionResult -CompletionText $storeText -ListItemText $storeName -ResultType 'ParameterValue' -ToolTip 'Certificate store name or * for all stores.'))
                 }
             }
             'offline' {
-                $results.AddRange((Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'CSV file previously captured by Sigcheck -h.' -Placeholder '<sigcheck-csv-file>'))
+                foreach ($item in @(Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'CSV file previously captured by Sigcheck -h.' -Placeholder '<sigcheck-csv-file>' -Extension @('.csv'))) {
+                    [void]$results.Add($item)
+                }
             }
             'catalog' {
-                $results.AddRange((Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Catalog file or directory to inspect.' -Placeholder '<catalog-file-or-directory>'))
+                foreach ($item in @(Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Catalog file or directory to inspect.' -Placeholder '<catalog-file-or-directory>' -Extension @('.cat', '.cab'))) {
+                    [void]$results.Add($item)
+                }
             }
             default {
-                $results.AddRange((Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'File or directory to inspect.' -Placeholder '<file-or-directory>'))
+                foreach ($item in @(Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'File or directory to inspect.' -Placeholder '<file-or-directory>')) {
+                    [void]$results.Add($item)
+                }
             }
         }
     }
 
     $wantsSwitches = [string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-') -or $currentWord.StartsWith('/')
     if ($wantsSwitches) {
+        # Sysinternals accepts /x for every -x switch, so a '/'-prefixed word
+        # completes the whole catalog in its slash spelling.
+        $useSlash = $currentWord.StartsWith('/')
         foreach ($switchSpec in $script:SigcheckCompletionCatalog.Switches) {
-            if (-not $switchSpec.Token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $canonical = $switchSpec.Token.ToLowerInvariant()
+            if ($canonical.StartsWith('/')) { $canonical = '-' + $canonical.Substring(1) }
+
+            $token = $switchSpec.Token
+            if ($useSlash) {
+                $token = '/' + $token.Substring(1)
+            } elseif ($token.StartsWith('/')) {
                 continue
             }
 
-            if ($state.UsedTokens.ContainsKey($switchSpec.Token.ToLowerInvariant()) -and
-                $switchSpec.Token -notin @('-v', '-vr', '-vs', '-vrs', '-t', '-tu', '-tv', '-tuv', '-?', '/?')) {
+            if (-not $token.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
 
-            if (($switchSpec.Token -in @('-c', '-ct')) -and
+            if ($state.UsedTokens.ContainsKey($canonical) -and
+                $canonical -notin @('-v', '-vr', '-vs', '-vrs', '-t', '-tu', '-tv', '-tuv', '-?')) {
+                continue
+            }
+
+            if (($canonical -in @('-c', '-ct')) -and
                 ($state.UsedTokens.ContainsKey('-c') -or $state.UsedTokens.ContainsKey('-ct')) -and
-                -not $state.UsedTokens.ContainsKey($switchSpec.Token.ToLowerInvariant())) {
+                -not $state.UsedTokens.ContainsKey($canonical)) {
                 continue
             }
 
-            [void]$results.Add((New-SigcheckCompletionResult -CompletionText $switchSpec.Token -ListItemText $switchSpec.Token -ResultType 'ParameterName' -ToolTip $switchSpec.Description))
+            [void]$results.Add((New-SigcheckCompletionResult -CompletionText $token -ListItemText $token -ResultType 'ParameterName' -ToolTip $switchSpec.Description))
         }
     }
 
