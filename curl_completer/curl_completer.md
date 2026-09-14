@@ -7,7 +7,7 @@
 It is a help-driven completer that:
 
 - parses the local `curl.exe --help all` surface once per session
-- suggests both short and long option forms
+- suggests both short and long option forms, keyed ordinally so case-distinct short options such as `-s`/`-S`, `-o`/`-O`, and `-x`/`-X` are all offered and never rewritten into each other
 - completes `--help` subjects from `curl.exe --help category`
 - provides targeted enum hints for high-value option values like protocol lists, certificate types, FTP modes, and TLS versions
 - offers filesystem completion for file, directory, certificate, and `@file`-style value slots
@@ -31,14 +31,11 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
     $tokensBeforeCurrent = Get-CurlArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ($currentToken -match '^(--[^=]+)=(.*)$') {
-        $optionKey = $matches[1].ToLowerInvariant()
+        $optionName = $matches[1]
         $valuePrefix = $matches[2]
-        $catalog = Get-CurlCompletionCatalog
-        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
-            $optionSpec = $catalog.OptionByToken[$optionKey]
-            if ($optionSpec.ValueKind) {
-                return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
-            }
+        $optionSpec = Get-CurlOptionSpecByToken -Token $optionName
+        if ($optionSpec -and $optionSpec.ValueKind) {
+            return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($optionName + '='))
         }
     }
 
@@ -96,7 +93,8 @@ The completer uses the placeholder text from curl help plus a small static overl
 - offer enum values such as `DER`, `PEM`, `P12`, `multicwd`, `singlecwd`, `active`, `passive`, and TLS version hints
 - complete protocol-bearing values like `http://`, `https://`, or protocol lists for `--proto`
 - complete file paths for options like `--config`, `--output`, `--trace`, `--key`, `--cacert`, and `--output-dir`
-- treat `-d`, `--data`, `--header`, `--proxy-header`, and `--variable` specially when the value uses `@file`-style syntax
+- treat `-d`, `--data`, `-H`, `--header`, `--proxy-header`, and `--variable` specially when the value uses `@file`-style syntax
+- emit the documented `<placeholder>` for any other value-taking option, so a value slot never falls back to the option list
 
 ### Inline long-option values
 

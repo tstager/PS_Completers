@@ -90,7 +90,7 @@ function Get-CurlCompletionCatalog {
         HelpSubjects  = Get-CurlDefaultHelpSubjects
         Protocols     = @()
         Options       = @()
-        OptionByToken = @{}
+        OptionByToken = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     }
 
     $script:CurlCompletionCatalog
@@ -225,10 +225,9 @@ function Get-CurlValueKind {
         [string]$Placeholder
     )
 
-    $tokenKey = $Token.ToLowerInvariant()
     $placeholderKey = if ([string]::IsNullOrWhiteSpace($Placeholder)) { '' } else { $Placeholder.ToLowerInvariant() }
 
-    switch ($tokenKey) {
+    switch -CaseSensitive ($Token) {
         '-h' { return 'HelpSubject' }
         '--help' { return 'HelpSubject' }
         '--proto' { return 'ProtocolList' }
@@ -298,8 +297,31 @@ function Get-CurlValueKind {
         'speed' { return 'Number' }
     }
 
-    if ($placeholderKey -match '^(?:host\[:port\]|host1:port1:host2:port2|address|addresses|range|user:password|token|name|method|command|config|string|format|time|opt=val|hashes|options|data|identity|interface|ip|level|list|phrase)$') {
+    if ($placeholderKey) {
         return 'Text'
+    }
+
+    $null
+}
+
+function Get-CurlOptionSpecByToken {
+    param([string]$Token)
+
+    if ([string]::IsNullOrWhiteSpace($Token)) {
+        return $null
+    }
+
+    $catalog = Get-CurlCompletionCatalog
+    if ($catalog.OptionByToken.ContainsKey($Token)) {
+        return $catalog.OptionByToken[$Token]
+    }
+
+    # curl spells every long option in lower case, so a long option may be matched case-insensitively.
+    if ($Token.StartsWith('--')) {
+        $lower = $Token.ToLowerInvariant()
+        if ($catalog.OptionByToken.ContainsKey($lower)) {
+            return $catalog.OptionByToken[$lower]
+        }
     }
 
     $null
@@ -317,7 +339,7 @@ function Add-CurlOptionSpec {
     }
 
     $catalog = Get-CurlCompletionCatalog
-    $key = $Token.ToLowerInvariant()
+    $key = $Token
     if ($catalog.OptionByToken.ContainsKey($key)) {
         return
     }
@@ -755,7 +777,6 @@ function Get-CurlPendingOption {
     param([string[]]$TokensBeforeCurrent)
 
     Initialize-CurlCompletionCatalog
-    $catalog = Get-CurlCompletionCatalog
     $pendingOption = $null
 
     foreach ($token in @($TokensBeforeCurrent)) {
@@ -773,9 +794,9 @@ function Get-CurlPendingOption {
             continue
         }
 
-        $lookup = $cleanToken.ToLowerInvariant()
-        if ($catalog.OptionByToken.ContainsKey($lookup) -and $catalog.OptionByToken[$lookup].ValueKind) {
-            $pendingOption = $catalog.OptionByToken[$lookup]
+        $optionSpec = Get-CurlOptionSpecByToken -Token $cleanToken
+        if ($optionSpec -and $optionSpec.ValueKind) {
+            $pendingOption = $optionSpec
         }
     }
 
@@ -789,8 +810,17 @@ function Get-CurlOptionCompletions {
     $catalog = Get-CurlCompletionCatalog
     $cleanCurrent = Remove-CurlOuterQuotes -Value $CurrentWord
 
+    # Short options are case-significant (-s and -S are different options), so they must match ordinally.
+    $ordinalMatch = $cleanCurrent -match '^-[^-]'
+
     foreach ($option in $catalog.Options) {
-        if ($option.Token -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrent) + '*')) {
+        $isMatch = if ($ordinalMatch) {
+            $option.Token.StartsWith($cleanCurrent, [System.StringComparison]::Ordinal)
+        } else {
+            $option.Token -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrent) + '*')
+        }
+
+        if ($isMatch) {
             $toolTip = if ([string]::IsNullOrWhiteSpace($option.Description)) { $option.DisplayText } else { $option.Description }
             New-CurlCompletionResult -CompletionText $option.Token -ListItemText $option.DisplayText -ResultType 'ParameterName' -ToolTip $toolTip
         }
@@ -817,14 +847,11 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
     $tokensBeforeCurrent = Get-CurlArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ($currentToken -match '^(--[^=]+)=(.*)$') {
-        $optionKey = $matches[1].ToLowerInvariant()
+        $optionName = $matches[1]
         $valuePrefix = $matches[2]
-        $catalog = Get-CurlCompletionCatalog
-        if ($catalog.OptionByToken.ContainsKey($optionKey)) {
-            $optionSpec = $catalog.OptionByToken[$optionKey]
-            if ($optionSpec.ValueKind) {
-                return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($matches[1] + '='))
-            }
+        $optionSpec = Get-CurlOptionSpecByToken -Token $optionName
+        if ($optionSpec -and $optionSpec.ValueKind) {
+            return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($optionName + '='))
         }
     }
 
