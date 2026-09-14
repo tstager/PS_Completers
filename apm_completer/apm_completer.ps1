@@ -170,43 +170,297 @@ function Get-ApmCompletionCatalog {
         }
     }
 
-    $installRuntimeValues = @('copilot', 'codex', 'vscode')
-    $targetValues = @('copilot', 'claude', 'cursor', 'opencode', 'codex', 'vscode', 'agents', 'all')
+    # apm 0.30.0: --target and --runtime share one 21-entry harness list.
+    $targetValues = @(
+        'agent-skills', 'agents', 'agy', 'all', 'antigravity', 'claude', 'codex', 'copilot',
+        'copilot-app', 'copilot-cowork', 'cursor', 'gemini', 'grok-build', 'grok-cloud',
+        'hermes', 'intellij', 'kiro', 'openclaw', 'opencode', 'vscode', 'windsurf'
+    )
+    $installRuntimeValues = $targetValues
     $auditFormatValues = @('text', 'json', 'sarif', 'markdown')
     $configKeyValues = @('auto-integrate', 'temp-dir')
     $booleanValues = @('true', 'false', 'yes', 'no', '1', '0')
-    $runtimeValues = @('copilot', 'codex', 'llm')
+    $runtimeValues = @('copilot', 'codex', 'gemini', 'llm')
     $countValues = @('0', '1', '4', '8', '10', '20', '50')
+    $transportValues = @('stdio', 'http', 'sse', 'streamable-http')
+    $packFormatValues = @('plugin', 'agent-plugin', 'claude', 'claude-plugin', 'apm')
+    $lifecycleEventValues = @('pre-install', 'post-install', 'pre-update', 'post-update', 'pre-uninstall', 'post-uninstall')
 
     $catalog = [ordered]@{}
 
     $catalog[''] = [pscustomobject]@{
         Subcommands = @(
             & $newCommand 'init' 'Initialize new APM project'
-            & $newCommand 'install' 'Install dependencies and deploy local content'
-            & $newCommand 'uninstall' 'Remove APM packages'
-            & $newCommand 'prune' 'Remove orphaned packages'
-            & $newCommand 'audit' 'Scan for hidden Unicode characters'
-            & $newCommand 'pack' 'Create a portable bundle'
-            & $newCommand 'unpack' 'Extract a bundle'
-            & $newCommand 'update' 'Update APM to the latest version'
+            & $newCommand 'install' 'Install APM, MCP, and LSP dependencies'
+            & $newCommand 'uninstall' 'Remove packages using manifest entries or direct locked refs'
+            & $newCommand 'prune' 'Remove APM packages absent from the resolved dependency set'
+            & $newCommand 'audit' 'Scan installed primitives for hidden Unicode, drift, and lockfile issues'
+            & $newCommand 'pack' 'Pack distributable artifacts from your APM project'
+            & $newCommand 'unpack' '[Deprecated] Extract an APM bundle into the current project'
+            & $newCommand 'update' 'Refresh APM dependencies to the latest matching refs'
+            & $newCommand 'self-update' 'Update the APM CLI binary itself to the latest version'
             & $newCommand 'view' 'View package metadata or list remote versions'
-            & $newCommand 'outdated' 'Check locked dependencies for updates'
+            & $newCommand 'outdated' 'Show outdated locked dependencies'
             & $newCommand 'deps' 'Manage APM package dependencies'
-            & $newCommand 'mcp' 'Browse MCP server registry'
-            & $newCommand 'marketplace' 'Plugin marketplace management'
-            & $newCommand 'search' 'Search plugins in a marketplace'
-            & $newCommand 'run' 'Execute prompts'
-            & $newCommand 'preview' 'Preview compiled scripts'
-            & $newCommand 'list' 'List available scripts'
+            & $newCommand 'mcp' 'Discover, inspect, and install MCP servers'
+            & $newCommand 'marketplace' 'Manage marketplaces for discovery and governance'
+            & $newCommand 'search' 'Search plugins in a marketplace (QUERY@MARKETPLACE)'
+            & $newCommand 'run' 'Run a script with parameters (experimental)'
+            & $newCommand 'preview' 'Preview a script''s compiled prompt files'
+            & $newCommand 'list' 'List available scripts in the current project'
             & $newCommand 'compile' 'Compile APM context into distributed AGENTS.md files'
             & $newCommand 'config' 'Configure APM CLI'
-            & $newCommand 'runtime' 'Manage AI runtimes'
+            & $newCommand 'runtime' 'Manage AI runtimes (experimental)'
+            & $newCommand 'approve' 'Approve package executables'
+            & $newCommand 'deny' 'Deny package executables'
+            & $newCommand 'cache' 'Manage the local package cache'
+            & $newCommand 'doctor' 'Run environment diagnostics (git, network, auth, marketplace config)'
+            & $newCommand 'experimental' 'Manage experimental feature flags'
+            & $newCommand 'find' 'Find which package owns a file path'
+            & $newCommand 'lifecycle' 'Inspect, test, and scaffold lifecycle scripts'
+            & $newCommand 'lock' 'Resolve dependencies and write apm.lock.yaml without deploying'
+            & $newCommand 'plugin' 'Scaffold and manage plugins (plugin-author workflows)'
+            & $newCommand 'policy' 'Inspect and diagnose APM policy'
+            & $newCommand 'publish' 'Publish a package to a registry'
+            & $newCommand 'targets' 'Show resolved targets for the current project'
             & $newCommand 'info' 'Hidden alias for view'
         )
         Options = @(
             & $newOption @('--version') 'Show version and exit'
+            & $newOption @('--verbose', '-v') 'Enable debug-level logging'
             & $newOption @('--help') 'Show help message and exit'
+        )
+    }
+
+    $catalog['approve'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--pending') 'List packages with unapproved executables'
+            & $newOption @('--all') 'Approve every package with executables'
+            & $newOption @('--recommended') 'Approve the org-recommended executable set'
+            & $newOption @('--list') 'List effective trust decisions'
+            & $newOption @('--user') 'Persist to your personal ~/.apm/config.json instead of apm.yml'
+        )
+    }
+
+    $catalog['deny'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--user') 'Record the deny in your personal ~/.apm/config.json instead of apm.yml'
+        )
+    }
+
+    $catalog['cache'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'clean' 'Remove all cached content'
+            & $newCommand 'info' 'Show cache location and size statistics'
+            & $newCommand 'prune' 'Remove Git checkout SHA groups older than N days'
+        )
+        Options = @()
+    }
+
+    $catalog['cache clean'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--force', '-f') 'Skip confirmation prompt'
+            & $newOption @('--yes', '-y') 'Skip confirmation prompt'
+        )
+    }
+
+    $catalog['cache info'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['cache prune'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--days') 'Remove SHA groups not accessed within this many days' 'freeform' @('7', '30', '90')
+        )
+    }
+
+    $catalog['doctor'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['experimental'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'disable' 'Disable an experimental feature'
+            & $newCommand 'enable' 'Enable an experimental feature'
+            & $newCommand 'list' 'List all experimental features'
+            & $newCommand 'reset' 'Reset experimental features to defaults'
+        )
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show verbose output'
+        )
+    }
+
+    $catalog['experimental disable'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['experimental enable'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['experimental list'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--enabled') 'Show only enabled features'
+            & $newOption @('--disabled') 'Show only disabled features'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+            & $newOption @('--json') 'Output as JSON array'
+        )
+    }
+
+    $catalog['experimental reset'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--yes', '-y') 'Skip confirmation prompt'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['find'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--source') 'Append resolved origin (oci/git/local) to each package name'
+            & $newOption @('--path') 'Print full root-to-target dependency chain (like apm deps why)'
+        )
+    }
+
+    $catalog['lifecycle'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'init' 'Inject a starter lifecycle: block into apm.yml'
+            & $newCommand 'test' 'Dry-run a synthetic lifecycle event through discovered scripts'
+            & $newCommand 'trust' 'Trust the project apm.yml lifecycle: block so its scripts run'
+            & $newCommand 'untrust' 'Revoke trust for the project apm.yml lifecycle: block'
+            & $newCommand 'validate' 'Validate all discovered script files for errors'
+        )
+        Options = @()
+    }
+
+    $catalog['lifecycle init'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--force') 'Overwrite existing lifecycle: block if present'
+        )
+    }
+
+    $catalog['lifecycle test'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+            & $newOption @('--execute') 'Actually run the scripts (default is a non-executing dry-run)'
+        )
+    }
+
+    $catalog['lifecycle trust'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['lifecycle untrust'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['lifecycle validate'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['lock'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'export' 'Export an SBOM/inventory from the existing lockfile'
+        )
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show per-dependency resolution details'
+            & $newOption @('--global', '-g') 'Operate on ~/.apm/apm.yml instead of the current project'
+            & $newOption @('--update') 'Re-resolve refs to their latest SHAs before writing the lockfile'
+            & $newOption @('--no-policy') 'Skip policy enforcement during resolution'
+            & $newOption @('--target', '-t') 'Agent target(s) to scope policy enforcement during resolution' 'enum' $targetValues
+            & $newOption @('--parallel-downloads') 'Max concurrent package downloads (0 to disable parallelism)' 'freeform' $countValues
+        )
+    }
+
+    $catalog['lock export'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--format', '-f') 'SBOM output format' 'enum' @('cyclonedx', 'spdx')
+            & $newOption @('--output', '-o') 'Write the SBOM to a file instead of stdout' 'path'
+            & $newOption @('--global', '-g') 'Read the user-scope (~/.apm/) lockfile'
+            & $newOption @('--timestamp') 'Pin the SBOM timestamp (ISO 8601)' 'freeform' @('<iso-8601>')
+        )
+    }
+
+    $catalog['plugin'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'init' 'Scaffold a plugin project (creates plugin.json + apm.yml)'
+        )
+        Options = @()
+    }
+
+    $catalog['plugin init'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--yes', '-y') 'Skip interactive prompts and use auto-detected defaults'
+            & $newOption @('--target') 'Comma-separated target list (skip prompt)' 'enum' $targetValues
+            & $newOption @('--format') 'Plugin layout' 'enum' @('plugin', 'agent-plugin', 'claude', 'claude-plugin')
+            & $newOption @('--claude-plugin') 'Scaffold the legacy Claude-compatible layout'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['policy'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'explain' 'Explain the effective executable-trust decision for a package'
+            & $newCommand 'status' 'Show the current policy posture (discovery, cache, rules)'
+        )
+        Options = @()
+    }
+
+    $catalog['policy explain'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['policy status'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--policy-source') 'Override discovery (org, URL, or path)' 'policy'
+            & $newOption @('--no-cache') 'Force a fresh fetch (skip the policy cache)'
+            & $newOption @('--json') 'Emit the report as JSON (alias of -o json)'
+            & $newOption @('--output', '-o') 'Output format' 'enum' @('table', 'json')
+            & $newOption @('--check') 'Exit non-zero (1) when no usable policy is found'
+        )
+    }
+
+    $catalog['publish'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--registry') 'Registry name (from apm.yml registries: block)' 'freeform' @('<registry>')
+            & $newOption @('--package') 'Package identity to publish as (owner/repo)' 'freeform' @('<owner/repo>')
+            & $newOption @('--zip') 'Path to a pre-built .zip archive (skips the pack step)' 'path'
+            & $newOption @('--dry-run') 'Preview without uploading'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['targets'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--json') 'Output as JSON instead of a table'
+            & $newOption @('--all') 'Include the agent-skills meta-target in JSON output'
         )
     }
 
@@ -233,6 +487,8 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--trust-transitive-mcp') 'Trust self-defined MCP servers from transitive packages'
             & $newOption @('--dev') 'Install as development dependency'
             & $newOption @('--global', '-g') 'Install to user scope instead of the current project'
+            & $newOption @('--transport') 'MCP transport for --mcp entries' 'enum' $transportValues
+            & $newOption @('--audit') 'Run apm audit over deployed files during install' 'enum' @('off', 'warn', 'block')
         )
     }
 
@@ -273,9 +529,10 @@ function Get-ApmCompletionCatalog {
         Options = @(
             & $newOption @('--output', '-o') 'Output directory' 'path'
             & $newOption @('--target', '-t') 'Filter files by target' 'enum' $targetValues
-            & $newOption @('--archive') 'Produce a .tar.gz archive instead of a directory'
+            & $newOption @('--archive') 'Produce an archive (.zip by default) instead of a directory'
+            & $newOption @('--archive-format') 'Archive format when --archive is set' 'enum' @('zip', 'tar.gz')
             & $newOption @('--dry-run') 'List files that would be packed without writing anything'
-            & $newOption @('--format') 'Bundle format' 'enum' @('apm', 'plugin')
+            & $newOption @('--format') 'Bundle format' 'enum' $packFormatValues
             & $newOption @('--force') 'On collision, last writer wins instead of first'
         )
     }
@@ -291,6 +548,19 @@ function Get-ApmCompletionCatalog {
     }
 
     $catalog['update'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--yes', '-y') 'Skip the confirmation prompt (for CI / automation)'
+            & $newOption @('--dry-run') 'Render the update plan and exit without changing anything'
+            & $newOption @('--verbose', '-v') 'Show unchanged deps and detailed pipeline diagnostics'
+            & $newOption @('--global', '-g') 'Refresh user-scope dependencies (~/.apm/) instead of the current project'
+            & $newOption @('--force') 'Overwrite locally-authored files and deploy despite critical security findings'
+            & $newOption @('--parallel-downloads') 'Max concurrent package downloads (0 to disable parallelism)' 'freeform' $countValues
+            & $newOption @('--target', '-t') 'Agent target(s) to update for (comma-separated for multiple)' 'enum' $targetValues
+        )
+    }
+
+    $catalog['self-update'] = [pscustomobject]@{
         Subcommands = @()
         Options = @(
             & $newOption @('--check') 'Only check for updates without installing'
@@ -326,9 +596,18 @@ function Get-ApmCompletionCatalog {
             & $newCommand 'tree' 'Show dependency tree structure'
             & $newCommand 'info' 'Alias for apm view'
             & $newCommand 'clean' 'Remove all APM dependencies'
-            & $newCommand 'update' 'Update APM dependencies'
+            & $newCommand 'update' 'DEPRECATED: use apm update instead (strict superset)'
+            & $newCommand 'why' 'Explain why a package is installed by walking the lockfile back to its roots'
         )
         Options = @()
+    }
+
+    $catalog['deps why'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--global', '-g') 'Resolve against the user-scope lockfile'
+            & $newOption @('--json') 'Emit machine-readable JSON to stdout'
+        )
     }
 
     $catalog['deps list'] = [pscustomobject]@{
@@ -370,11 +649,32 @@ function Get-ApmCompletionCatalog {
 
     $catalog['mcp'] = [pscustomobject]@{
         Subcommands = @(
+            & $newCommand 'install' 'Add an MCP server to apm.yml'
             & $newCommand 'list' 'List MCP servers'
             & $newCommand 'search' 'Search MCP servers'
             & $newCommand 'show' 'Show MCP server details'
         )
         Options = @()
+    }
+
+    $catalog['mcp install'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--transport') 'MCP transport' 'enum' $transportValues
+            & $newOption @('--url') 'Server URL for remote transports' 'freeform' @('https://<host>/mcp')
+            & $newOption @('--env') 'Environment variable (repeatable)' 'freeform' @('<KEY=VALUE>')
+            & $newOption @('--header') 'HTTP header (repeatable)' 'freeform' @('<KEY=VALUE>')
+            & $newOption @('--target', '-t') 'Agent target(s) to deploy to' 'enum' $targetValues
+            & $newOption @('--registry') 'Custom registry URL' 'freeform' @('https://<registry>')
+            & $newOption @('--mcp-version') 'Pin registry entry to a specific version' 'freeform' @('<version>')
+            & $newOption @('--global', '-g') 'Install to user scope (~/.apm/)'
+            & $newOption @('--trust-transitive-mcp') 'Trust MCP servers from transitive dependencies'
+            & $newOption @('--dev') 'Install as development dependency'
+            & $newOption @('--dry-run') 'Show what would change without writing files'
+            & $newOption @('--force') 'Overwrite locally-authored files on collision'
+            & $newOption @('--verbose') 'Show detailed output'
+            & $newOption @('--no-policy') 'Skip org policy enforcement'
+        )
     }
 
     $catalog['mcp list'] = [pscustomobject]@{
@@ -403,6 +703,13 @@ function Get-ApmCompletionCatalog {
             & $newCommand 'browse' 'Browse marketplace plugins'
             & $newCommand 'update' 'Refresh marketplace cache'
             & $newCommand 'remove' 'Remove a registered marketplace'
+            & $newCommand 'validate' 'Validate marketplace structure and plugin schema'
+            & $newCommand 'init' 'Add a marketplace: block to apm.yml'
+            & $newCommand 'check' 'Validate marketplace entries are resolvable'
+            & $newCommand 'outdated' 'Show packages with available upgrades'
+            & $newCommand 'audit' 'Check that plugin dependencies resolve through the marketplace'
+            & $newCommand 'package' 'Manage packages in marketplace authoring config'
+            & $newCommand 'migrate' 'Fold marketplace.yml into apm.yml''s marketplace: block'
         )
         Options = @()
     }
@@ -410,9 +717,106 @@ function Get-ApmCompletionCatalog {
     $catalog['marketplace add'] = [pscustomobject]@{
         Subcommands = @()
         Options = @(
-            & $newOption @('--name', '-n') 'Custom display name for the marketplace' 'freeform' @('<marketplace-name>')
-            & $newOption @('--branch', '-b') 'Branch to track' 'freeform' @('<branch>')
-            & $newOption @('--host') 'Git host FQDN' 'freeform' @('<host>')
+            & $newOption @('--name', '-n') 'Display name (defaults to repo name)' 'freeform' @('<marketplace-name>')
+            & $newOption @('--ref', '-r') 'Git ref (branch, tag, or commit). Default: main' 'freeform' @('<ref>')
+            & $newOption @('--host') 'Git host FQDN for OWNER/REPO shorthand' 'freeform' @('<host>')
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace validate'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace init'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--force') 'Overwrite an existing marketplace: block in apm.yml'
+            & $newOption @('--no-gitignore-check') 'Skip the .gitignore staleness check'
+            & $newOption @('--name') 'Marketplace/package name (default: my-marketplace)' 'freeform' @('<name>')
+            & $newOption @('--owner') 'Owner name for the marketplace' 'freeform' @('<owner>')
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace check'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--offline') 'Schema + cached-ref checks only (no network)'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace outdated'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--offline') 'Use cached refs only (no network)'
+            & $newOption @('--include-prerelease') 'Include prerelease versions'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace audit'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--strict') 'Exit non-zero on bypasses, fetch errors, or no verified packages'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace package'] = [pscustomobject]@{
+        Subcommands = @(
+            & $newCommand 'add' 'Add a package to marketplace authoring config'
+            & $newCommand 'remove' 'Remove a package from marketplace authoring config'
+            & $newCommand 'set' 'Update a package entry in marketplace authoring config'
+        )
+        Options = @()
+    }
+
+    $catalog['marketplace package add'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--name') 'Package name (default: repo name)' 'freeform' @('<name>')
+            & $newOption @('--version') 'Semver range (e.g. >=1.0.0)' 'freeform' @('<range>')
+            & $newOption @('--ref') 'Pin to a git ref (SHA, tag, or HEAD)' 'freeform' @('<ref>')
+            & $newOption @('--subdir', '-s') 'Subdirectory inside source repo' 'freeform' @('<subdir>')
+            & $newOption @('--tag-pattern') 'Tag pattern (e.g. v{version})' 'freeform' @('v{version}')
+            & $newOption @('--tags') 'Comma-separated tags' 'freeform' @('<tags>')
+            & $newOption @('--include-prerelease') 'Include prerelease versions'
+            & $newOption @('--no-verify') 'Skip remote reachability check'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace package remove'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--yes', '-y') 'Skip confirmation prompt'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace package set'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--version') 'Semver range (e.g. >=1.0.0)' 'freeform' @('<range>')
+            & $newOption @('--ref') 'Pin to a git ref (SHA, tag, or HEAD)' 'freeform' @('<ref>')
+            & $newOption @('--subdir') 'Subdirectory inside source repo' 'freeform' @('<subdir>')
+            & $newOption @('--tag-pattern') 'Tag pattern (e.g. v{version})' 'freeform' @('v{version}')
+            & $newOption @('--tags') 'Comma-separated tags' 'freeform' @('<tags>')
+            & $newOption @('--include-prerelease') 'Include prerelease versions'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
+    }
+
+    $catalog['marketplace migrate'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--yes', '--force', '-y') 'Overwrite an existing marketplace: block in apm.yml'
+            & $newOption @('--dry-run') 'Show the proposed apm.yml changes without writing them'
             & $newOption @('--verbose', '-v') 'Show detailed output'
         )
     }
@@ -497,7 +901,9 @@ function Get-ApmCompletionCatalog {
     $catalog['config'] = [pscustomobject]@{
         Subcommands = @(
             & $newCommand 'get' 'Get a configuration value'
+            & $newCommand 'list' 'List all configuration values'
             & $newCommand 'set' 'Set a configuration value'
+            & $newCommand 'unset' 'Unset a configuration value'
         )
         Options = @()
     }
@@ -507,7 +913,17 @@ function Get-ApmCompletionCatalog {
         Options = @()
     }
 
+    $catalog['config list'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
     $catalog['config set'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @()
+    }
+
+    $catalog['config unset'] = [pscustomobject]@{
         Subcommands = @()
         Options = @()
     }
@@ -553,6 +969,7 @@ function Get-ApmCompletionCatalog {
     $script:ApmRuntimeValues = $runtimeValues
     $script:ApmInstallRuntimeValues = $installRuntimeValues
     $script:ApmTargetValues = $targetValues
+    $script:ApmLifecycleEventValues = $lifecycleEventValues
 
     $script:ApmCompletionCatalog
 }
@@ -764,8 +1181,97 @@ function Get-ApmPositionalResults {
     $configKeys = (Get-Variable -Name ApmConfigKeyValues -Scope Script -ErrorAction Ignore).Value
     $booleanValues = (Get-Variable -Name ApmBooleanValues -Scope Script -ErrorAction Ignore).Value
     $runtimeValues = (Get-Variable -Name ApmRuntimeValues -Scope Script -ErrorAction Ignore).Value
+    $lifecycleEvents = (Get-Variable -Name ApmLifecycleEventValues -Scope Script -ErrorAction Ignore).Value
 
     switch ($CommandKey) {
+        'update' {
+            return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
+        }
+        'approve' {
+            return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
+        }
+        'deny' {
+            return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
+        }
+        'find' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmPathCompletions -PathPrefix $WordToComplete -Placeholder '<file-path>')
+            }
+        }
+        'deps why' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
+            }
+        }
+        'policy explain' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
+            }
+        }
+        'experimental enable' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<feature>') -WordToComplete $WordToComplete)
+            }
+        }
+        'experimental disable' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<feature>') -WordToComplete $WordToComplete)
+            }
+        }
+        'experimental reset' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<feature>') -WordToComplete $WordToComplete)
+            }
+        }
+        'lifecycle test' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmClosedValueCompletions -Values $lifecycleEvents -WordToComplete $WordToComplete)
+            }
+        }
+        'plugin init' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                if (Test-ApmPathLikeToken -Token $WordToComplete) {
+                    return @(Get-ApmPathCompletions -PathPrefix $WordToComplete -Placeholder '<project-name>')
+                }
+
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('.', '<project-name>') -WordToComplete $WordToComplete)
+            }
+        }
+        'mcp install' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<server-name>') -WordToComplete $WordToComplete)
+            }
+        }
+        'marketplace validate' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<marketplace>') -WordToComplete $WordToComplete)
+            }
+        }
+        'marketplace audit' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<marketplace>') -WordToComplete $WordToComplete)
+            }
+        }
+        'marketplace package add' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<owner/repo>', '<host/owner/repo>') -WordToComplete $WordToComplete)
+            }
+        }
+        'marketplace package remove' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package-name>') -WordToComplete $WordToComplete)
+            }
+        }
+        'marketplace package set' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package-name>') -WordToComplete $WordToComplete)
+            }
+        }
+        'config unset' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmClosedValueCompletions -Values $configKeys -WordToComplete $WordToComplete)
+            }
+        }
         'init' {
             if ($Analysis.Positionals.Count -eq 0) {
                 if (Test-ApmPathLikeToken -Token $WordToComplete) {
@@ -903,10 +1409,13 @@ function Get-ApmPositionalResults {
 }
 
 function Get-ApmUniqueResults {
-    param([System.Collections.IEnumerable]$Results)
+    # [object[]] so a single CompletionResult (PowerShell unrolls one-element
+    # arrays on function return) binds as a one-element array instead of failing
+    # IEnumerable parameter transformation.
+    param([object[]]$Results)
 
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($result in $Results) {
+    foreach ($result in @($Results)) {
         if ($null -eq $result) {
             continue
         }
@@ -936,12 +1445,12 @@ function Complete-Apm {
         $optionName = $Matches.option
         if ($optionLookup.ContainsKey($optionName)) {
             $attachedPrefix = "$optionName="
-            return Get-ApmUniqueResults (Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$optionName] -WordToComplete $WordToComplete -AttachedPrefix $attachedPrefix)
+            return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$optionName] -WordToComplete $WordToComplete -AttachedPrefix $attachedPrefix)
         }
     }
 
     if ($null -ne $analysis.PendingOption -and $optionLookup.ContainsKey($analysis.PendingOption)) {
-        return Get-ApmUniqueResults (Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$analysis.PendingOption] -WordToComplete $WordToComplete)
+        return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$analysis.PendingOption] -WordToComplete $WordToComplete)
     }
 
     $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()

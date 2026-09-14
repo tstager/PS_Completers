@@ -14,10 +14,7 @@ The completer covers:
 - documented root commands and nested subcommands
 - documented switches for each command path
 - documented value-bearing options with enum, freeform, and path-aware handling
-- source-backed target aliases that appear in the upstream click definitions:
-  - `copilot`
-  - `vscode`
-  - `agents`
+- the full apm 0.30.0 `--target` / `--runtime` harness list (21 values, listed under "Key value surfaces" below)
 - placeholders for freeform package, marketplace, script, and server slots so PowerShell does not fall back to filesystem completion in the wrong place
 - local path completion for documented path-bearing slots such as:
   - `apm unpack BUNDLE_PATH`
@@ -64,7 +61,8 @@ Root commands:
 - `audit`
 - `pack`
 - `unpack`
-- `update`
+- `update` (refresh dependencies: `-y`, `--dry-run`, `-v`, `-g`, `--force`, `--parallel-downloads`, `-t/--target`, `[PACKAGES]...`)
+- `self-update` (`--check`)
 - `view`
 - `outdated`
 - `deps`
@@ -77,29 +75,50 @@ Root commands:
 - `compile`
 - `config`
 - `runtime`
+- `approve`, `deny`
+- `cache`
+- `doctor`
+- `experimental`
+- `find`
+- `lifecycle`
+- `lock`
+- `plugin`
+- `policy`
+- `publish`
+- `targets`
 - `info`
   - hidden alias noted by the official docs
 
 Nested subcommands:
 
-- `deps`: `list`, `tree`, `info`, `clean`, `update`
-- `mcp`: `list`, `search`, `show`
-- `marketplace`: `add`, `list`, `browse`, `update`, `remove`
-- `config`: `get`, `set`
+- `deps`: `list`, `tree`, `info`, `clean`, `update`, `why`
+- `mcp`: `install`, `list`, `search`, `show`
+- `marketplace`: `add`, `list`, `browse`, `update`, `remove`, `validate`, `init`, `check`, `outdated`, `audit`, `package` (`add`, `remove`, `set`), `migrate`
+- `config`: `get`, `list`, `set`, `unset`
 - `runtime`: `setup`, `list`, `remove`, `status`
+- `cache`: `clean`, `info`, `prune`
+- `experimental`: `disable`, `enable`, `list`, `reset`
+- `lifecycle`: `init`, `test`, `trust`, `untrust`, `validate`
+- `lock`: `export`
+- `plugin`: `init`
+- `policy`: `explain`, `status`
 
-Key value surfaces:
+Key value surfaces (apm 0.30.0):
 
-- `install --runtime`, `install --exclude`: `copilot`, `codex`, `vscode`
+- `install --runtime`, `install --exclude`, `install --target`, `update --target`, `deps update --target`, `lock --target`, `mcp install --target`, `pack --target`, `compile --target`, `plugin init --target`:
+  - `agent-skills`, `agents`, `agy`, `all`, `antigravity`, `claude`, `codex`, `copilot`, `copilot-app`, `copilot-cowork`, `cursor`, `gemini`, `grok-build`, `grok-cloud`, `hermes`, `intellij`, `kiro`, `openclaw`, `opencode`, `vscode`, `windsurf`
 - `install --only`: `apm`, `mcp`
-- `install --target`, `deps update --target`, `pack --target`, `compile --target`:
-  - `copilot`, `claude`, `cursor`, `opencode`, `codex`, `vscode`, `agents`, `all`
-- `pack --format`: `apm`, `plugin`
+- `install --transport`, `mcp install --transport`: `stdio`, `http`, `sse`, `streamable-http`
+- `install --audit`: `off`, `warn`, `block`
+- `pack --format`: `plugin`, `agent-plugin`, `claude`, `claude-plugin`, `apm`
+- `pack --archive-format`: `zip`, `tar.gz`
 - `audit --format`: `text`, `json`, `sarif`, `markdown`
+- `lock export --format`: `cyclonedx`, `spdx`
+- `lifecycle test [EVENT]`: `pre-install`, `post-install`, `pre-update`, `post-update`, `pre-uninstall`, `post-uninstall`
 - `view [FIELD]`: `versions`
-- `config get/set [KEY]`: `auto-integrate`, `temp-dir`
+- `config get/set/unset [KEY]`: `auto-integrate`, `temp-dir`
 - `config set auto-integrate VALUE`: `true`, `false`, `yes`, `no`, `1`, `0`
-- `runtime setup/remove`: `copilot`, `codex`, `llm`
+- `runtime setup/remove`: `copilot`, `codex`, `gemini`, `llm`
 
 Freeform slots intentionally stay placeholder-driven:
 
