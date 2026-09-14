@@ -118,6 +118,93 @@ function Get-CodexCompletionInvoker {
     }
 }
 
+function Get-CodexValueCompletion {
+    <#
+    .SYNOPSIS
+    Value overlay for slots the clap-generated script leaves empty: closed
+    enum options, directory options, and the 'completion <SHELL>' positional.
+    #>
+    param(
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    $enumValues = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $enumValues['-s'] = @('read-only', 'workspace-write', 'danger-full-access')
+    $enumValues['--sandbox'] = $enumValues['-s']
+    $enumValues['-a'] = @('on-request', 'never')
+    $enumValues['--ask-for-approval'] = $enumValues['-a']
+    $enumValues['--local-provider'] = @('lmstudio', 'ollama')
+    $enumValues['--color'] = @('always', 'never', 'auto')
+
+    $directoryOptions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($name in @('-C', '--cd', '--add-dir')) { [void]$directoryOptions.Add($name) }
+
+    $committed = @(
+        $CommandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $CursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
+    $previousToken = if ($committed.Count -gt 0) { $committed[-1] } else { '' }
+    $node = 'codex'
+    foreach ($token in $committed) {
+        if ($token.StartsWith('-')) {
+            break
+        }
+
+        $node += ';' + $token
+    }
+
+    $optionName = $null
+    $valuePrefix = ''
+    $valueWord = $WordToComplete
+    if ($WordToComplete -match '^(?<option>--?[A-Za-z][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $optionName = $Matches.option
+        $valuePrefix = $optionName + '='
+        $valueWord = $Matches.value
+    } elseif ($previousToken.StartsWith('-')) {
+        $optionName = $previousToken
+    }
+
+    if ($optionName) {
+        if ($enumValues.ContainsKey($optionName)) {
+            return @(foreach ($value in $enumValues[$optionName]) {
+                if ($value.StartsWith($valueWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [System.Management.Automation.CompletionResult]::new($valuePrefix + $value, $value, 'ParameterValue', $value)
+                }
+            })
+        }
+
+        if ($directoryOptions.Contains($optionName)) {
+            return @(foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($valueWord)) {
+                if ($item.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
+                    continue
+                }
+
+                if ($valuePrefix) {
+                    [System.Management.Automation.CompletionResult]::new($valuePrefix + $item.CompletionText, $item.ListItemText, $item.ResultType, $item.ToolTip)
+                } else {
+                    $item
+                }
+            })
+        }
+
+        return @()
+    }
+
+    if ($node -eq 'codex;completion' -and -not $WordToComplete.StartsWith('-')) {
+        return @(foreach ($shell in @('bash', 'elvish', 'fish', 'powershell', 'zsh')) {
+            if ($shell.StartsWith($WordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [System.Management.Automation.CompletionResult]::new($shell, $shell, 'ParameterValue', "Generate $shell completions")
+            }
+        })
+    }
+
+    @()
+}
+
 function Invoke-CodexCompletion {
     [CmdletBinding()]
     param(
@@ -125,6 +212,11 @@ function Invoke-CodexCompletion {
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
+
+    $valueResults = @(Get-CodexValueCompletion -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition)
+    if ($valueResults.Count -gt 0) {
+        return $valueResults
+    }
 
     $completionInvoker = Get-CodexCompletionInvoker
     if ($null -eq $completionInvoker) {

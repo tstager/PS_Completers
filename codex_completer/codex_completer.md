@@ -50,9 +50,13 @@ Execution flow:
   so only the generated PowerShell source is cached.
 - The generated script is authoritative for command, subcommand, and option
   coverage, so completion behavior tracks the installed `codex` version.
-- The current upstream script does not appear to offer shell-name completions
-  after `codex completion`, so PowerShell can still fall back to filesystem
-  completion for inputs such as `codex completion p`.
+- The upstream script only emits option and subcommand names, never option
+  values, so the wrapper adds a small value overlay before delegating to it:
+  `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--local-provider` and
+  `exec --color` complete their documented closed sets (also in the
+  `--opt=value` form), `-C`/`--cd`/`--add-dir` complete directories, and
+  `codex completion <TAB>` offers `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+  Every other slot still goes to the generated script.
 - Import time stays cheap because the script does not call `codex` until a real
   completion request occurs.
 
