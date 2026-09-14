@@ -648,6 +648,7 @@
                 @{ CommandName = 'pnpm'; Native = $true }
                 @{ CommandName = 'pnpm.cmd'; Native = $true }
                 @{ CommandName = 'pnpm.ps1'; Native = $true }
+                @{ CommandName = 'pn'; Native = $true }
             )
         }
         @{

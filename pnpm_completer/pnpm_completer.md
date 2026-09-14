@@ -2,111 +2,118 @@
 
 ## What it completes / overview
 
-`pnpm_completer.ps1` is a **tool-backed** standalone completer for the local
+`pnpm_completer.ps1` is a **help-driven** standalone completer for the local
 `pnpm` CLI.
 
-It wraps pnpm's official generated PowerShell completion script from:
+pnpm 12 is a clap application, so every node of the command tree prints a
+long-form help page with the same layout. The completer parses those pages and
+builds its catalog from them:
 
-```powershell
-pnpm completion pwsh
-```
+- root commands, their aliases and their descriptions come from `pnpm help`
+- every deeper node comes from `pnpm help <command> [<subcommand> ...]`
+- options, their short/long spellings, their value names and their enum values
+  come from the `Options:` section of the same page
 
-instead of re-implementing the full pnpm command tree in this repository.
-
-The repository wrapper is also **importer-safe**:
-
-- no top-level external command calls
-- no top-level cache initialization
-- no top-level loops or helper invocations
-- one literal `Register-ArgumentCompleter -Native` call for all registered
-  launcher names
+Nothing is hardcoded, so the surface always matches the installed pnpm.
 
 ## Registration and command names
 
 The script registers a native completer for:
 
 ```powershell
-'pnpm', 'pnpm.cmd', 'pnpm.ps1'
+'pnpm', 'pnpm.cmd', 'pnpm.ps1', 'pn'
 ```
 
-That broader registration is intentional on this machine because PowerShell can
-resolve pnpm through multiple launcher names on Windows, while the upstream
-generated script self-registers only for `pnpm`.
+`pnpm.cmd` and `pnpm.ps1` are registered because PowerShell can resolve pnpm
+through several launcher names on Windows. `pn` is registered because pnpm's own
+`pnpm completion pwsh` output registers that short alias too.
 
 ## How completion works
 
-Execution flow:
-
 1. `Set-StrictMode -Version Latest` is enabled.
-2. On the first real completion request, the wrapper lazily resolves a launcher
-   path, preferring `pnpm.cmd`, then `pnpm`, then `pnpm.ps1`.
-3. It runs `pnpm completion pwsh` through that resolved launcher.
-4. It rewrites pnpm's self-registration line into an invokable script block.
-5. It compiles and caches that script block in script scope.
-6. Later completion requests reuse the cached upstream invoker instead of
-   regenerating the script.
+2. A guarded `$script:PnpmCompletionCache` holds the resolved launcher path and
+   the parsed help catalogs. Nothing runs at import time.
+3. On the first completion request the launcher is resolved once, preferring
+   `pnpm.cmd`, then `pnpm`, then `pnpm.ps1`.
+4. The settled argument tokens are taken from `$commandAst.CommandElements`.
+   A token that ends at or after the cursor is the word being completed, not a
+   settled argument, so an exact subcommand under the cursor still completes.
+5. Those tokens are walked to resolve the command path. Options are skipped, and
+   a value-bearing option also consumes the token after it, so a universal
+   rc-option before the subcommand (`pnpm -r add -`, `pnpm -C . config `) does
+   not break subcommand detection. Command aliases resolve to their canonical
+   name before the next help page is fetched.
+6. Each help page is parsed once and cached for the session, including the
+   negative result, so a failing or missing pnpm costs one probe rather than one
+   per keystroke.
 
-## Minimal fallback behavior
+Help is invoked with standard input closed (`$null | & $launcher help ...`) so a
+tool that waits on stdin cannot hang the prompt.
 
-The official pnpm completion is the primary engine.
+## Option and value completion
 
-However, on this machine the upstream generator can still leave some contexts
-without results, which causes PowerShell to fall back to filesystem completion
-for inputs like:
+Option spellings are matched ordinally, which keeps pnpm's case-distinct short
+flags (`-P`, `-D`, `-O`, `-E`, `-C`, `-F`) separate from each other.
 
-- `pnpm config `
-- `pnpm store `
-- `pnpm cache `
+Option values come from the help page:
 
-To keep those slots useful, the wrapper adds a **small lazy help-based
-fallback**:
+- `[possible values: a, b, c]` and clap's `Possible values:` blocks become enum
+  completions with their per-value descriptions as tooltips
+  (`pnpm --loglevel <TAB>` -> `silent error warn info debug`)
+- a `<DIR>` value name becomes directory completion (`pnpm --dir <TAB>`)
+- a `<...FILE>` or `<...PATH>` value name becomes file completion
+- anything else becomes a `<VALUE_NAME>` placeholder, so the engine's filename
+  fallback does not take over a non-path slot
 
-- root commands come from `pnpm help -a`
-- nested `config`, `store`, and `cache` command surfaces come from
-  `pnpm help <command>`
-- option fallback stays limited to command names and option names only
+Both value forms work. The separate form (`pnpm --reporter <TAB>`) offers bare
+values; the attached form (`pnpm --reporter=de<TAB>`) keeps the `--reporter=`
+prefix on the inserted text.
 
-The fallback does **not** do project/package/workspace/registry discovery.
+## Operand slots
+
+A pnpm node either dispatches to subcommands or takes operands. When the
+resolved node has no subcommands, the completer returns nothing for a bare word,
+so PowerShell's own path completion runs for operands such as
+`pnpm add ./local-package`.
 
 ## Import-CompleterScript compatibility
 
-The top level stays compatible with `CompleterActions` `Import-CompleterScript`
-by limiting it to:
+The top level stays inside the `CompleterActions` strict import grammar:
 
 - `Set-StrictMode`
 - function definitions
+- one guarded `$script:` cache initializer
 - one literal `Register-ArgumentCompleter -Native` call
 
-There are no top-level assignments, `try`/`catch` blocks, loops, helper
-invocations, or external command calls.
+`Test-CompleterScript` returns no findings.
 
 ## Runtime notes
 
-- Local pnpm version during implementation: `10.33.3`
-- Local launcher names observed: `pnpm`, `pnpm.cmd`, `pnpm.ps1`
-- No `pnpm.exe` was present on this machine
-- The wrapper intentionally depends on `pnpm help <command>` instead of
-  `<command> --help` for fallback parsing
-- The wrapper does not depend on `pnpm exec --help`, because that surface is
-  unreliable in an empty or non-package repository
+- Local pnpm version during this revision: `12.4.1`
+- Local launcher names observed: `pnpm`, `pnpm.cmd`, `pnpm.ps1`; no `pnpm.exe`
+- `pnpm help -a` does not exist in pnpm 12; the root list comes from `pnpm help`
+- The completer deliberately does not load `pnpm completion pwsh`. That
+  generated script writes `$env:SHELL`, `$env:COMP_LINE` and `$env:COMP_POINT`
+  into the session on every keystroke and spawns `pnpm completion-server`, and
+  it returns bare strings with no tooltips, short flags or value completion.
+- `@()` over a `System.Collections.Generic.List[object]` throws
+  `Argument types do not match` on PowerShell 7.6, so the script calls
+  `.ToArray()` before wrapping a list.
 
 ## Representative validation
 
-Validated in clean `pwsh -NoProfile` sessions with:
+Validated in clean `pwsh -NoProfile` sessions with `TabExpansion2`:
 
-- parser check and clean dot-source load
-- `Import-CompleterScript`
-- `TabExpansion2 'pnpm '`
-- `TabExpansion2 'pnpm a'`
-- `TabExpansion2 'pnpm add --'`
-- `TabExpansion2 'pnpm config '`
-- `TabExpansion2 'pnpm store '`
-- `TabExpansion2 'pnpm cache '`
-- `TabExpansion2 'pnpm.cmd '`
-- `TabExpansion2 'pnpm.ps1 '`
-
-Validation also confirmed:
-
-- the upstream script is not loaded at import time
-- first completion lazily creates the cached upstream invoker
-- later completions reuse that cached invoker
+- `pnpm ` -> 125 command spellings (aliases included)
+- `pnpm -` -> 41 option spellings, `pnpm --` -> 34
+- `pnpm ad` -> `add`, `adduser`
+- `pnpm add -` -> 70 option spellings including `-P`, `-D`, `-O`, `-E`
+- `pnpm --reporter ` -> `default append-only ndjson silent`
+- `pnpm --reporter=de` -> `--reporter=default`
+- `pnpm --loglevel ` -> `silent error warn info debug`
+- `pnpm --dir ` -> directories only
+- `pnpm -r add -` and `pnpm -C . config ` -> correct per-command surface
+- `pnpm config set` with the cursor at the end of `set` -> `set`
+- `pn ` -> the same root command list
+- `$x = 1; pnpm ad` -> the same result as at the start of a line
+- `$Error` did not grow across the probe set
