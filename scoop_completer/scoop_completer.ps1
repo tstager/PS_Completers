@@ -121,13 +121,15 @@ function Get-ScoopCompletionCache {
             New-ScoopOptionSpec -Tokens @('-u', '--no-update-scoop') -Description 'Do not update Scoop before installing.'
             New-ScoopOptionSpec -Tokens @('-a', '--arch') -Description 'Use the specified architecture.' -ValueKind 'Arch'
         )
+        # libexec/scoop-download.ps1: getopt $args 'fsua:' 'force', 'skip-hash-check', 'no-update-scoop', 'arch='
         $downloadOptions = @(
-            New-ScoopOptionSpec -Tokens @('-g', '--global') -Description 'Download for a globally installed app.'
-            New-ScoopOptionSpec -Tokens @('-i', '--independent') -Description 'Do not install dependencies automatically.'
-            New-ScoopOptionSpec -Tokens @('-k', '--no-cache') -Description 'Do not use the download cache.'
+            New-ScoopOptionSpec -Tokens @('-f', '--force') -Description 'Force download even when the file already exists in the cache.'
             New-ScoopOptionSpec -Tokens @('-s', '--skip-hash-check') -Description 'Skip hash verification.'
             New-ScoopOptionSpec -Tokens @('-u', '--no-update-scoop') -Description 'Do not update Scoop before downloading.'
             New-ScoopOptionSpec -Tokens @('-a', '--arch') -Description 'Use the specified architecture.' -ValueKind 'Arch'
+        )
+        $helpOptions = @(
+            New-ScoopOptionSpec -Tokens @('-h', '--help', '/?') -Description 'Show help for this command.'
         )
         $updateOptions = @(
             New-ScoopOptionSpec -Tokens @('-f', '--force') -Description 'Force update even when there is no newer version.'
@@ -155,7 +157,10 @@ function Get-ScoopCompletionCache {
                 'alias', 'bucket', 'cache', 'cat', 'checkup', 'cleanup', 'config', 'create', 'depends', 'download',
                 'export', 'help', 'hold', 'home', 'import', 'info', 'install', 'list', 'prefix', 'reset', 'search',
                 'shim', 'status', 'unhold', 'uninstall', 'update', 'virustotal', 'which'
-            ) -Options @() -Positionals @()
+            ) -Options @(
+                $helpOptions
+                New-ScoopOptionSpec -Tokens @('-v', '--version') -Description 'Show the Scoop version.'
+            ) -Positionals @()
             New-ScoopCommandSpec -Path 'alias' -Description 'Manage scoop aliases.' -Subcommands @('add', 'rm', 'list') -Options @() -Positionals @()
             New-ScoopCommandSpec -Path 'alias add' -Description 'Add a Scoop alias.' -Subcommands @() -Options @() -Positionals @('AliasNameNew', 'AliasCommand', 'Description')
             New-ScoopCommandSpec -Path 'alias rm' -Description 'Remove a Scoop alias.' -Subcommands @() -Options @() -Positionals @('AliasName')
@@ -178,7 +183,9 @@ function Get-ScoopCompletionCache {
             New-ScoopCommandSpec -Path 'config' -Description 'Get or set Scoop configuration.' -Subcommands @('rm') -Options @() -Positionals @('ConfigKey', 'ConfigValue')
             New-ScoopCommandSpec -Path 'config rm' -Description 'Remove a Scoop configuration value.' -Subcommands @() -Options @() -Positionals @('ConfigKey')
             New-ScoopCommandSpec -Path 'create' -Description 'Create a custom app manifest.' -Subcommands @() -Options @() -Positionals @('Url')
-            New-ScoopCommandSpec -Path 'depends' -Description 'List app dependencies.' -Subcommands @() -Options @() -Positionals @('ManifestApp')
+            New-ScoopCommandSpec -Path 'depends' -Description 'List app dependencies.' -Subcommands @() -Options @(
+                New-ScoopOptionSpec -Tokens @('-a', '--arch') -Description 'Use the specified architecture.' -ValueKind 'Arch'
+            ) -Positionals @('ManifestApp')
             New-ScoopCommandSpec -Path 'download' -Description 'Download apps into the cache.' -Subcommands @() -Options $downloadOptions -Positionals @('InstallTarget')
             New-ScoopCommandSpec -Path 'export' -Description 'Export installed apps and buckets.' -Subcommands @() -Options @(
                 New-ScoopOptionSpec -Tokens @('-c', '--config') -Description 'Export the Scoop configuration file too.'
@@ -193,7 +200,9 @@ function Get-ScoopCompletionCache {
             New-ScoopCommandSpec -Path 'install' -Description 'Install apps.' -Subcommands @() -Options $installOptions -Positionals @('InstallTarget')
             New-ScoopCommandSpec -Path 'list' -Description 'List installed apps.' -Subcommands @() -Options @() -Positionals @('InstalledAppQuery')
             New-ScoopCommandSpec -Path 'prefix' -Description 'Return the path to an app.' -Subcommands @() -Options @() -Positionals @('InstalledApp')
-            New-ScoopCommandSpec -Path 'reset' -Description 'Reset an app or switch active version.' -Subcommands @() -Options @() -Positionals @('InstalledAppOrAll')
+            New-ScoopCommandSpec -Path 'reset' -Description 'Reset an app or switch active version.' -Subcommands @() -Options @(
+                New-ScoopOptionSpec -Tokens @('-a', '--all') -Description 'Reset all apps.'
+            ) -Positionals @('InstalledAppOrAll')
             New-ScoopCommandSpec -Path 'search' -Description 'Search available apps.' -Subcommands @() -Options @() -Positionals @('Query')
             New-ScoopCommandSpec -Path 'shim' -Description 'Manipulate Scoop shims.' -Subcommands @('add', 'rm', 'list', 'info', 'alter') -Options @() -Positionals @()
             New-ScoopCommandSpec -Path 'shim add' -Description 'Add a custom shim.' -Subcommands @() -Options $shimOptions -Positionals @('ShimNameNew', 'CommandPath', 'PassthroughArg')
@@ -222,6 +231,11 @@ function Get-ScoopCompletionCache {
 
         $specLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($spec in $commandSpecs) {
+            # bin/scoop.ps1 routes -h/--help//? as the first argument of every subcommand to 'help'.
+            if ($spec.Path -ne '') {
+                $spec.Options = @($spec.Options) + $helpOptions
+            }
+
             $specLookup[$spec.Path] = $spec
         }
 
@@ -658,14 +672,7 @@ function Get-ScoopCommandState {
             continue
         }
 
-        if ($token -match '^(?<option>--[A-Za-z0-9-]+)=(?<value>.*)$') {
-            $option = Find-ScoopOptionSpec -PathKey $pathKey -Token $matches['option']
-            if ($option) {
-                continue
-            }
-        }
-
-        if ($token.StartsWith('-') -and $token -ne '-') {
+        if (($token.StartsWith('-') -and $token -ne '-') -or $token -eq '/?') {
             $option = Find-ScoopOptionSpec -PathKey $pathKey -Token $token
             if ($option) {
                 if ($option.ValueKind -and -not $option.OptionalValue) {
@@ -832,6 +839,112 @@ function Get-ScoopStringValueResults {
     @(Get-ScoopDistinctResults -Results @($results.ToArray()))
 }
 
+function Get-ScoopAppVersionList {
+    # Versions available for app@version: the installed version directories plus the manifest version.
+    param([string]$AppName)
+
+    $name = $AppName
+    if ($name.Contains('/')) {
+        $name = $name.Substring($name.LastIndexOf('/') + 1)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($name) -or $name -match '[\\*?\[\]]') {
+        return @()
+    }
+
+    $rootPath = Get-ScoopRootPath
+    $versions = New-Object System.Collections.Generic.List[string]
+
+    $appDirectory = Join-Path -Path $rootPath -ChildPath ('apps\' + $name)
+    foreach ($directory in @(Get-ChildItem -LiteralPath $appDirectory -Directory -ErrorAction Ignore)) {
+        if ($directory.Name -ne 'current') {
+            [void]$versions.Add($directory.Name)
+        }
+    }
+
+    foreach ($manifest in @(Get-ChildItem -Path (Join-Path -Path $rootPath -ChildPath ('buckets\*\bucket\' + $name + '.json')) -ErrorAction Ignore)) {
+        try {
+            $manifestObject = Get-Content -LiteralPath $manifest.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($manifestObject.PSObject.Properties['version'] -and $manifestObject.version) {
+                [void]$versions.Add([string]$manifestObject.version)
+            }
+        } catch {
+            Write-Debug "scoop manifest '$($manifest.FullName)' could not be read: $($_.Exception.Message)"
+        }
+    }
+
+    Get-ScoopUniqueStrings -Items @($versions.ToArray())
+}
+
+function Get-ScoopAppAtVersionResult {
+    # Completes the '<app>@<version>' form: the base name is kept and the app's versions are offered.
+    param(
+        [string]$CurrentValue,
+        [string]$ToolTip,
+        [string]$Prefix = ''
+    )
+
+    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    if ($value -notmatch '^(?<base>[^@]+)@(?<suffix>[^@]*)$') {
+        return @()
+    }
+
+    $base = $matches['base']
+    $suffix = $matches['suffix']
+    $results = New-Object System.Collections.Generic.List[object]
+
+    foreach ($version in @(Get-ScoopAppVersionList -AppName $base)) {
+        if ($version.StartsWith($suffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [void]$results.Add((New-ScoopCompletionResult -CompletionText ($Prefix + $base + '@' + $version) -ToolTip ('Version ' + $version + ' of ' + $base + '.') -ListItemText ($base + '@' + $version)))
+        }
+    }
+
+    if ($results.Count -eq 0) {
+        [void]$results.Add((New-ScoopCompletionResult -CompletionText ($Prefix + $base + '@' + '<version>') -ToolTip $ToolTip -ListItemText ($base + '@<version>')))
+    }
+
+    @(Get-ScoopDistinctResults -Results @($results.ToArray()))
+}
+
+function Get-ScoopBucketScopedManifestNameList {
+    # '<bucket>/<app>' scopes the manifest scan to that bucket and keeps the prefix on every result.
+    param([string]$CurrentValue)
+
+    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    if ($value -notmatch '^(?<bucket>[A-Za-z0-9._-]+)/(?<app>[^/@]*)$') {
+        return @()
+    }
+
+    $bucket = $matches['bucket']
+    $rootPath = Get-ScoopRootPath
+    $bucketPattern = Join-Path -Path $rootPath -ChildPath ('buckets\' + $bucket + '\bucket\*.json')
+    $names = @(Get-ChildItem -Path $bucketPattern -ErrorAction Ignore | ForEach-Object { $bucket + '/' + [System.IO.Path]::GetFileNameWithoutExtension($_.Name) })
+    Get-ScoopUniqueStrings -Items $names
+}
+
+function Get-ScoopAppNameResult {
+    # Shared app-name slot: handles '<app>@<version>' and '<bucket>/<app>' before plain name matching.
+    param(
+        [string[]]$Values,
+        [string]$CurrentValue,
+        [string]$Placeholder,
+        [string]$ToolTip,
+        [switch]$SuggestWhenEmpty,
+        [string]$Prefix = ''
+    )
+
+    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    if ($value -match '^[^@]+@[^@]*$') {
+        return Get-ScoopAppAtVersionResult -CurrentValue $CurrentValue -ToolTip $ToolTip -Prefix $Prefix
+    }
+
+    if ($value -match '^[A-Za-z0-9._-]+/') {
+        return Get-ScoopStringValueResults -Values (Get-ScoopBucketScopedManifestNameList -CurrentValue $CurrentValue) -CurrentValue $CurrentValue -Placeholder $null -ToolTip $ToolTip -Prefix $Prefix
+    }
+
+    Get-ScoopStringValueResults -Values $Values -CurrentValue $CurrentValue -Placeholder $Placeholder -ToolTip $ToolTip -SuggestWhenEmpty:$SuggestWhenEmpty -Prefix $Prefix
+}
+
 function Get-ScoopInstallTargetResults {
     param([string]$CurrentValue)
 
@@ -844,29 +957,21 @@ function Get-ScoopInstallTargetResults {
         return New-ScoopLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<manifest-url>' -ToolTip 'Manifest URL.'
     }
 
-    if ($value -match '^(?<base>.+)@(?<suffix>[^@]*)$') {
+    if ($value -match '^(?<base>.+)@(?<suffix>[^@]*)$' -and (Test-ScoopPathLikeInput -Value $matches['base'])) {
         $base = $matches['base']
         $suffix = $matches['suffix']
-        if (Test-ScoopPathLikeInput -Value $base) {
-            $results = foreach ($result in @(Get-ScoopPathCompletions -InputPath $base)) {
-                $updatedValue = ConvertTo-ScoopQuotedValue -Value ((Remove-ScoopOuterQuotes -Value $result.CompletionText) + '@' + $suffix) -AlwaysQuote ($result.CompletionText.StartsWith('"') -and $result.CompletionText.EndsWith('"'))
-                New-ScoopCompletionResult -CompletionText $updatedValue -ToolTip $result.ToolTip -ListItemText ($result.ListItemText + '@' + $suffix)
-            }
-            return @(Get-ScoopDistinctResults -Results $results)
+        $results = foreach ($result in @(Get-ScoopPathCompletions -InputPath $base)) {
+            $updatedValue = ConvertTo-ScoopQuotedValue -Value ((Remove-ScoopOuterQuotes -Value $result.CompletionText) + '@' + $suffix) -AlwaysQuote ($result.CompletionText.StartsWith('"') -and $result.CompletionText.EndsWith('"'))
+            New-ScoopCompletionResult -CompletionText $updatedValue -ToolTip $result.ToolTip -ListItemText ($result.ListItemText + '@' + $suffix)
         }
-
-        $manifestResults = Get-ScoopStringValueResults -Values (Get-ScoopManifestAppNames) -CurrentValue $base -Placeholder $null -ToolTip 'Locally available manifest name.'
-        foreach ($result in @($manifestResults)) {
-            New-ScoopCompletionResult -CompletionText ($result.CompletionText + '@' + $suffix) -ToolTip $result.ToolTip -ListItemText ($result.ListItemText + '@' + $suffix)
-        }
-        return
+        return @(Get-ScoopDistinctResults -Results $results)
     }
 
     if (Test-ScoopPathLikeInput -Value $value) {
         return Get-ScoopPathCompletions -InputPath $CurrentValue
     }
 
-    Get-ScoopStringValueResults -Values (Get-ScoopManifestAppNames) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Locally available manifest name.'
+    Get-ScoopAppNameResult -Values (Get-ScoopManifestAppNames) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Locally available manifest name.'
 }
 
 function Get-ScoopConfigValueResults {
@@ -910,14 +1015,19 @@ function Get-ScoopValueResults {
 
     switch ($ValueKind) {
         'Arch' { return Get-ScoopStringValueResults -Values @('32bit', '64bit', 'arm64') -CurrentValue $CurrentValue -Placeholder $null -ToolTip 'Supported architecture.' -SuggestWhenEmpty -Prefix $Prefix }
-        'InstalledApp' { return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Installed Scoop app.' -SuggestWhenEmpty -Prefix $Prefix }
+        'InstalledApp' { return Get-ScoopAppNameResult -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Installed Scoop app.' -SuggestWhenEmpty -Prefix $Prefix }
         'InstalledAppQuery' { return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<query>' -ToolTip 'Installed app query.' -SuggestWhenEmpty -Prefix $Prefix }
         'InstalledAppOrAll' {
-            return Get-ScoopStringValueResults -Values (@('*') + (Get-ScoopInstalledApps)) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Installed Scoop app or *.' -SuggestWhenEmpty -Prefix $Prefix
+            return Get-ScoopAppNameResult -Values (@('*') + (Get-ScoopInstalledApps)) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Installed Scoop app or *.' -SuggestWhenEmpty -Prefix $Prefix
         }
         'ManifestApp' {
+            # Empty word: the (small) installed list; once typed: installed plus every local manifest.
+            if ([string]::IsNullOrWhiteSpace((Remove-ScoopOuterQuotes -Value $CurrentValue))) {
+                return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Scoop app name.' -SuggestWhenEmpty -Prefix $Prefix
+            }
+
             $combined = Get-ScoopUniqueStrings -Items ((Get-ScoopInstalledApps) + (Get-ScoopManifestAppNames))
-            return Get-ScoopStringValueResults -Values $combined -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Scoop app name.' -Prefix $Prefix
+            return Get-ScoopAppNameResult -Values $combined -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Scoop app name.' -Prefix $Prefix
         }
         'InstallTarget' { return Get-ScoopInstallTargetResults -CurrentValue $CurrentValue }
         'KnownBucketName' { return Get-ScoopStringValueResults -Values (Get-ScoopKnownBuckets) -CurrentValue $CurrentValue -Placeholder '<bucket>' -ToolTip 'Known Scoop bucket.' -SuggestWhenEmpty -Prefix $Prefix }
@@ -1050,18 +1160,12 @@ function Complete-ScoopNative {
 
     $state = Get-ScoopCommandState -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
 
-    if ($state.CurrentToken -match '^(?<option>--[A-Za-z0-9-]+)=(?<value>.*)$') {
-        $inlineOption = Find-ScoopOptionSpec -PathKey $state.PathKey -Token $matches['option']
-        if ($inlineOption -and $inlineOption.ValueKind) {
-            return Get-ScoopValueResults -ValueKind $inlineOption.ValueKind -CurrentValue $matches['value'] -State $state -Prefix ($matches['option'] + '=')
-        }
-    }
-
+    # scoop's getopt rejects '--arch=64bit'; only the space-separated form is completed.
     if ($state.PendingOption) {
         return Get-ScoopValueResults -ValueKind $state.PendingOption.ValueKind -CurrentValue $state.CurrentToken -State $state
     }
 
-    if (-not $state.AfterDoubleDash -and $state.CurrentToken.StartsWith('-')) {
+    if (-not $state.AfterDoubleDash -and ($state.CurrentToken.StartsWith('-') -or $state.CurrentToken.StartsWith('/'))) {
         return Write-ScoopOptionResults -PathKey $state.PathKey -CurrentToken $state.CurrentToken
     }
 

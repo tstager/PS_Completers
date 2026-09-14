@@ -93,7 +93,9 @@ Free-form slots intentionally use placeholders to suppress noisy filesystem fall
 ```powershell
 scoop
 scoop install -
-scoop install --arch=
+scoop install --arch 
+scoop install 7zip@
+scoop info main/
 scoop uninstall
 scoop bucket add
 scoop config default_architecture
@@ -111,4 +113,8 @@ scoop shim add myshim .\
 
 - The completer does not call `scoop search` during completion, so remote or very broad app discovery is not attempted on every keypress.
 - Local bucket manifest names are only offered after the user has started typing a prefix, to avoid dumping a very large list on empty input.
-- Version suffixes like `app@version` are treated conservatively; the completer preserves the typed suffix but does not try to enumerate versions.
+- `app@version` completes the versions found under `<root>\apps\<app>\` (excluding `current`) plus the manifest's `version`; `bucket/app` scopes the manifest scan to that bucket.
+- `--option=value` is deliberately not completed because scoop's `getopt` rejects that form (`Option --arch=64bit not recognized`); only the space-separated `--arch <value>` form is offered.
+- Every subcommand offers `-h`/`--help`/`/?`, and the root offers `-v`/`--version` too, mirroring `bin\scoop.ps1`'s dispatch.
+- `download` exposes exactly its own getopt surface (`-f`/`--force`, `-s`, `-u`, `-a`), `depends` takes `-a`/`--arch` and `reset` takes `-a`/`--all`.
+- `info`, `cat`, `home` and `depends` list the installed apps on an empty word and the full manifest set once a prefix is typed.
