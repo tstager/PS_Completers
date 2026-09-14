@@ -719,6 +719,10 @@ function Update-GawkParseState {
 
                     continue
                 }
+
+                # An unrecognised long option (typo, newer gawk) is still an
+                # option, not the program text; leave the state untouched.
+                continue
             } elseif ($token.StartsWith('-') -and ($token -ne '-')) {
                 Parse-GawkShortToken -Token $token -State $state
                 continue
@@ -764,9 +768,17 @@ function Get-GawkPathCompletions {
     $text = if ($null -eq $InputText) { '' } else { $InputText }
     $trimmedInput = $text.Trim('"')
 
+    # $prefixText is the part of the typed word that precedes the leaf, kept
+    # exactly as typed so completions extend the user's own text ('.\',
+    # 'sub\', '..\', 'C:\') instead of pasting absolute paths.
     if ([string]::IsNullOrWhiteSpace($trimmedInput)) {
         $parent = '.'
         $leaf = ''
+        $prefixText = ''
+    } elseif ($trimmedInput -match '[\\/]$') {
+        $parent = $trimmedInput
+        $leaf = ''
+        $prefixText = $trimmedInput
     } else {
         $parent = Split-Path -Path $trimmedInput -Parent
         if ([string]::IsNullOrWhiteSpace($parent)) {
@@ -774,6 +786,7 @@ function Get-GawkPathCompletions {
         }
 
         $leaf = Split-Path -Path $trimmedInput -Leaf
+        $prefixText = $trimmedInput.Substring(0, $trimmedInput.Length - $leaf.Length)
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
@@ -806,15 +819,7 @@ function Get-GawkPathCompletions {
     )
 
     foreach ($item in $sortedItems) {
-        $completionText = if ($trimmedInput -and -not [System.IO.Path]::IsPathRooted($trimmedInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
-            $item.FullName
-        }
+        $completionText = $prefixText + $item.Name
 
         if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
@@ -926,7 +931,8 @@ function Get-GawkOptionCompletions {
 
     $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
-    $seen = @{}
+    # Short options are case-distinct (-f/-F, -d/-D ...), so dedupe ordinally.
+    $seen = [System.Collections.Generic.Dictionary[string, bool]]::new([System.StringComparer]::Ordinal)
 
     if ([string]::IsNullOrWhiteSpace($word) -or '--'.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
         $key = '--'
@@ -944,7 +950,7 @@ function Get-GawkOptionCompletions {
             [pscustomobject]@{ Text = $definition.Long; ToolTip = $definition.Description }
         )) {
             if ($candidate.Text.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $key = $candidate.Text.ToLowerInvariant()
+                $key = $candidate.Text
                 if ($seen.ContainsKey($key)) {
                     continue
                 }
@@ -963,7 +969,7 @@ function Get-GawkOptionCompletions {
         }
 
         if ($candidate.CompletionText.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $key = $candidate.CompletionText.ToLowerInvariant()
+            $key = $candidate.CompletionText
             if ($seen.ContainsKey($key)) {
                 continue
             }
@@ -1013,24 +1019,28 @@ function Complete-GawkNative {
         [int]$CursorPosition
     )
 
-    [object[]]$commandElements = @($CommandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    if ($commandElements.Count -eq 0) {
+    # Tokenise the raw command text up to the cursor instead of using
+    # CommandElements: the parser drops a bare comma ('-F,'), and text after
+    # the cursor must not influence the parse state.
+    $commandText = $CommandAst.Extent.Text
+    $relativeCursor = [Math]::Max(0, [Math]::Min($CursorPosition - $CommandAst.Extent.StartOffset, $commandText.Length))
+    $prefixText = $commandText.Substring(0, $relativeCursor)
+    [object[]]$rawTokens = @([regex]::Matches($prefixText, '(?:"[^"]*"?|''[^'']*''?|[^\s"'']+)+') | ForEach-Object { $_.Value })
+    if ($rawTokens.Count -eq 0) {
         return
     }
 
-    Initialize-GawkCompletionCatalog -CommandName $commandElements[0]
+    Initialize-GawkCompletionCatalog -CommandName $rawTokens[0]
 
-    $currentWord = Get-GawkCurrentWord -WordToComplete $WordToComplete
-    [object[]]$argumentTokens = if ($commandElements.Count -gt 1) {
-        @($commandElements[1..($commandElements.Count - 1)])
-    } else {
-        @()
+    $cursorAfterWhitespace = ($CursorPosition -gt $CommandAst.Extent.EndOffset) -or ($prefixText -match '\s$')
+    $currentWord = if ($cursorAfterWhitespace) { '' } else { [string]$rawTokens[-1] }
+    if (-not $cursorAfterWhitespace -and $rawTokens.Count -eq 1) {
+        $currentWord = Get-GawkCurrentWord -WordToComplete $WordToComplete
     }
 
-    [object[]]$completedTokens = if ([string]::IsNullOrEmpty($currentWord)) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 1) {
-        @($argumentTokens[0..($argumentTokens.Count - 2)])
+    $completedCount = if ($cursorAfterWhitespace) { $rawTokens.Count - 1 } else { $rawTokens.Count - 2 }
+    [object[]]$completedTokens = if ($completedCount -gt 0) {
+        @($rawTokens | Select-Object -Skip 1 -First $completedCount)
     } else {
         @()
     }

@@ -83,6 +83,8 @@ This lets the completer recognize safe GNU-style long-option abbreviations witho
 
 ### 4. Parse-state tracking
 
+`Complete-GawkNative` tokenises the raw command text up to the cursor itself (quoted segments kept whole) rather than using `CommandElements`, because the PowerShell parser drops a bare comma such as the one in `-F,` and because text after the cursor must not influence the parse state when editing mid-line.
+
 `Update-GawkParseState` walks the already completed tokens and keeps a small state object:
 
 - `EndOfOptions`
@@ -101,6 +103,7 @@ That state is used to distinguish:
 Important semantics handled by the parser:
 
 - `--` stops option parsing,
+- an unrecognised long option (a typo or an option from a newer gawk) is skipped as an option instead of being charged as the program text,
 - `-f`, `--file`, `-e`, `--source`, and `-E`, `--exec` count as providing program source,
 - if no program source has been provided yet, the first non-option positional token is treated as the awk program source,
 - after program source exists, trailing tokens can be assignments and/or input files,
@@ -140,6 +143,8 @@ The completer also supports:
 - attached short-value forms such as `-fscript.awk`, `-F,`, and `-lname`
 - long `--option=value` forms when the option allows equals syntax
 
+Path completions extend the text the user typed: an empty word lists the current directory by name (never as absolute paths), a trailing separator (`.\`, `sub\`, `..\`) lists that directory's children, and a rooted prefix keeps the drive.
+
 ## Key completion behaviors / supported values
 
 ### Option completion
@@ -147,7 +152,7 @@ The completer also supports:
 The completer suggests:
 
 - `--` as an explicit end-of-options marker
-- short options such as `-f`, `-F`, `-v`, `-e`, `-E`, `-i`, `-l`, `-L`, `-p`, `-o`, `-d`, and `-D`
+- short options such as `-f`, `-F`, `-v`, `-e`, `-E`, `-i`, `-l`, `-L`, `-p`, `-o`, `-d`, and `-D` (all 29 case-distinct pairs are offered; the menu is deduplicated ordinally)
 - long options such as `--file`, `--field-separator`, `--assign`, `--source`, `--exec`, `--include`, `--load`, `--lint`, `--profile`, `--pretty-print`, `--dump-variables`, and the remaining help-validated gawk options
 - minimal safe long-option abbreviations when a long option has a unique prefix
 
@@ -220,3 +225,4 @@ gawk -E .\script.awk .\in<TAB>
 - Before program source is known, the first positional token is treated as the awk program slot, so the completer intentionally avoids guessing file paths there.
 - `--load` suggestions are local-only. They come from a seeded list plus libraries found in `AWKLIBPATH` and nearby install directories; the script does not search remote package sources or arbitrary system inventories.
 - Help-based option filtering depends on the general shape of `gawk --help`. If that output changes significantly, the script falls back to the embedded definitions.
+- `gawk -F,` with the cursor right after the comma is never handed to a native completer by the engine (the trailing comma is a parse error), so nothing can be offered there; `gawk -F, '{print $1}' <TAB>` works.
