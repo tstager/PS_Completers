@@ -23,19 +23,22 @@ The implementation is hybrid:
 
 ### Value-aware switches
 
-- numeric slots (`-m`, `-n`, `-d`, `-h`) return sample numbers
+- numeric slots (`-m`, `-n`, `-d`, `-h`) return sample numbers, filtered by the typed prefix
 - date slots (`-a`, `-b`) return `mm/dd/yy`-style hints
 - `-f` returns filter-letter samples such as `we`
-- `-i` and `-e` return comma-separated event ID hints
+- `-i` and `-e` return comma-separated event ID hints; the last comma-separated segment is what gets filtered, and once one of the pair is on the line the other is no longer offered
 - `-t` returns delimiter hints and is only suggested after `-s`
-- `-l` and `-g` use local path completion for saved/exported event log files
+- `-l` and `-g` use local path completion for saved/exported event log files (`.evt`/`.evtx` plus directories); an empty slot lists the current directory
+- `-o` and `-q` complete comma-separated source names and always offer a `<source>*` hint for the documented substring form
+
+Tokens to the right of the cursor are ignored, so editing an earlier value mid-line completes that slot, and a quoted multi-word log name such as `"Windows Pow` completes to `"Windows PowerShell"`.
 
 ### Event log and source hints
 
-When no remote target is present, the completer builds a short-lived cache from local `Get-WinEvent -ListLog *` data:
+When no remote target is present, the completer harvests local hints lazily, only for the slot being completed:
 
-- event log names feed the final `<event log>` slot
-- provider names feed `-o` and `-q`
+- event log names come from the tool's own `psloglist -nobanner -z` listing (stdin closed, 1.5 s timeout, only when the Sysinternals EULA is already accepted), falling back to `Get-WinEvent -ListLog *`; the result is cached for two minutes whether or not the harvest succeeded
+- provider names for `-o` and `-q` come from `(Get-WinEvent -ListLog <log>).ProviderNames` for the log named on the line (default `System`), cached per log
 
 When a remote target is present, those runtime hints are disabled and the completer falls back to placeholders and a few static common names.
 
