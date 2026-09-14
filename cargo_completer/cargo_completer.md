@@ -11,7 +11,7 @@ The implementation is **help-driven with safe local discovery**:
 
 - root options come from `cargo --help`
 - installed commands come from `cargo --list`
-- command-specific switches come from `cargo help <command>`
+- command-specific switches come from `cargo <command> --help`
 - `+toolchain` suggestions come from local `rustup toolchain list` when available
 - `--target` values come from local `rustc --print target-list`
 - `-Z` values come from local `cargo -Z help`
@@ -57,7 +57,7 @@ At the root, the completer offers:
 
 ### Command-specific switches
 
-After a command is chosen, the completer lazily parses `cargo help <command>` and caches the discovered switches in script scope.
+After a command is chosen, the completer lazily parses `cargo <command> --help` and caches the discovered switches in script scope. clap help lists both forms of every short/long pair and marks value-bearing options with a metavar, so only options that really take a value consume the following token; bare flags such as `--timings` do not.
 
 ### Value completion
 
@@ -85,7 +85,10 @@ Local path completion is used only for path-bearing slots such as:
 ## Runtime notes
 
 - `cargo --list` was used to include installed Cargo subcommands like `clippy`, `fmt`, and other locally available commands.
-- `cargo help <command>` is treated as authoritative even though Cargo help surfaces are long-form manpage-style output.
+- `cargo <command> --help` is treated as authoritative. It is used in preference to `cargo help <command>`, whose manpage output omits the long form of every short/long option pair.
+- Options are keyed and matched ordinally, so `-V` (`--version`) and `-v` (`--verbose`) stay distinct.
+- Subcommands that `cargo --list` prints without a description, such as third-party `binstall` and `miri`, are recognized and get their own switch surface.
+- After `--` the completer returns nothing, leaving the arguments of the program cargo runs to PowerShell's filesystem fallback.
 - The implementation avoids probing package registries, workspaces, or remote sources during completion.
 
 ## Validation performed

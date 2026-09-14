@@ -53,7 +53,7 @@ function Invoke-CargoText {
     }
 
     try {
-        @(& $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        @($null | & $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() })
     } catch {
         @()
     }
@@ -372,7 +372,7 @@ function Get-CargoUnstableFlags {
             }
         }
 
-        $cache.UnstableFlags = @($flags | Sort-Object -Unique)
+        $cache.UnstableFlags = @($flags | Sort-Object -Unique -CaseSensitive)
     }
 
     $cache.UnstableFlags
@@ -381,7 +381,8 @@ function Get-CargoUnstableFlags {
 function Get-CargoCommandNamesFromList {
     $lines = Invoke-CargoText -Arguments @('--list')
     $commands = foreach ($line in $lines) {
-        if ($line -match '^\s{4}([A-Za-z0-9][A-Za-z0-9\-_]*)\s{2,}.*$') {
+        # Third-party subcommands such as binstall and miri print no description at all.
+        if ($line -match '^\s{4}([A-Za-z0-9][A-Za-z0-9\-_]*)(\s{2,}.*)?$') {
             $matches[1]
         }
     }
@@ -403,21 +404,68 @@ function Get-CargoRootCommandsFromHelp {
     @($commands | Sort-Object -Unique)
 }
 
-function Get-CargoOptionsFromHelp {
+function Get-CargoOptionSpecsFromHelp {
     param([string[]]$Lines)
 
-    $options = foreach ($line in $Lines) {
-        if ($line -match '^\s{2,}((?:-[A-Za-z][A-Za-z0-9]?|--[A-Za-z0-9][A-Za-z0-9\-]*)(?:,\s*(?:-[A-Za-z][A-Za-z0-9]?|--[A-Za-z0-9][A-Za-z0-9\-]*))*)\b') {
-            foreach ($token in ($matches[1] -split ',\s*')) {
-                $cleanToken = $token.Trim()
-                if ($cleanToken -match '^(?<name>-[A-Za-z][A-Za-z0-9]?|--[A-Za-z0-9][A-Za-z0-9\-]*)$') {
-                    $matches['name']
-                }
+    # clap indents every option line by 2-7 spaces and wraps descriptions further in, so the flag
+    # segment is whatever precedes the first run of two spaces on such a line. Both layouts cargo
+    # emits are covered: '  -F, --features <FEATURES>  Desc' and '      --public' with the
+    # description on the following line.
+    $specs = New-Object System.Collections.Generic.List[object]
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($line in @($Lines)) {
+        if ($line -notmatch '^ {2,7}-\S') {
+            continue
+        }
+
+        $segment = (($line.Trim() -split '\s{2,}')[0])
+        $metaVar = if ($segment -match '\[?<[^>]+>\]?') { $matches[0] } else { '' }
+
+        foreach ($match in [regex]::Matches($segment, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)')) {
+            $token = $match.Groups[1].Value
+            if (-not $seen.Add($token)) {
+                continue
+            }
+
+            [void]$specs.Add([pscustomobject]@{
+                    Token   = $token
+                    MetaVar = $metaVar
+                })
+        }
+    }
+
+    @($specs.ToArray())
+}
+
+function Get-CargoValueHintTable {
+    param(
+        [object[]]$Specs,
+        [hashtable[]]$Overlays
+    )
+
+    $hints = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($spec in @($Specs)) {
+        if (-not $spec.MetaVar) {
+            continue
+        }
+
+        $name = $spec.MetaVar.Trim([char[]]@('[', ']', '<', '>')).ToLowerInvariant()
+        $hints[$spec.Token] = @("<$name>")
+    }
+
+    # Only options that help says carry a value get a curated hint, so a bare flag can never
+    # swallow the following token.
+    foreach ($overlay in @($Overlays)) {
+        foreach ($key in $overlay.Keys) {
+            if ($hints.ContainsKey($key)) {
+                $hints[$key] = @($overlay[$key])
             }
         }
     }
 
-    @($options | Sort-Object -Unique)
+    $hints
 }
 
 function Initialize-CargoCompletionCache {
@@ -430,7 +478,8 @@ function Initialize-CargoCompletionCache {
     $cache.CommonValueMap = Get-CargoCommonValueMap
 
     $rootHelp = Invoke-CargoText -Arguments @('--help')
-    $cache.RootOptions = Get-CargoOptionsFromHelp -Lines $rootHelp
+    $rootSpecs = Get-CargoOptionSpecsFromHelp -Lines $rootHelp
+    $cache.RootOptions = @($rootSpecs | ForEach-Object { $_.Token })
     $cache.RootCommands = @(
         Get-CargoRootCommandsFromHelp
         Get-CargoCommandNamesFromList
@@ -439,7 +488,7 @@ function Initialize-CargoCompletionCache {
 
     $cache.CommandMetadata['<root>'] = [pscustomobject]@{
         Options    = @($cache.RootOptions)
-        ValueHints = $cache.RootValueMap
+        ValueHints = Get-CargoValueHintTable -Specs $rootSpecs -Overlays @($cache.RootValueMap)
         PathOptions = @($cache.PathOptions)
     }
 
@@ -457,18 +506,16 @@ function Get-CargoCommandMetadata {
         return $cache.CommandMetadata[$lookupName]
     }
 
-    $helpLines = Invoke-CargoText -Arguments @('help', $CommandName)
-    $options = Get-CargoOptionsFromHelp -Lines $helpLines
+    # clap's own '<sub> --help' carries both option forms plus the metavar that says whether the
+    # option takes a value; 'cargo help <sub>' is a man page that drops the long form of every pair.
+    $helpLines = Invoke-CargoText -Arguments @($CommandName, '--help')
+    $specs = Get-CargoOptionSpecsFromHelp -Lines $helpLines
+    $options = @($specs | ForEach-Object { $_.Token })
 
-    $valueHints = @{}
-    foreach ($key in $cache.CommonValueMap.Keys) {
-        $valueHints[$key] = @($cache.CommonValueMap[$key])
-    }
-
-    $commandValueHints = Get-CargoCommandValueHints -CommandName $CommandName
-    foreach ($key in $commandValueHints.Keys) {
-        $valueHints[$key] = @($commandValueHints[$key])
-    }
+    $valueHints = Get-CargoValueHintTable -Specs $specs -Overlays @(
+        $cache.CommonValueMap
+        (Get-CargoCommandValueHints -CommandName $CommandName)
+    )
 
     if ($options -contains '-Z') {
         $valueHints['-Z'] = @()
@@ -521,6 +568,9 @@ function Get-CargoState {
 
         if ($token -eq '--') {
             if ($commandName) {
+                # Hand '--' to the subcommand loop so it can stop treating cargo switches as
+                # arguments of the program cargo is about to run.
+                $commandTokens.Add($token)
                 $sawDoubleDash = $true
             }
             else {
@@ -663,8 +713,17 @@ function Get-CargoOptionCompletions {
     )
 
     $current = Remove-CargoOuterQuotes -Value $CurrentWord
-    foreach ($option in $Options | Sort-Object -Unique) {
-        if ($option.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase)) {
+
+    # cargo's short flags are case-significant (-V is --version, -v is --verbose), so both the
+    # de-duplication and the prefix test have to stay ordinal for single-dash words.
+    $comparison = if ($current -match '^-[^-]') {
+        [System.StringComparison]::Ordinal
+    } else {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+
+    foreach ($option in $Options | Sort-Object -Unique -CaseSensitive) {
+        if ($option.StartsWith($current, $comparison)) {
             New-CargoCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip $option
         }
     }
