@@ -134,6 +134,7 @@ function Get-CodeInsidersCompletionCache {
             New-CodeInsidersOptionSpec -Tokens @('--category') -Description 'Filter installed extensions by category.' -ValueKinds @('Category')
             New-CodeInsidersOptionSpec -Tokens @('--install-extension') -Description 'Install or update an extension ID or VSIX path.' -ValueKinds @('InstallExtensionTarget')
             New-CodeInsidersOptionSpec -Tokens @('--pre-release') -Description 'Install the pre-release version when using --install-extension.'
+            New-CodeInsidersOptionSpec -Tokens @('--force') -Description 'Update an extension to the latest version when using --install-extension.'
             New-CodeInsidersOptionSpec -Tokens @('--uninstall-extension') -Description 'Uninstall an extension.' -ValueKinds @('InstalledExtensionId')
             New-CodeInsidersOptionSpec -Tokens @('--update-extensions') -Description 'Update installed extensions.'
             New-CodeInsidersOptionSpec -Tokens @('--enable-proposed-api') -Description 'Enable proposed API features for an extension.' -ValueKinds @('InstalledExtensionId')
@@ -285,12 +286,14 @@ function Get-CodeInsidersCompletionCache {
             New-CodeInsidersCommandSpec -Path 'agent endpoints' -Description 'Print every live agent host endpoint as a single JSON document.' -Subcommands @() -Options $agentEndpointsOptions -Positionals @()
             New-CodeInsidersCommandSpec -Path 'agent help' -Description 'Print agent help.' -Subcommands @() -Options @() -Positionals @('AgentSubcommand')
             New-CodeInsidersCommandSpec -Path 'tunnel' -Description 'Create a tunnel that is accessible from vscode.dev.' -Subcommands @('prune', 'kill', 'restart', 'status', 'rename', 'unregister', 'user', 'service', 'help') -Options $tunnelRootOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'tunnel prune' -Description 'Delete all servers that are not currently running.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'tunnel kill' -Description 'Stop any running tunnel on the system.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'tunnel restart' -Description 'Restart any running tunnel on the system.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'tunnel status' -Description 'Get whether a tunnel is running on the current machine.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'tunnel rename' -Description 'Rename this machine for the port forwarding service.' -Subcommands @() -Options $tunnelRootOptions -Positionals @('Name')
-            New-CodeInsidersCommandSpec -Path 'tunnel unregister' -Description 'Remove this machine association from the port forwarding service.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
+            # The tunnel leaves accept only -h/--help plus the clap GLOBAL OPTIONS trio (verified
+            # against 'tunnel prune --help' and friends); the tunnel-root block does not apply there.
+            New-CodeInsidersCommandSpec -Path 'tunnel prune' -Description 'Delete all servers that are not currently running.' -Subcommands @() -Options $tunnelUserOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'tunnel kill' -Description 'Stop any running tunnel on the system.' -Subcommands @() -Options $tunnelUserOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'tunnel restart' -Description 'Restart any running tunnel on the system.' -Subcommands @() -Options $tunnelUserOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'tunnel status' -Description 'Get whether a tunnel is running on the current machine.' -Subcommands @() -Options $tunnelUserOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'tunnel rename' -Description 'Rename this machine for the port forwarding service.' -Subcommands @() -Options $tunnelUserOptions -Positionals @('Name')
+            New-CodeInsidersCommandSpec -Path 'tunnel unregister' -Description 'Remove this machine association from the port forwarding service.' -Subcommands @() -Options $tunnelUserOptions -Positionals @()
             New-CodeInsidersCommandSpec -Path 'tunnel help' -Description 'Print tunnel help.' -Subcommands @() -Options @() -Positionals @('TunnelSubcommand')
             New-CodeInsidersCommandSpec -Path 'tunnel user' -Description 'Manage tunnel user authentication.' -Subcommands @('login', 'logout', 'show', 'help') -Options $tunnelUserOptions -Positionals @()
             New-CodeInsidersCommandSpec -Path 'tunnel user login' -Description 'Log in to the port forwarding service.' -Subcommands @() -Options $tunnelUserLoginOptions -Positionals @()
@@ -628,9 +631,9 @@ function New-CodeInsidersLiteralValueResults {
         )
     }
 
-    @(
-        New-CodeInsidersCompletionResult -CompletionText ($Prefix + $CurrentValue) -ToolTip $ToolTip -ListItemText $CurrentValue
-    )
+    # Echoing the typed text back is never a useful completion and only keeps the menu from
+    # collapsing onto a real match (e.g. 'tun' beside 'tunnel').
+    @()
 }
 
 function Get-CodeInsidersDistinctResults {
@@ -662,10 +665,7 @@ function Get-CodeInsidersStringValueResults {
     $results = New-Object System.Collections.Generic.List[object]
 
     if ([string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($Placeholder) {
-            [void]$results.Add((New-CodeInsidersCompletionResult -CompletionText ($Prefix + $Placeholder) -ToolTip $ToolTip -ListItemText $Placeholder))
-        }
-
+        # Real values lead so a single Tab inserts one of them; the placeholder comes last.
         if ($SuggestWhenEmpty) {
             foreach ($value in @($Values)) {
                 if ([string]::IsNullOrWhiteSpace($value)) {
@@ -673,6 +673,10 @@ function Get-CodeInsidersStringValueResults {
                 }
                 [void]$results.Add((New-CodeInsidersCompletionResult -CompletionText ($Prefix + $value) -ToolTip $ToolTip -ListItemText $value))
             }
+        }
+
+        if ($Placeholder) {
+            [void]$results.Add((New-CodeInsidersCompletionResult -CompletionText ($Prefix + $Placeholder) -ToolTip $ToolTip -ListItemText $Placeholder))
         }
 
         return @(Get-CodeInsidersDistinctResults -Results @($results.ToArray()))
@@ -692,7 +696,10 @@ function Get-CodeInsidersStringValueResults {
 }
 
 function Get-CodeInsidersLogLevelResults {
-    param([string]$CurrentValue)
+    param(
+        [string]$CurrentValue,
+        [string]$Prefix = ''
+    )
 
     $levels = @('critical', 'error', 'warn', 'info', 'debug', 'trace', 'off')
     $value = Remove-CodeInsidersOuterQuotes -Value $CurrentValue
@@ -703,7 +710,7 @@ function Get-CodeInsidersLogLevelResults {
             if ($extensionId.StartsWith($extensionPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                 foreach ($level in @($levels)) {
                     if ($level.StartsWith($levelPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        New-CodeInsidersCompletionResult -CompletionText ($extensionId + ':' + $level) -ToolTip 'Extension-specific log level.'
+                        New-CodeInsidersCompletionResult -CompletionText ($Prefix + $extensionId + ':' + $level) -ToolTip 'Extension-specific log level.' -ListItemText ($extensionId + ':' + $level)
                     }
                 }
             }
@@ -711,23 +718,22 @@ function Get-CodeInsidersLogLevelResults {
         return @(Get-CodeInsidersDistinctResults -Results $results)
     }
 
-    $results = New-Object System.Collections.Generic.List[object]
-    foreach ($result in @(Get-CodeInsidersStringValueResults -Values $levels -CurrentValue $CurrentValue -Placeholder '<publisher.name:level>' -ToolTip 'Log level.' -SuggestWhenEmpty)) {
-        [void]$results.Add($result)
-    }
-    @(Get-CodeInsidersDistinctResults -Results @($results.ToArray()))
+    @(Get-CodeInsidersStringValueResults -Values $levels -CurrentValue $CurrentValue -Placeholder '<publisher.name:level>' -ToolTip 'Log level.' -SuggestWhenEmpty -Prefix $Prefix)
 }
 
 function Get-CodeInsidersInstallExtensionResults {
-    param([string]$CurrentValue)
+    param(
+        [string]$CurrentValue,
+        [string]$Prefix = ''
+    )
 
     $value = Remove-CodeInsidersOuterQuotes -Value $CurrentValue
     if ([string]::IsNullOrWhiteSpace($value)) {
-        return New-CodeInsidersLiteralValueResults -CurrentValue '' -Placeholder '<ext-id-or-path>' -ToolTip 'Extension ID or path to a VSIX.'
+        return New-CodeInsidersLiteralValueResults -CurrentValue '' -Placeholder '<ext-id-or-path>' -ToolTip 'Extension ID or path to a VSIX.' -Prefix $Prefix
     }
 
     if ((Test-CodeInsidersPathLikeInput -Value $value) -or ($value -like '*.vsix*')) {
-        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly
+        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly -Prefix $Prefix
     }
 
     if ($value -match '^(?<extension>[^@]+)@(?<version>.*)$') {
@@ -735,51 +741,57 @@ function Get-CodeInsidersInstallExtensionResults {
         $version = $matches['version']
         $results = foreach ($extensionId in @(Get-CodeInsidersExtensionIds)) {
             if ($extensionId.StartsWith($extensionPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                New-CodeInsidersCompletionResult -CompletionText ($extensionId + '@' + $version) -ToolTip 'Extension ID with version suffix.'
+                New-CodeInsidersCompletionResult -CompletionText ($Prefix + $extensionId + '@' + $version) -ToolTip 'Extension ID with version suffix.' -ListItemText ($extensionId + '@' + $version)
             }
         }
         return @(Get-CodeInsidersDistinctResults -Results $results)
     }
 
-    Get-CodeInsidersStringValueResults -Values (Get-CodeInsidersExtensionIds) -CurrentValue $CurrentValue -Placeholder '<ext-id-or-path>' -ToolTip 'Installed extension ID or VSIX path.'
+    Get-CodeInsidersStringValueResults -Values (Get-CodeInsidersExtensionIds) -CurrentValue $CurrentValue -Placeholder '<ext-id-or-path>' -ToolTip 'Installed extension ID or VSIX path.' -Prefix $Prefix
 }
 
 function Get-CodeInsidersGotoResults {
-    param([string]$CurrentValue)
+    param(
+        [string]$CurrentValue,
+        [string]$Prefix = ''
+    )
 
     $value = Remove-CodeInsidersOuterQuotes -Value $CurrentValue
     if ([string]::IsNullOrWhiteSpace($value)) {
-        return Get-CodeInsidersPathCompletions -InputPath '' -FilesOnly
+        return Get-CodeInsidersPathCompletions -InputPath '' -FilesOnly -Prefix $Prefix
     }
 
     if ((Test-CodeInsidersPathLikeInput -Value $value) -and ($value -notmatch ':\d')) {
-        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly
+        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly -Prefix $Prefix
     }
 
-    New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<file:line[:character]>' -ToolTip 'File path with optional line and character.'
+    New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<file:line[:character]>' -ToolTip 'File path with optional line and character.' -Prefix $Prefix
 }
 
 function Get-CodeInsidersRootInputResults {
-    param([string]$CurrentValue)
+    param(
+        [string]$CurrentValue,
+        [string]$Prefix = ''
+    )
 
     if ($CurrentValue -eq '-') {
         return @(
-            New-CodeInsidersCompletionResult -CompletionText '-' -ToolTip 'Read input from stdin.' -ListItemText '-'
+            New-CodeInsidersCompletionResult -CompletionText ($Prefix + '-') -ToolTip 'Read input from stdin.' -ListItemText '-'
         )
     }
 
     if (Test-CodeInsidersPathLikeInput -Value $CurrentValue) {
-        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue
+        return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -Prefix $Prefix
     }
 
     $results = @()
     if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
-        $results += New-CodeInsidersCompletionResult -CompletionText '-' -ToolTip 'Read input from stdin.' -ListItemText '-'
-        $results += New-CodeInsidersCompletionResult -CompletionText '<path>' -ToolTip 'Open a file or folder path.' -ListItemText '<path>'
+        $results += New-CodeInsidersCompletionResult -CompletionText ($Prefix + '-') -ToolTip 'Read input from stdin.' -ListItemText '-'
+        $results += New-CodeInsidersCompletionResult -CompletionText ($Prefix + '<path>') -ToolTip 'Open a file or folder path.' -ListItemText '<path>'
         return $results
     }
 
-    New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<path>' -ToolTip 'Open a file or folder path.'
+    New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<path>' -ToolTip 'Open a file or folder path.' -Prefix $Prefix
 }
 
 function Get-CodeInsidersValueResults {
@@ -791,7 +803,7 @@ function Get-CodeInsidersValueResults {
     )
 
     switch ($ValueKind) {
-        'RootInput' { return Get-CodeInsidersRootInputResults -CurrentValue $CurrentValue }
+        'RootInput' { return Get-CodeInsidersRootInputResults -CurrentValue $CurrentValue -Prefix $Prefix }
         'FilePath' {
             if ([string]::IsNullOrWhiteSpace($CurrentValue) -or (Test-CodeInsidersPathLikeInput -Value $CurrentValue)) {
                 return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly -Prefix $Prefix
@@ -804,14 +816,14 @@ function Get-CodeInsidersValueResults {
             }
             return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<dir>' -ToolTip 'Directory path.' -Prefix $Prefix
         }
-        'GotoTarget' { return Get-CodeInsidersGotoResults -CurrentValue $CurrentValue }
+        'GotoTarget' { return Get-CodeInsidersGotoResults -CurrentValue $CurrentValue -Prefix $Prefix }
         'Profile' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<profile>' -ToolTip 'Profile name.' -Prefix $Prefix }
         'Locale' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<locale>' -ToolTip 'Locale such as en-US or zh-TW.' -Prefix $Prefix }
         'Category' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<category>' -ToolTip 'Extension category filter.' -Prefix $Prefix }
         'Json' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '{"name":"server-name","command":...}' -ToolTip 'MCP server definition JSON.' -Prefix $Prefix }
         'InstalledExtensionId' { return Get-CodeInsidersStringValueResults -Values (Get-CodeInsidersExtensionIds) -CurrentValue $CurrentValue -Placeholder '<ext-id>' -ToolTip 'Installed extension ID.' -SuggestWhenEmpty -Prefix $Prefix }
-        'InstallExtensionTarget' { return Get-CodeInsidersInstallExtensionResults -CurrentValue $CurrentValue }
-        'LogLevel' { return Get-CodeInsidersLogLevelResults -CurrentValue $CurrentValue }
+        'InstallExtensionTarget' { return Get-CodeInsidersInstallExtensionResults -CurrentValue $CurrentValue -Prefix $Prefix }
+        'LogLevel' { return Get-CodeInsidersLogLevelResults -CurrentValue $CurrentValue -Prefix $Prefix }
         'AuthProvider' { return Get-CodeInsidersStringValueResults -Values @('microsoft', 'github') -CurrentValue $CurrentValue -Placeholder $null -ToolTip 'Authentication provider.' -SuggestWhenEmpty -Prefix $Prefix }
         'Sync' { return Get-CodeInsidersStringValueResults -Values @('on', 'off') -CurrentValue $CurrentValue -Placeholder $null -ToolTip 'Sync state.' -SuggestWhenEmpty -Prefix $Prefix }
         'Shell' { return Get-CodeInsidersStringValueResults -Values @('bash', 'pwsh', 'zsh', 'fish') -CurrentValue $CurrentValue -Placeholder $null -ToolTip 'Shell integration script target.' -SuggestWhenEmpty -Prefix $Prefix }
@@ -924,7 +936,12 @@ function Complete-CodeInsidersNative {
         return Get-CodeInsidersValueResults -ValueKind $state.PendingValue.Option.ValueKinds[$state.PendingValue.ValueIndex] -CurrentValue $state.CurrentToken -State $state
     }
 
-    if ($state.CurrentToken.StartsWith('-') -and -not $state.AfterDoubleDash) {
+    # After the end-of-options marker every remaining argument is a path: no subcommands, no options.
+    if ($state.AfterDoubleDash) {
+        return @(Get-CodeInsidersPathCompletions -InputPath $state.CurrentToken)
+    }
+
+    if ($state.CurrentToken.StartsWith('-')) {
         return @(Get-CodeInsidersDistinctResults -Results @(Write-CodeInsidersOptionResults -PathKey $state.PathKey -CurrentToken $state.CurrentToken))
     }
 

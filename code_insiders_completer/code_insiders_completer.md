@@ -50,7 +50,7 @@ The completer hard-codes the stable command tree observed from the local CLI hel
 
 - root options plus subcommands `chat`, `serve-web`, `agent`, `tunnel`
 - `agent` subcommands `host`, `ps`, `stop`, `kill`, `logs`, `endpoints`, each with its own option block (`--address`, `--tunnel`, `--json`, `-a/--all`, `--instance-id`) and a `<SESSION>` placeholder for `stop` and `logs`
-- `tunnel` subcommands `prune`, `kill`, `restart`, `status`, `rename`, `unregister`, `user`, `service`
+- `tunnel` subcommands `prune`, `kill`, `restart`, `status`, `rename`, `unregister`, `user`, `service`; the six leaf verbs accept only `-h/--help` plus the clap GLOBAL OPTIONS (`--cli-data-dir`, `--verbose`, `--log`), as their `--help` documents
 - `tunnel user` subcommands `login`, `logout`, `show`
 - `tunnel service` subcommands `install`, `uninstall`, `log`
 
@@ -89,7 +89,9 @@ Real path completion is used for switches such as:
 - `agent --connection-token-file`, `--server-data-dir`, `--user-data-dir`
 - `tunnel --server-data-dir`
 
-Free-form slots intentionally use placeholders to suppress noisy filesystem fallback, including:
+Attached `--option=value` completion keeps the `--option=` prefix on every result, including the `--log=`, `--goto=` and `--install-extension=` slots. After the `--` end-of-options marker only paths are offered. Where a slot has real values (log levels, chat modes, installed extension IDs) they are listed first and the placeholder last; once text has been typed into a free-form slot the completer returns nothing rather than echoing the typed text.
+
+Free-form slots intentionally use placeholders (for an empty value) to suppress noisy filesystem fallback, including:
 
 - `chat <prompt>`
 - `--profile`
