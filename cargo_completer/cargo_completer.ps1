@@ -478,7 +478,7 @@ function Initialize-CargoCompletionCache {
     $cache.CommonValueMap = Get-CargoCommonValueMap
 
     $rootHelp = Invoke-CargoText -Arguments @('--help')
-    $rootSpecs = Get-CargoOptionSpecsFromHelp -Lines $rootHelp
+    $rootSpecs = @(Get-CargoOptionSpecsFromHelp -Lines $rootHelp)
     $cache.RootOptions = @($rootSpecs | ForEach-Object { $_.Token })
     $cache.RootCommands = @(
         Get-CargoRootCommandsFromHelp
@@ -509,7 +509,10 @@ function Get-CargoCommandMetadata {
     # clap's own '<sub> --help' carries both option forms plus the metavar that says whether the
     # option takes a value; 'cargo help <sub>' is a man page that drops the long form of every pair.
     $helpLines = Invoke-CargoText -Arguments @($CommandName, '--help')
-    $specs = Get-CargoOptionSpecsFromHelp -Lines $helpLines
+
+    # A subcommand whose help fails (an uninstalled third-party one, for example) yields no specs,
+    # and the empty result has to stay an array or it reads back as a single $null element.
+    $specs = @(Get-CargoOptionSpecsFromHelp -Lines $helpLines)
     $options = @($specs | ForEach-Object { $_.Token })
 
     $valueHints = Get-CargoValueHintTable -Specs $specs -Overlays @(
