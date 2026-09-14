@@ -7,7 +7,7 @@
 It uses a hybrid static-first model:
 
 - static command metadata derived from the local VS Code Insiders CLI help surface
-- nested routing for `chat`, `serve-web`, `agent-host`, `tunnel`, `tunnel user`, and `tunnel service`
+- nested routing for `chat`, `serve-web`, `agent` (`host`, `ps`, `stop`, `kill`, `logs`, `endpoints`), `tunnel`, `tunnel user`, and `tunnel service`
 - cached local extension ID discovery from `code-insiders.cmd --list-extensions`
 - real file and directory completion for path-bearing switches
 - placeholder-oriented suggestions for prompts, locales, JSON, profiles, names, and other free-form values
@@ -48,7 +48,8 @@ All runtime probing is lazy and cached inside helper functions.
 
 The completer hard-codes the stable command tree observed from the local CLI help:
 
-- root options plus subcommands `chat`, `serve-web`, `agent-host`, `tunnel`
+- root options plus subcommands `chat`, `serve-web`, `agent`, `tunnel`
+- `agent` subcommands `host`, `ps`, `stop`, `kill`, `logs`, `endpoints`, each with its own option block (`--address`, `--tunnel`, `--json`, `-a/--all`, `--instance-id`) and a `<SESSION>` placeholder for `stop` and `logs`
 - `tunnel` subcommands `prune`, `kill`, `restart`, `status`, `rename`, `unregister`, `user`, `service`
 - `tunnel user` subcommands `login`, `logout`, `show`
 - `tunnel service` subcommands `install`, `uninstall`, `log`
@@ -85,7 +86,7 @@ Real path completion is used for switches such as:
 - `--user-data-dir`, `--extensions-dir`
 - `chat --add-file`
 - `serve-web --connection-token-file`, `--server-data-dir`, `--default-folder`, `--default-workspace`
-- `agent-host --connection-token-file`, `--server-data-dir`
+- `agent --connection-token-file`, `--server-data-dir`, `--user-data-dir`
 - `tunnel --server-data-dir`
 
 Free-form slots intentionally use placeholders to suppress noisy filesystem fallback, including:

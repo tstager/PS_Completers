@@ -226,25 +226,64 @@ function Get-CodeInsidersCompletionCache {
             New-CodeInsidersOptionSpec -Tokens @('--log') -Description 'Log level to use.' -ValueKinds @('LogLevel')
         )
 
-        $agentHostOptions = @(
-            New-CodeInsidersOptionSpec -Tokens @('--host') -Description 'Host to listen on.' -ValueKinds @('Host')
-            New-CodeInsidersOptionSpec -Tokens @('--port') -Description 'Port to listen on.' -ValueKinds @('Port')
-            New-CodeInsidersOptionSpec -Tokens @('--connection-token') -Description 'Secret included with all requests.' -ValueKinds @('Token')
-            New-CodeInsidersOptionSpec -Tokens @('--connection-token-file') -Description 'File containing a connection token.' -ValueKinds @('FilePath')
-            New-CodeInsidersOptionSpec -Tokens @('--without-connection-token') -Description 'Run without a connection token.'
-            New-CodeInsidersOptionSpec -Tokens @('--accept-server-license-terms') -Description 'Accept the server license terms.'
-            New-CodeInsidersOptionSpec -Tokens @('--server-data-dir') -Description 'Specifies the directory that server data is kept in.' -ValueKinds @('DirectoryPath')
+        $agentGlobalOptions = @(
             New-CodeInsidersOptionSpec -Tokens @('-h', '--help') -Description 'Print help.'
             New-CodeInsidersOptionSpec -Tokens @('--cli-data-dir') -Description 'Directory where CLI metadata should be stored.' -ValueKinds @('DirectoryPath')
             New-CodeInsidersOptionSpec -Tokens @('--verbose') -Description 'Print verbose output.'
             New-CodeInsidersOptionSpec -Tokens @('--log') -Description 'Log level to use.' -ValueKinds @('LogLevel')
         )
 
+        $agentOptions = @(
+            New-CodeInsidersOptionSpec -Tokens @('--host') -Description 'Host the agent host should bind on (default: localhost).' -ValueKinds @('Host')
+            New-CodeInsidersOptionSpec -Tokens @('--port') -Description 'Port the agent host should bind on (0 picks a free port).' -ValueKinds @('Port')
+            New-CodeInsidersOptionSpec -Tokens @('--connection-token') -Description 'Secret included with all requests.' -ValueKinds @('Token')
+            New-CodeInsidersOptionSpec -Tokens @('--connection-token-file') -Description 'File containing a connection token.' -ValueKinds @('FilePath')
+            New-CodeInsidersOptionSpec -Tokens @('--without-connection-token') -Description 'Run without a connection token.'
+            New-CodeInsidersOptionSpec -Tokens @('--server-data-dir') -Description 'Specifies the directory that server data is kept in.' -ValueKinds @('DirectoryPath')
+            New-CodeInsidersOptionSpec -Tokens @('--user-data-dir') -Description 'Overrides the user data directory that homes the agent-host endpoint registry.' -ValueKinds @('DirectoryPath')
+            New-CodeInsidersOptionSpec -Tokens @('--replace') -Description 'Stop any agent host already running on this machine and start a fresh one.'
+            New-CodeInsidersOptionSpec -Tokens @('--new-instance') -Description 'Always start a brand new standalone supervisor.'
+            New-CodeInsidersOptionSpec -Tokens @('--foreground') -Description 'Run a newly started supervisor in the foreground instead of detaching it.'
+            New-CodeInsidersOptionSpec -Tokens @('--tunnel') -Description 'Expose the agent host over a dev tunnel.'
+            New-CodeInsidersOptionSpec -Tokens @('--name') -Description 'Sets the machine name for the tunnel.' -ValueKinds @('Name')
+            New-CodeInsidersOptionSpec -Tokens @('--random-name') -Description 'Randomly name the machine for the tunnel.'
+            New-CodeInsidersOptionSpec -Tokens @('--idle-timeout') -Description 'Terminate the supervisor after this many seconds without a connected client.' -ValueKinds @('Number')
+        ) + $agentGlobalOptions
+
+        $agentClientOptions = @(
+            New-CodeInsidersOptionSpec -Tokens @('--user-data-dir') -Description 'Directory containing the shared agent host registry used for discovery.' -ValueKinds @('DirectoryPath')
+            New-CodeInsidersOptionSpec -Tokens @('--address') -Description 'WebSocket address of a running agent host.' -ValueKinds @('Address')
+            New-CodeInsidersOptionSpec -Tokens @('--tunnel') -Description 'Connect via a named dev tunnel instead of the local address.' -ValueKinds @('TunnelName')
+        )
+
+        $agentPsOptions = $agentClientOptions + @(
+            New-CodeInsidersOptionSpec -Tokens @('--json') -Description 'Output results as JSON instead of a human-readable table.'
+            New-CodeInsidersOptionSpec -Tokens @('-a', '--all') -Description 'Show all sessions, including idle and archived ones.'
+        ) + $agentGlobalOptions
+
+        $agentSessionOptions = $agentClientOptions + $agentGlobalOptions
+
+        $agentKillOptions = @(
+            New-CodeInsidersOptionSpec -Tokens @('--user-data-dir') -Description 'Directory containing the shared agent host registry used for discovery.' -ValueKinds @('DirectoryPath')
+            New-CodeInsidersOptionSpec -Tokens @('--instance-id') -Description 'Instance ID of the standalone agent host to kill.' -ValueKinds @('InstanceId')
+        ) + $agentGlobalOptions
+
+        $agentEndpointsOptions = @(
+            New-CodeInsidersOptionSpec -Tokens @('--user-data-dir') -Description 'Overrides the user data directory used to locate the shared agent host registry.' -ValueKinds @('DirectoryPath')
+        ) + $agentGlobalOptions
+
         $commandSpecs = @(
-            New-CodeInsidersCommandSpec -Path '' -Description 'Visual Studio Code - Insiders CLI.' -Subcommands @('chat', 'serve-web', 'agent-host', 'tunnel') -Options $rootOptions -Positionals @('RootInput')
+            New-CodeInsidersCommandSpec -Path '' -Description 'Visual Studio Code - Insiders CLI.' -Subcommands @('chat', 'serve-web', 'agent', 'tunnel') -Options $rootOptions -Positionals @('RootInput')
             New-CodeInsidersCommandSpec -Path 'chat' -Description 'Run a chat session in the current working directory.' -Subcommands @() -Options $chatOptions -Positionals @('Prompt')
             New-CodeInsidersCommandSpec -Path 'serve-web' -Description 'Run a local web version of Visual Studio Code - Insiders.' -Subcommands @() -Options $serveWebOptions -Positionals @()
-            New-CodeInsidersCommandSpec -Path 'agent-host' -Description 'Run a local agent host server.' -Subcommands @() -Options $agentHostOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent' -Description 'Start and interact with AI agent hosts.' -Subcommands @('host', 'ps', 'stop', 'kill', 'logs', 'endpoints', 'help') -Options $agentOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent host' -Description 'Start a local agent host server.' -Subcommands @() -Options $agentOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent ps' -Description 'List active sessions on a running agent host.' -Subcommands @() -Options $agentPsOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent stop' -Description 'Cancel the active turn of a session.' -Subcommands @() -Options $agentSessionOptions -Positionals @('AgentSession')
+            New-CodeInsidersCommandSpec -Path 'agent kill' -Description 'Forcefully kill the running agent host process tree.' -Subcommands @() -Options $agentKillOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent logs' -Description 'Stream live session events.' -Subcommands @() -Options $agentSessionOptions -Positionals @('AgentSession')
+            New-CodeInsidersCommandSpec -Path 'agent endpoints' -Description 'Print every live agent host endpoint as a single JSON document.' -Subcommands @() -Options $agentEndpointsOptions -Positionals @()
+            New-CodeInsidersCommandSpec -Path 'agent help' -Description 'Print agent help.' -Subcommands @() -Options @() -Positionals @('AgentSubcommand')
             New-CodeInsidersCommandSpec -Path 'tunnel' -Description 'Create a tunnel that is accessible from vscode.dev.' -Subcommands @('prune', 'kill', 'restart', 'status', 'rename', 'unregister', 'user', 'service', 'help') -Options $tunnelRootOptions -Positionals @()
             New-CodeInsidersCommandSpec -Path 'tunnel prune' -Description 'Delete all servers that are not currently running.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
             New-CodeInsidersCommandSpec -Path 'tunnel kill' -Description 'Stop any running tunnel on the system.' -Subcommands @() -Options $tunnelRootOptions -Positionals @()
@@ -687,7 +726,7 @@ function Get-CodeInsidersInstallExtensionResults {
         return New-CodeInsidersLiteralValueResults -CurrentValue '' -Placeholder '<ext-id-or-path>' -ToolTip 'Extension ID or path to a VSIX.'
     }
 
-    if (Test-CodeInsidersPathLikeInput -Value $value -or $value -like '*.vsix*') {
+    if ((Test-CodeInsidersPathLikeInput -Value $value) -or ($value -like '*.vsix*')) {
         return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly
     }
 
@@ -713,7 +752,7 @@ function Get-CodeInsidersGotoResults {
         return Get-CodeInsidersPathCompletions -InputPath '' -FilesOnly
     }
 
-    if (Test-CodeInsidersPathLikeInput -Value $value -and $value -notmatch ':\d') {
+    if ((Test-CodeInsidersPathLikeInput -Value $value) -and ($value -notmatch ':\d')) {
         return Get-CodeInsidersPathCompletions -InputPath $CurrentValue -FilesOnly
     }
 
@@ -791,6 +830,11 @@ function Get-CodeInsidersValueResults {
         'CommitId' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<commit-id>' -ToolTip 'Commit SHA.' -Prefix $Prefix }
         'Number' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<number>' -ToolTip 'Numeric value.' -Prefix $Prefix }
         'Name' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<name>' -ToolTip 'Name value.' -Prefix $Prefix }
+        'Address' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder 'ws://127.0.0.1:<port>?tkn=<secret>' -ToolTip 'WebSocket address of a running agent host.' -Prefix $Prefix }
+        'TunnelName' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<tunnel-name>' -ToolTip 'Named dev tunnel.' -Prefix $Prefix }
+        'InstanceId' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<instance-id>' -ToolTip 'Standalone agent host instance ID.' -Prefix $Prefix }
+        'AgentSession' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder 'copilot:/<uuid>' -ToolTip 'Session URI (e.g. copilot:/<uuid>).' -Prefix $Prefix }
+        'AgentSubcommand' { return Get-CodeInsidersStringValueResults -Values @('host', 'ps', 'stop', 'kill', 'logs', 'endpoints', 'help') -CurrentValue $CurrentValue -Placeholder '<subcommand>' -ToolTip 'Agent subcommand.' -SuggestWhenEmpty -Prefix $Prefix }
         'TunnelSubcommand' { return Get-CodeInsidersStringValueResults -Values @('prune', 'kill', 'restart', 'status', 'rename', 'unregister', 'user', 'service', 'help') -CurrentValue $CurrentValue -Placeholder '<subcommand>' -ToolTip 'Tunnel subcommand.' -SuggestWhenEmpty -Prefix $Prefix }
         'TunnelUserSubcommand' { return Get-CodeInsidersStringValueResults -Values @('login', 'logout', 'show', 'help') -CurrentValue $CurrentValue -Placeholder '<subcommand>' -ToolTip 'Tunnel user subcommand.' -SuggestWhenEmpty -Prefix $Prefix }
         'TunnelServiceSubcommand' { return Get-CodeInsidersStringValueResults -Values @('install', 'uninstall', 'log', 'help') -CurrentValue $CurrentValue -Placeholder '<subcommand>' -ToolTip 'Tunnel service subcommand.' -SuggestWhenEmpty -Prefix $Prefix }
