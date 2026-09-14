@@ -47,7 +47,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. Only the indented option table is scanned, so prose such as the DIGEST bullets (`equivalent to sum -s`) can no longer contribute phantom options. A static fallback list is used when the tool is not installed. The description text of each help line (including wrapped continuation lines) becomes the completion tooltip.
+- Value slots are modelled: after `-a` / `--algorithm` the digest names are offered (parsed from the `[possible values: ...]` span in the same help text, with a curated fallback), after `-l` / `--length` the sha2/sha3 lengths `224 256 384 512` are offered, and the attached `--algorithm=md` form keeps the `--algorithm=` prefix on every suggestion.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
@@ -58,11 +59,15 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ```powershell
 cksum -
 cksum --
+cksum -a 
+cksum --algorithm=sha
+cksum -l 
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
+- `-a ` / `--algorithm=` offer the digest names and `-l ` offers the digest lengths
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
