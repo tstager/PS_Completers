@@ -49,7 +49,7 @@ There are no top-level assignments, loops, helper invocations, or external comma
 
 `Get-PiCompletionCache` lazily initializes:
 
-- root commands: `install`, `remove`, `uninstall`, `update`, `list`, `config`
+- root commands: `install`, `remove`, `uninstall`, `update`, `list`, `config`, `auth` (with `print-api-key`, `print-bearer-token`, `check` and their `--provider`, `--model`, `--min-expiry`, `--json`, `--credentials`, `--no-refresh` flags)
 - global options such as `--provider`, `--model`, `--tools`, `--thinking`, `--session`, and `--export`
 - subcommand-specific options such as `-l` / `--local` for `install`, `remove`, and `uninstall`
 - the current static fallback for `update`:
@@ -60,7 +60,9 @@ There are no top-level assignments, loops, helper invocations, or external comma
   - `--force`
 - built-in enums for:
   - `--mode` -> `text`, `json`, `rpc`
-  - `--thinking` -> `off`, `minimal`, `low`, `medium`, `high`, `xhigh`
+  - `--thinking` -> `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+  - `--tui-mode` -> `regular`, `fullscreen`
+  - `--provider` -> the 39 built-in provider ids of pi 0.85, plus every provider key found in `~/.pi/agent/models-store.json` and custom `models.json` providers
   - `--tools` -> `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
 
 ### 2. Lazy help-driven refresh
@@ -78,6 +80,9 @@ Those results are cached with short TTLs and merged over the static fallback met
 
 - root global flags and aliases such as `--no-builtin-tools` / `-nbt`, `--tools` / `-t`, and `--no-context-files` / `-nc`
 - extension CLI flags exposed in root help, such as `--plan` and `--mcp-config`
+- new root commands that the static table does not know yet (they get a `--help` option and no positionals)
+- enumerations stated inside option descriptions (`Set thinking level: ...`, `Output mode: ...`, `TUI mode: ...`), which refresh the `--thinking`, `--mode` and `--tui-mode` value sets
+- value-bearing options whose placeholder is not modelled explicitly; they complete their `<placeholder>` text instead of being mistaken for boolean switches
 - current safe subcommand options from the package-management help paths
 
 If help parsing fails, completion falls back to the static metadata.
@@ -102,6 +107,9 @@ These discoveries are cached with short TTLs so completion stays responsive.
 - a package-management subcommand
 - message tail mode after free-form prompt text starts
 - an option value slot
+- everything after a bare `--`, which is treated as messages/`@files`
+- the token under the cursor when editing mid-line (`$cursorPosition` trims the command at the cursor, so `pi --provider ope|nai --model x` completes providers)
+- comma-separated lists such as `--tools read,b`, which PowerShell parses as array literals; the raw extent text is used so `read,bash` is offered
 - an inline `--flag=value` value slot
 - `--export` output-path mode after the input session file was already supplied, including `--export=<session.jsonl>` inline input
 - `pi update` target-selection mode so `--self` / `--extensions` / `--extension <source>` suppress incompatible positional target suggestions

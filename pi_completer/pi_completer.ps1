@@ -52,7 +52,8 @@ function New-PiOptionSpec {
         [string]$Description,
         [string]$ValueKind,
         [switch]$OptionalValue,
-        [string]$CompletionText
+        [string]$CompletionText,
+        [string]$Placeholder
     )
 
     foreach ($token in @($Tokens)) {
@@ -62,6 +63,7 @@ function New-PiOptionSpec {
             ValueKind      = $ValueKind
             OptionalValue  = [bool]$OptionalValue
             CompletionText = if ([string]::IsNullOrWhiteSpace($CompletionText)) { $token } else { $CompletionText }
+            Placeholder    = $Placeholder
         }
     }
 }
@@ -134,11 +136,14 @@ function Get-PiCompletionCache {
             New-PiOptionSpec -Tokens @('--session') -Description 'Use a specific session file.' -ValueKind 'SessionPathOrId'
             New-PiOptionSpec -Tokens @('--fork') -Description 'Fork a session file or partial UUID into a new session.' -ValueKind 'SessionPathOrId'
             New-PiOptionSpec -Tokens @('--session-dir') -Description 'Directory for session storage and lookup.' -ValueKind 'DirectoryPath'
+            New-PiOptionSpec -Tokens @('--session-id') -Description 'Use exact project session ID, creating it if missing.' -ValueKind 'SessionId'
             New-PiOptionSpec -Tokens @('--no-session') -Description 'Do not save the session.'
+            New-PiOptionSpec -Tokens @('--name', '-n') -Description 'Set session display name.' -ValueKind 'SessionName'
             New-PiOptionSpec -Tokens @('--models') -Description 'Comma-separated model patterns for Ctrl+P cycling.' -ValueKind 'ModelPatternList'
             New-PiOptionSpec -Tokens @('--no-tools', '-nt') -Description 'Disable all built-in and extension tools.'
             New-PiOptionSpec -Tokens @('--no-builtin-tools', '-nbt') -Description 'Disable built-in tools but keep extension/custom tools enabled.'
             New-PiOptionSpec -Tokens @('--tools', '-t') -Description 'Comma-separated list of tool names to enable.' -ValueKind 'ToolList'
+            New-PiOptionSpec -Tokens @('--exclude-tools', '-xt') -Description 'Comma-separated denylist of tool names to disable.' -ValueKind 'ToolList'
             New-PiOptionSpec -Tokens @('--thinking') -Description 'Set the thinking level.' -ValueKind 'Thinking'
             New-PiOptionSpec -Tokens @('--extension', '-e') -Description 'Load an extension file or directory.' -ValueKind 'ExtensionPath'
             New-PiOptionSpec -Tokens @('--no-extensions', '-ne') -Description 'Disable extension discovery.'
@@ -147,12 +152,15 @@ function Get-PiCompletionCache {
             New-PiOptionSpec -Tokens @('--prompt-template') -Description 'Load a prompt template file or directory.' -ValueKind 'PromptTemplatePath'
             New-PiOptionSpec -Tokens @('--no-prompt-templates', '-np') -Description 'Disable prompt template discovery and loading.'
             New-PiOptionSpec -Tokens @('--theme') -Description 'Load a theme file or directory.' -ValueKind 'ThemePath'
+            New-PiOptionSpec -Tokens @('--use-theme') -Description 'Set the initial interactive theme for this run.' -ValueKind 'ThemeName'
             New-PiOptionSpec -Tokens @('--no-themes') -Description 'Disable theme discovery and loading.'
             New-PiOptionSpec -Tokens @('--no-context-files', '-nc') -Description 'Disable AGENTS.md and CLAUDE.md discovery and loading.'
             New-PiOptionSpec -Tokens @('--export') -Description 'Export a session to HTML.' -ValueKind 'ExportInputPath'
             New-PiOptionSpec -Tokens @('--list-models') -Description 'List available models, optionally filtered by search text.' -ValueKind 'ModelSearch' -OptionalValue
             New-PiOptionSpec -Tokens @('--verbose') -Description 'Force verbose startup.'
+            New-PiOptionSpec -Tokens @('--tui-mode') -Description 'TUI mode: regular (default) or fullscreen.' -ValueKind 'TuiMode'
             New-PiOptionSpec -Tokens @('--offline') -Description 'Disable startup network operations.'
+            New-PiOptionSpec -Tokens @('--') -Description 'End option parsing; treat remaining arguments as messages/files.'
             New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show help.'
             New-PiOptionSpec -Tokens @('--version', '-v') -Description 'Show version.'
         )
@@ -173,6 +181,15 @@ function Get-PiCompletionCache {
             )
             New-PiCommandSpec -Name 'config' -Description 'Open package-resource TUI.' -Positionals @() -Options @(
                 New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help if supported.'
+            )
+            New-PiCommandSpec -Name 'auth' -Description 'Print credentials or check provider readiness.' -Positionals @('AuthCommand') -Options @(
+                New-PiOptionSpec -Tokens @('--provider') -Description 'Provider to print credentials for or check.' -ValueKind 'Provider'
+                New-PiOptionSpec -Tokens @('--model') -Description 'Model whose provider to print credentials for or check.' -ValueKind 'ModelPattern'
+                New-PiOptionSpec -Tokens @('--min-expiry') -Description 'Minimum remaining bearer token lifetime (print-bearer-token).' -ValueKind 'Placeholder' -Placeholder '<duration>'
+                New-PiOptionSpec -Tokens @('--json') -Description 'Emit JSON output (check).'
+                New-PiOptionSpec -Tokens @('--credentials') -Description 'Emit the credential or include it in JSON output (check).'
+                New-PiOptionSpec -Tokens @('--no-refresh') -Description 'Do not refresh expired OAuth credentials (check).'
+                New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
             )
         )
 
@@ -196,9 +213,9 @@ function Get-PiCompletionCache {
             BuiltInProviders = @(
                 'anthropic',
                 'openai',
+                'openai-codex',
                 'github-copilot',
                 'google',
-                'antigravity',
                 'azure-openai-responses',
                 'google-vertex',
                 'amazon-bedrock',
@@ -209,16 +226,36 @@ function Get-PiCompletionCache {
                 'openrouter',
                 'vercel-ai-gateway',
                 'zai',
+                'zai-coding-cn',
                 'opencode',
                 'opencode-go',
                 'huggingface',
                 'kimi-coding',
                 'minimax',
-                'minimax-cn'
+                'minimax-cn',
+                'deepseek',
+                'nvidia',
+                'fireworks',
+                'together',
+                'baseten',
+                'ant-ling',
+                'moonshotai',
+                'moonshotai-cn',
+                'cloudflare-ai-gateway',
+                'cloudflare-workers-ai',
+                'qwen-token-plan',
+                'qwen-token-plan-cn',
+                'qwen-token-plan-individual',
+                'xiaomi',
+                'xiaomi-token-plan-ams',
+                'xiaomi-token-plan-cn',
+                'xiaomi-token-plan-sgp'
             )
             BuiltInTools = @('read', 'bash', 'edit', 'write', 'grep', 'find', 'ls')
-            ThinkingLevels = @('off', 'minimal', 'low', 'medium', 'high', 'xhigh')
+            ThinkingLevels = @('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
             OutputModes = @('text', 'json', 'rpc')
+            TuiModes = @('regular', 'fullscreen')
+            AuthCommands = @('print-api-key', 'print-bearer-token', 'check')
             ExecutablePath = $null
             ExecutablePathProbed = $false
             CustomModelDataLoadedAt = [datetime]::MinValue
@@ -574,9 +611,21 @@ function Get-PiValueKindForOption {
         '--session' { return 'SessionPathOrId' }
         '--fork' { return 'SessionPathOrId' }
         '--session-dir' { return 'DirectoryPath' }
-        '--models' { return 'ModelPatternList' }
+        '--session-id' { return 'SessionId' }
+        '--name' { return 'SessionName' }
+        '--models' {
+            if ($CommandName -eq 'update') {
+                return $null
+            }
+
+            return 'ModelPatternList'
+        }
         '--tools' { return 'ToolList' }
+        '--exclude-tools' { return 'ToolList' }
         '--thinking' { return 'Thinking' }
+        '--use-theme' { return 'ThemeName' }
+        '--tui-mode' { return 'TuiMode' }
+        '--auto-model' { return 'ModelPattern' }
         '--extension' {
             if ($CommandName -eq 'update') {
                 return 'InstalledPackageSource'
@@ -607,6 +656,10 @@ function Get-PiValueKindForOption {
         return 'FilePath'
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($Placeholder)) {
+        return 'Placeholder'
+    }
+
     $null
 }
 
@@ -618,7 +671,7 @@ function ConvertFrom-PiHelpOptionSection {
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($line in @($SectionText -split "`n")) {
-        if ($line -notmatch '^\s{2,}(?<spec>--[A-Za-z0-9][A-Za-z0-9-]*(?:,\s*-[A-Za-z0-9]+)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?|-[A-Za-z0-9]+(?:,\s*--[A-Za-z0-9][A-Za-z0-9-]*)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?)\s{2,}(?<description>.+)$') {
+        if ($line -notmatch '^\s{2,}(?<spec>--[A-Za-z0-9][A-Za-z0-9-]*(?:,\s*-[A-Za-z0-9]+)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?|-[A-Za-z0-9]+(?:,\s*--[A-Za-z0-9][A-Za-z0-9-]*)?(?:\s+(?:<[^>]+>|\[[^\]]+\]))?)\s+(?<description>.+)$') {
             continue
         }
 
@@ -648,7 +701,7 @@ function ConvertFrom-PiHelpOptionSection {
         }
 
         $valueKind = Get-PiValueKindForOption -Tokens $tokens -Placeholder $placeholder -Description $description -CommandName $CommandName
-        foreach ($item in @(New-PiOptionSpec -Tokens $tokens -Description $description -ValueKind $valueKind -OptionalValue:$optionalValue)) {
+        foreach ($item in @(New-PiOptionSpec -Tokens $tokens -Description $description -ValueKind $valueKind -OptionalValue:$optionalValue -Placeholder $placeholder)) {
             [void]$results.Add($item)
         }
     }
@@ -713,6 +766,32 @@ function Set-PiCommandSpec {
     $cache.RootCommands = @($updatedCommands.ToArray())
 }
 
+function ConvertFrom-PiEnumeratedDescription {
+    param([string]$Description)
+
+    if ([string]::IsNullOrWhiteSpace($Description) -or $Description -notmatch ':\s*(?<list>[^:]+)$') {
+        return @()
+    }
+
+    $listText = $Matches.list -replace '\([^)]*\)', ''
+    $listText = $listText -replace '\bor\b', ','
+    $values = New-Object System.Collections.Generic.List[string]
+    foreach ($part in @($listText -split ',')) {
+        $candidate = $part.Trim().TrimEnd('.')
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        if ($candidate -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') {
+            return @()
+        }
+
+        [void]$values.Add($candidate)
+    }
+
+    @($values.ToArray())
+}
+
 function Update-PiRootHelpData {
     $cache = Get-PiCompletionCache
     if (Test-PiCacheFresh -LoadedAt $cache.RootHelpLoadedAt -TtlSeconds $cache.RootHelpTtlSeconds) {
@@ -743,6 +822,10 @@ function Update-PiRootHelpData {
         $existingCommand = if ($commandLookup.ContainsKey($commandName)) { $commandLookup[$commandName] } else { $null }
         if ($existingCommand) {
             $commandLookup[$commandName] = New-PiCommandSpec -Name $existingCommand.Name -Description $description -Positionals $existingCommand.Positionals -Options $existingCommand.Options
+        } else {
+            $commandLookup[$commandName] = New-PiCommandSpec -Name $commandName -Description $description -Positionals @() -Options @(
+                New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
+            )
         }
     }
 
@@ -759,6 +842,22 @@ function Update-PiRootHelpData {
     foreach ($line in @($builtInToolSection -split "`n")) {
         if ($line -match '^\s*(?<tool>[A-Za-z0-9-]+)\s+-') {
             [void]$builtInTools.Add($Matches.tool)
+        }
+    }
+
+    foreach ($enumOption in @(
+            @{ Token = '--thinking'; Key = 'ThinkingLevels' },
+            @{ Token = '--mode'; Key = 'OutputModes' },
+            @{ Token = '--tui-mode'; Key = 'TuiModes' }
+        )) {
+        $spec = Find-PiOptionSpec -Token $enumOption.Token -Options $globalOptions
+        if ($null -eq $spec) {
+            continue
+        }
+
+        $values = @(ConvertFrom-PiEnumeratedDescription -Description $spec.Description)
+        if ($values.Count -ge 2) {
+            $cache[$enumOption.Key] = $values
         }
     }
 
@@ -910,16 +1009,15 @@ function Get-PiTokenText {
 function Get-PiProcessedTokens {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [string]$WordToComplete
+        [int]$CursorPosition
     )
 
-    if ($CommandAst.CommandElements.Count -le 1) {
-        return @()
-    }
-
+    # Only elements that end strictly before the cursor precede the current
+    # word; the element the cursor touches is the word being completed and
+    # anything after the cursor is ignored.
     $tokens = @(
-        foreach ($element in @($CommandAst.CommandElements)[1..($CommandAst.CommandElements.Count - 1)]) {
-            if ($null -eq $element) {
+        foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+            if ($null -eq $element -or $element.Extent.EndOffset -ge $CursorPosition) {
                 continue
             }
 
@@ -927,15 +1025,36 @@ function Get-PiProcessedTokens {
         }
     )
 
-    if ($tokens.Count -gt 0 -and -not [string]::IsNullOrEmpty($WordToComplete) -and $tokens[-1] -eq $WordToComplete) {
-        if ($tokens.Count -eq 1) {
-            return @()
+    @($tokens)
+}
+
+function Get-PiCurrentWord {
+    param(
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -ge $CursorPosition -or $extent.EndOffset -lt $CursorPosition) {
+            continue
         }
 
-        return @($tokens[0..($tokens.Count - 2)])
+        if ($extent.EndOffset -eq $CursorPosition -and $element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            return $WordToComplete
+        }
+
+        # Comma lists parse as array literals (or error expressions); the raw
+        # extent text keeps the typed value intact.
+        return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset).TrimStart([char[]]@([char]34, [char]39))
     }
 
-    @($tokens)
+    if ($CursorPosition -gt $CommandAst.Extent.EndOffset) {
+        return ''
+    }
+
+    $WordToComplete
 }
 
 function Get-PiCommandSpec {
@@ -1056,27 +1175,29 @@ function Update-PiCustomModelData {
         try {
             $content = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
             $config = ConvertFrom-PiJsonConfig -Path $path -Content $content
-        } catch {
-            continue
-        }
-
-        if (-not $config.providers) {
-            continue
-        }
-
-        $providersObject = $config.providers.PSObject
-        foreach ($providerProperty in @($providersObject.Properties)) {
-            $providerName = $providerProperty.Name
-            if ([string]::IsNullOrWhiteSpace($providerName)) {
+            if ($null -eq $config -or $null -eq $config.PSObject.Properties['providers'] -or $null -eq $config.providers) {
                 continue
             }
 
-            [void]$providerNames.Add($providerName)
+            foreach ($providerProperty in @($config.providers.PSObject.Properties)) {
+                $providerName = $providerProperty.Name
+                if ([string]::IsNullOrWhiteSpace($providerName)) {
+                    continue
+                }
 
-            $providerValue = $providerProperty.Value
-            if ($providerValue -and $providerValue.models) {
+                [void]$providerNames.Add($providerName)
+
+                $providerValue = $providerProperty.Value
+                if ($null -eq $providerValue -or $null -eq $providerValue.PSObject.Properties['models']) {
+                    continue
+                }
+
                 foreach ($model in @($providerValue.models)) {
-                    $modelId = $model.id
+                    if ($null -eq $model -or $null -eq $model.PSObject.Properties['id']) {
+                        continue
+                    }
+
+                    $modelId = [string]$model.id
                     if ([string]::IsNullOrWhiteSpace($modelId)) {
                         continue
                     }
@@ -1086,6 +1207,26 @@ function Update-PiCustomModelData {
                         [void]$modelCandidates.Add("$providerName/$modelId")
                     }
                 }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    # Provider ids pi has actually fetched a catalog for live in models-store.json.
+    $homePath = [Environment]::GetFolderPath('UserProfile')
+    if (-not [string]::IsNullOrWhiteSpace($homePath)) {
+        $storePath = Join-Path $homePath '.pi\agent\models-store.json'
+        if (Test-Path -LiteralPath $storePath -PathType Leaf) {
+            try {
+                $store = Get-Content -LiteralPath $storePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                foreach ($storeProperty in @($store.PSObject.Properties)) {
+                    if ($storeProperty.Name -match '^[a-z0-9][a-z0-9-]*$') {
+                        [void]$providerNames.Add($storeProperty.Name)
+                    }
+                }
+            } catch {
+                $null = $_
             }
         }
     }
@@ -1310,7 +1451,8 @@ function Get-PiValueCompletions {
         [string]$ValueKind,
         [string]$WordToComplete,
         [string]$ContextToken,
-        [string]$InlinePrefix
+        [string]$InlinePrefix,
+        [string]$Placeholder
     )
 
     $cache = Get-PiCompletionCache
@@ -1364,6 +1506,33 @@ function Get-PiValueCompletions {
             foreach ($level in @($cache.ThinkingLevels)) {
                 & $addResult $level 'Thinking level'
             }
+        }
+        'TuiMode' {
+            foreach ($mode in @($cache.TuiModes)) {
+                & $addResult $mode 'TUI mode'
+            }
+        }
+        'AuthCommand' {
+            foreach ($authCommand in @($cache.AuthCommands)) {
+                & $addResult $authCommand 'pi auth command'
+            }
+        }
+        'SessionName' {
+            & $addResult '<name>' 'Session display name'
+        }
+        'SessionId' {
+            & $addResult '<id>' 'Project session ID'
+        }
+        'ThemeName' {
+            foreach ($themePath in @(Get-PiKnownResourcePaths -Kind 'theme')) {
+                & $addResult ([System.IO.Path]::GetFileNameWithoutExtension($themePath)) 'Theme name'
+            }
+
+            & $addResult '<name[/name]>' 'Theme name (dark/light pair allowed)'
+        }
+        'Placeholder' {
+            $placeholderText = if ([string]::IsNullOrWhiteSpace($Placeholder)) { '<value>' } else { $Placeholder }
+            & $addResult $placeholderText "Value for $ContextToken"
         }
         'ToolList' {
             $prefix = ''
@@ -1614,10 +1783,10 @@ function Complete-Pi {
         [int]$CursorPosition
     )
 
-    $null = $CursorPosition
     $cache = Get-PiCompletionCache
     $globalOptions = @(Get-PiGlobalOptions)
-    $tokens = @(Get-PiProcessedTokens -CommandAst $CommandAst -WordToComplete $WordToComplete)
+    $WordToComplete = Get-PiCurrentWord -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
+    $tokens = @(Get-PiProcessedTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
     $commandSpec = $null
     $positionalsConsumed = 0
     $expectingValue = $null
@@ -1659,6 +1828,11 @@ function Complete-Pi {
         }
 
         if (-not $commandSpec) {
+            if ($token -eq '--') {
+                $rootMessageMode = $true
+                continue
+            }
+
             if ($token.StartsWith('-')) {
                 $globalOption = Find-PiOptionSpec -Token $token -Options $globalOptions
                 if ($globalOption) {
@@ -1747,7 +1921,7 @@ function Complete-Pi {
             $flagPart = $tokens[-1].Substring(0, $equalsIndex)
             $valuePrefix = $tokens[-1].Substring($equalsIndex + 1)
             if ([string]::IsNullOrEmpty($valuePrefix)) {
-                Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart="
+                Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineEmptyOption.Placeholder
                 return
             }
         }
@@ -1760,13 +1934,13 @@ function Complete-Pi {
         $options = if ($commandSpec) { $commandSpec.Options } else { $globalOptions }
         $inlineOption = Find-PiOptionSpec -Token $flagPart -Options $options
         if ($inlineOption -and $inlineOption.ValueKind) {
-            Get-PiValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart="
+            Get-PiValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineOption.Placeholder
             return
         }
     }
 
     if ($expectingValue) {
-        Get-PiValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -ContextToken $expectingValue.Token
+        Get-PiValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -ContextToken $expectingValue.Token -Placeholder $expectingValue.Placeholder
         return
     }
 
