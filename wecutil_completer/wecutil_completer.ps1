@@ -206,8 +206,14 @@ function Get-WecutilCatalog {
             '/transportname:'       = @('http', 'https')
             '/ese:'                 = @('true', 'false')
             '/eventsourceenabled:'  = @('true', 'false')
-            '/q:'                   = @('true', 'false')
             '/quiet:'               = @('true', 'false')
+            '/ct:'                  = @('default', 'negotiate', 'digest', 'basic', 'localmachine')
+            '/credentialstype:'     = @('default', 'negotiate', 'digest', 'basic', 'localmachine')
+            '/tp:'                  = @('80', '443', '5985', '5986')
+            '/transportport:'       = @('80', '443', '5985', '5986')
+            # /q: means Quiet for quick-config and Query for set-subscription,
+            # so the quick-config meaning is scoped to that command.
+            'qc:/q:'                = @('true', 'false')
         }
         PathOptions         = @{
             '/c:'              = '.xml'
@@ -246,6 +252,16 @@ function Get-WecutilCatalog {
             '/cup:'                  = '<password>'
             '/commonuserpassword:'   = '<password>'
             '/purgeinactivees:'      = '<days>'
+            '/hn:'                   = '<fqdn>'
+            '/hostname:'             = '<fqdn>'
+            '/ica:'                  = '<thumbprint[,thumbprint]>'
+            '/allowedissuerca:'      = '<thumbprint[,thumbprint]>'
+            '/as:'                   = '<dns-name[,dns-name]>'
+            '/allowedsubjects:'      = '<dns-name[,dns-name]>'
+            '/ds:'                   = '<dns-name[,dns-name]>'
+            '/deniedsubjects:'       = '<dns-name[,dns-name]>'
+            '/adc:'                  = '<sddl>'
+            '/allowedsourcedomaincomputers:' = '<sddl>'
         }
     }
 
@@ -344,13 +360,14 @@ function Get-WecutilParsedOptionsForCommand {
     foreach ($line in @($helpLines)) {
         $text = [string]$line
         $match = [regex]::Match($text, '^\s*/(?<spec>[^\s]+)\s*(?:\((?<long>[^)]+)\))?\s*(?<rest>.*)$')
-        if ($match.Success) {
+        # A real option header is a bare '/spec (LongName)' line and nothing
+        # else; wecutil's prose wraps onto lines that also start with a slash
+        # ('/hi (HeartbeatInterval) or /dmlt ... may only be specified'), and
+        # treating those as headers manufactures bare options the tool rejects.
+        if ($match.Success -and [string]::IsNullOrWhiteSpace($match.Groups['rest'].Value)) {
             $spec = $match.Groups['spec'].Value
             $longName = $match.Groups['long'].Value
-            $description = $match.Groups['rest'].Value.Trim()
-            if ([string]::IsNullOrWhiteSpace($description)) {
-                $description = $spec
-            }
+            $description = $spec
 
             foreach ($parsed in @(ConvertFrom-WecutilOptionSpec -Spec $spec -LongName $longName -Description $description)) {
                 [void]$options.Add($parsed)
@@ -485,7 +502,8 @@ function Get-WecutilPathCompletions {
         [string]$ToolTip,
         [string]$Placeholder,
         [ValidateSet('File','Directory','Any')]
-        [string]$Kind = 'File'
+        [string]$Kind = 'File',
+        [string[]]$PreferExtension = @()
     )
 
     $typedValue = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
@@ -524,6 +542,12 @@ function Get-WecutilPathCompletions {
         $items = @()
     }
 
+    # Directories come first so the tree stays navigable, then the preferred
+    # file kind, then anything else.
+    $containers = New-Object System.Collections.Generic.List[object]
+    $preferred = New-Object System.Collections.Generic.List[object]
+    $others = New-Object System.Collections.Generic.List[object]
+
     foreach ($item in $items) {
         if ($Kind -eq 'Directory' -and -not $item.PSIsContainer) {
             continue
@@ -541,7 +565,19 @@ function Get-WecutilPathCompletions {
         }
 
         $completionText = ConvertTo-WecutilQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        [void]$results.Add((New-WecutilCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $completionText)))
+        $result = New-WecutilCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $completionText)
+
+        if ($item.PSIsContainer) {
+            [void]$containers.Add($result)
+        } elseif ($PreferExtension.Count -eq 0 -or $PreferExtension -contains $item.Extension) {
+            [void]$preferred.Add($result)
+        } else {
+            [void]$others.Add($result)
+        }
+    }
+
+    foreach ($result in @($containers.ToArray()) + @($preferred.ToArray()) + @($others.ToArray())) {
+        [void]$results.Add($result)
     }
 
     if ($results.Count -eq 0) {
@@ -603,12 +639,16 @@ function Get-WecutilSubscriptionCompletions {
     param([string]$CurrentWord)
 
     $results = New-Object System.Collections.Generic.List[object]
+    $typed = Remove-WecutilOuterQuotes -Value $CurrentWord
     foreach ($name in @(Get-WecutilSubscriptionNames)) {
-        if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and -not $name.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not [string]::IsNullOrWhiteSpace($typed) -and -not $name.StartsWith($typed, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        [void]$results.Add((New-WecutilCompletionResult -CompletionText $name -ResultType 'ParameterValue' -ToolTip 'Subscription ID.' -ListItemText $name))
+        # Subscription IDs come from a user-authored XML tag and often contain
+        # spaces, so they have to be quoted to stay one operand.
+        $completionText = ConvertTo-WecutilQuotedValue -Value $name -AlwaysQuote ($CurrentWord.StartsWith('"'))
+        [void]$results.Add((New-WecutilCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip 'Subscription ID.' -ListItemText $name))
     }
 
     if ($results.Count -eq 0) {
@@ -687,15 +727,20 @@ function Complete-Wecutil {
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('/')) {
         $inline = Get-WecutilInlineOptionInfo -Token $currentWord -CanonicalCommand $activeCommand.Canonical
         if ($null -ne $inline) {
-            $key = $inline.Prefix.ToLowerInvariant()
-            if ($catalog.EnumValues.ContainsKey($key)) {
-                return @(Get-WecutilEnumCompletions -CurrentWord $inline.Value -Values $catalog.EnumValues[$key] -Prefix $inline.Prefix -ToolTip $inline.Option.Description)
-            }
-            if ($catalog.PathOptions.ContainsKey($key)) {
-                return @(Get-WecutilPathCompletions -CurrentWord $inline.Value -Prefix $inline.Prefix -ToolTip $inline.Option.Description -Placeholder $catalog.PathOptions[$key] -Kind 'File')
-            }
-            if ($catalog.PlaceholderOptions.ContainsKey($key)) {
-                return @(Get-WecutilPlaceholderCompletions -CurrentWord $inline.Value -Prefix $inline.Prefix -Placeholder $catalog.PlaceholderOptions[$key] -ToolTip $inline.Option.Description)
+            # The same option token can mean different things under different
+            # commands (/q: is Quiet for qc and Query for ss), so a
+            # '<command>:<option>' key wins over the shared one.
+            $optionKey = $inline.Prefix.ToLowerInvariant()
+            foreach ($key in @(($activeCommand.Canonical.ToLowerInvariant() + ':' + $optionKey), $optionKey)) {
+                if ($catalog.EnumValues.ContainsKey($key)) {
+                    return @(Get-WecutilEnumCompletions -CurrentWord $inline.Value -Values $catalog.EnumValues[$key] -Prefix $inline.Prefix -ToolTip $inline.Option.Description)
+                }
+                if ($catalog.PathOptions.ContainsKey($key)) {
+                    return @(Get-WecutilPathCompletions -CurrentWord $inline.Value -Prefix $inline.Prefix -ToolTip $inline.Option.Description -Placeholder $catalog.PathOptions[$key] -Kind 'Any' -PreferExtension @('.xml'))
+                }
+                if ($catalog.PlaceholderOptions.ContainsKey($key)) {
+                    return @(Get-WecutilPlaceholderCompletions -CurrentWord $inline.Value -Prefix $inline.Prefix -Placeholder $catalog.PlaceholderOptions[$key] -ToolTip $inline.Option.Description)
+                }
             }
         }
 
@@ -723,7 +768,7 @@ function Complete-Wecutil {
                 foreach ($subscription in @(Get-WecutilSubscriptionCompletions -CurrentWord $currentWord)) {
                     [void]$results.Add($subscription)
                 }
-                foreach ($pathResult in @(Get-WecutilPathCompletions -CurrentWord $currentWord -Prefix '' -ToolTip 'Subscription XML config file.' -Placeholder '<config.xml>' -Kind 'File')) {
+                foreach ($pathResult in @(Get-WecutilPathCompletions -CurrentWord $currentWord -Prefix '' -ToolTip 'Subscription XML config file.' -Placeholder '<config.xml>' -Kind 'Any' -PreferExtension @('.xml'))) {
                     [void]$results.Add($pathResult)
                 }
                 return @($results.ToArray()) | Group-Object CompletionText | ForEach-Object { $_.Group[0] }
@@ -731,7 +776,7 @@ function Complete-Wecutil {
         }
         'ConfigFile' {
             if ($positionals.Count -eq 0) {
-                return @(Get-WecutilPathCompletions -CurrentWord $currentWord -Prefix '' -ToolTip 'Subscription XML config file.' -Placeholder '<config.xml>' -Kind 'File')
+                return @(Get-WecutilPathCompletions -CurrentWord $currentWord -Prefix '' -ToolTip 'Subscription XML config file.' -Placeholder '<config.xml>' -Kind 'Any' -PreferExtension @('.xml'))
             }
         }
     }
