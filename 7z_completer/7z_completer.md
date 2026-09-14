@@ -25,8 +25,9 @@ The script:
 4. Extracts:
    - command verbs from `<Commands>`
    - switch tokens from `<Switches>`
-   - enumerated value hints from switch definitions that expose values in `{...}` or `[...]`
+   - enumerated value hints from switch definitions that expose values in `{...}` or `[...]`, ignoring lone metavariables such as `{Directory}`, `{Type}` and `[N]`
 5. Caches the parsed catalog for later completion requests.
+6. On first use of `-t` or `-stx`, runs `7z i` and caches the archive format names from its `Formats:` table.
 
 At completion time it inspects the current command line, determines:
 
@@ -35,19 +36,17 @@ At completion time it inspects the current command line, determines:
 - whether the current token is:
   - a command
   - a switch
-  - a switch value entered separately
-  - a switch value entered inline (for example, a switch immediately followed by its value)
+  - a switch value entered inline (7-Zip only accepts a value attached to its switch, as in `-tzip` or `-oC:\out`, so no space-separated value form is offered)
+  - an operand, which for every 7-Zip command is the archive name followed by file names
 
 ## Key completion behaviors / supported values
 
 - Before a command is chosen, it offers:
   - discovered 7-Zip command verbs
   - discovered switch tokens
-- After a command is chosen, it continues to offer switches.
-- If a switch has enumerated values in the parsed help output, those values are completed.
-- Value completion works both for:
-  - separate switch values
-  - inline switch values
+- After a command is chosen, an operand slot completes files and directories; switches are still offered for an empty word and whenever the word starts with `-`.
+- If a switch has enumerated values in the parsed help output, those values are completed inline.
+- `-t` and `-stx` complete the archive format names reported by `7z i`.
 - The script treats these switches as directory-valued and completes directories for them:
   - `-o`
   - `-w`
@@ -83,4 +82,4 @@ Example scenarios after loading:
 - If `7z` cannot be resolved, the completer returns no suggestions.
 - If help parsing fails, the catalog remains effectively empty.
 - Only `-o` and `-w` get directory completion from this script.
-- The script does not add custom completion for archive contents or arbitrary positional file arguments.
+- Operand slots complete every file and directory; they are not filtered down to archive extensions, and the script does not list the contents of an archive.

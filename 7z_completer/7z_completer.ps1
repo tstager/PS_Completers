@@ -5,12 +5,15 @@ Set-StrictMode -Version 2.0
 
 if (-not (Get-Variable -Name SevenZipCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:SevenZipCompletionCatalog = @{
-        Initialized        = $false
-        HelpCommand        = $null
-        Commands           = @()
-        SwitchTokens       = @()
-        ValueHintsBySwitch = @{}
-        PathLikeSwitches   = @('-o', '-w')
+        Initialized         = $false
+        HelpCommand         = $null
+        Commands            = @()
+        SwitchTokens        = @()
+        ValueHintsBySwitch  = @{}
+        PathLikeSwitches    = @('-o', '-w')
+        ArchiveTypeSwitches = @('-t', '-stx')
+        ArchiveTypes        = @()
+        ArchiveTypesLoaded  = $false
     }
 }
 
@@ -135,7 +138,18 @@ function Get-SevenZipSimpleValues {
         return $rangeValues
     }
 
-    $values = foreach ($part in ($Text -split '\|')) {
+    $parts = @($Text -split '\|')
+
+    # A lone '{Directory}', '{Type}' or '[N]' is a metavariable, not a value 7-Zip accepts; only a
+    # list of alternatives, or a short lower-case token, is a real enum member.
+    if ($parts.Count -eq 1) {
+        $only = $parts[0].Trim()
+        if ($only -eq 'N' -or ($only.Length -gt 3 -and $only -cmatch '^[A-Z]')) {
+            return @()
+        }
+    }
+
+    $values = foreach ($part in $parts) {
         $value = $part.Trim()
         if ($value -match '^\{.+\}$') {
             continue
@@ -168,6 +182,64 @@ function Get-SevenZipValueHintsFromLines {
     }
 
     $result
+}
+
+function Get-SevenZipArchiveTypeList {
+    if ($script:SevenZipCompletionCatalog.ArchiveTypesLoaded) {
+        return $script:SevenZipCompletionCatalog.ArchiveTypes
+    }
+
+    $script:SevenZipCompletionCatalog.ArchiveTypesLoaded = $true
+
+    $commandName = Resolve-SevenZipHelpCommand
+    if (-not $commandName) {
+        return $script:SevenZipCompletionCatalog.ArchiveTypes
+    }
+
+    $raw = try {
+        $null | & $commandName i 2>$null
+    } catch {
+        @()
+    }
+
+    # The 'Formats:' table lists one archive format per line as
+    # '<index> <flags>  <Name>  <extensions>  <signature>'. The flag column can contain spaces, so
+    # the name is the first single-word field that is neither the index nor the dotted flag string.
+    $inFormats = $false
+    $names = foreach ($line in @($raw)) {
+        if ($line -match '^Formats:') {
+            $inFormats = $true
+            continue
+        }
+
+        if ($inFormats -and $line -match '^\S') {
+            $inFormats = $false
+        }
+
+        if (-not $inFormats) {
+            continue
+        }
+
+        foreach ($field in @($line -split '\s{2,}')) {
+            $words = @($field.Trim() -split '\s+' | Where-Object { $_ })
+            if ($words.Count -eq 0) {
+                continue
+            }
+
+            $first = $words[0]
+            if ($first -match '^\d+$' -or $first -match '^[.]+$') {
+                continue
+            }
+
+            if ($first -match '^[A-Za-z0-9][A-Za-z0-9]*$') {
+                $first.ToLowerInvariant()
+                break
+            }
+        }
+    }
+
+    $script:SevenZipCompletionCatalog.ArchiveTypes = @(@($names) | Sort-Object -Unique)
+    $script:SevenZipCompletionCatalog.ArchiveTypes
 }
 
 function Initialize-SevenZipCompletionCatalog {
@@ -266,39 +338,6 @@ function Get-SevenZipActiveCommand {
     $null
 }
 
-function Get-SevenZipCanonicalSwitch {
-    param(
-        [string]$Token,
-        [string[]]$KnownSwitches
-    )
-
-    foreach ($switchToken in $KnownSwitches) {
-        if ($Token.Equals($switchToken, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $switchToken
-        }
-    }
-
-    $null
-}
-
-function Get-SevenZipExpectedValueSwitch {
-    param(
-        [string[]]$TokensBeforeCurrent,
-        [string[]]$KnownValueSwitches
-    )
-
-    if (-not $TokensBeforeCurrent -or $TokensBeforeCurrent.Count -eq 0) {
-        return $null
-    }
-
-    if (Test-SevenZipHasOptionTerminator -TokensBeforeCurrent $TokensBeforeCurrent) {
-        return $null
-    }
-
-    $lastToken = $TokensBeforeCurrent[-1]
-    Get-SevenZipCanonicalSwitch -Token $lastToken -KnownSwitches $KnownValueSwitches
-}
-
 function Get-SevenZipInlineValueSwitch {
     param(
         [string]$Token,
@@ -370,6 +409,13 @@ function Get-SevenZipDirectoryCompletions {
         }
 }
 
+function Get-SevenZipFileCompletionList {
+    param([string]$InputPath)
+
+    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
+    [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput)
+}
+
 function Complete-SevenZip {
     param(
         [string]$wordToComplete,
@@ -401,8 +447,13 @@ function Complete-SevenZip {
 
     $hasOptionTerminator = Test-SevenZipHasOptionTerminator -TokensBeforeCurrent $tokensBeforeCurrent
     $activeCommand = Get-SevenZipActiveCommand -Tokens $tokensBeforeCurrent -KnownCommands $script:SevenZipCompletionCatalog.Commands
-    $valueSwitches = @($script:SevenZipCompletionCatalog.ValueHintsBySwitch.Keys + $script:SevenZipCompletionCatalog.PathLikeSwitches) |
-        Sort-Object -Unique
+    # 7-Zip only accepts switch values attached to the switch ('-tzip', '-oC:\out'); there is no
+    # space-separated and no '--switch=value' form, so only the inline shape is completed.
+    $valueSwitches = @(
+        $script:SevenZipCompletionCatalog.ValueHintsBySwitch.Keys
+        $script:SevenZipCompletionCatalog.PathLikeSwitches
+        $script:SevenZipCompletionCatalog.ArchiveTypeSwitches
+    ) | Sort-Object -Unique
 
     if (-not $hasOptionTerminator) {
         $inlineValueSwitch = Get-SevenZipInlineValueSwitch -Token $currentWord -KnownValueSwitches $valueSwitches
@@ -410,33 +461,24 @@ function Complete-SevenZip {
             $typedValue = $currentWord.Substring($inlineValueSwitch.Length)
             $switchKey = $inlineValueSwitch.ToLowerInvariant()
 
+            if ($script:SevenZipCompletionCatalog.PathLikeSwitches -contains $switchKey) {
+                return Get-SevenZipDirectoryCompletions -InputPath $typedValue -SwitchPrefix $inlineValueSwitch
+            }
+
+            if ($script:SevenZipCompletionCatalog.ArchiveTypeSwitches -contains $switchKey) {
+                return Get-SevenZipArchiveTypeList |
+                    Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
+                    ForEach-Object {
+                        New-SevenZipCompletionResult -CompletionText ($inlineValueSwitch + $_) -ResultType 'ParameterValue' -ToolTip "Archive type $_"
+                    }
+            }
+
             if ($script:SevenZipCompletionCatalog.ValueHintsBySwitch.ContainsKey($switchKey)) {
                 return $script:SevenZipCompletionCatalog.ValueHintsBySwitch[$switchKey] |
                     Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
                     ForEach-Object {
                         New-SevenZipCompletionResult -CompletionText ($inlineValueSwitch + $_) -ResultType 'ParameterValue' -ToolTip ($inlineValueSwitch + $_)
                     }
-            }
-
-            if ($script:SevenZipCompletionCatalog.PathLikeSwitches -contains $switchKey) {
-                return Get-SevenZipDirectoryCompletions -InputPath $typedValue -SwitchPrefix $inlineValueSwitch
-            }
-        }
-
-        $expectedValueSwitch = Get-SevenZipExpectedValueSwitch -TokensBeforeCurrent $tokensBeforeCurrent -KnownValueSwitches $valueSwitches
-        if ($expectedValueSwitch) {
-            $switchKey = $expectedValueSwitch.ToLowerInvariant()
-
-            if ($script:SevenZipCompletionCatalog.ValueHintsBySwitch.ContainsKey($switchKey)) {
-                return $script:SevenZipCompletionCatalog.ValueHintsBySwitch[$switchKey] |
-                    Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
-                    ForEach-Object {
-                        New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip ($expectedValueSwitch + $_)
-                    }
-            }
-
-            if ($script:SevenZipCompletionCatalog.PathLikeSwitches -contains $switchKey) {
-                return Get-SevenZipDirectoryCompletions -InputPath $currentWord
             }
         }
     }
@@ -474,7 +516,7 @@ function Complete-SevenZip {
             }
     }
 
-    if (-not $hasOptionTerminator -and ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('-'))) {
+    if (-not $hasOptionTerminator -and $currentWord.StartsWith('-')) {
         return $script:SevenZipCompletionCatalog.SwitchTokens |
             Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($currentWord) + '*') } |
             ForEach-Object {
@@ -482,7 +524,20 @@ function Complete-SevenZip {
             }
     }
 
-    @()
+    # Everything after the command is <archive_name> then <file_names>, so this is a path slot.
+    $fileResults = @(Get-SevenZipFileCompletionList -InputPath $currentWord)
+    if (-not $hasOptionTerminator -and [string]::IsNullOrWhiteSpace($currentWord)) {
+        $switchResults = @(
+            $script:SevenZipCompletionCatalog.SwitchTokens |
+                ForEach-Object {
+                    New-SevenZipCompletionResult -CompletionText $_ -ResultType 'ParameterName' -ToolTip $_
+                }
+        )
+
+        return @($switchResults + $fileResults)
+    }
+
+    $fileResults
 }
 
 Register-ArgumentCompleter -Native -CommandName '7z', '7z.exe' -ScriptBlock {
