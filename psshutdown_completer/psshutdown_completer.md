@@ -51,8 +51,9 @@ It also offers the other documented switches:
 - `-p`
 - `-n`
 - `-nobanner`
+- `-accepteula`
 
-Once an action or switch has already been used, it is generally hidden from later blank-position completion results so the list stays focused.
+Once an action or switch has already been used, it is generally hidden from later blank-position completion results so the list stays focused. Switches remain available after a remote target has been typed; only the target placeholders stop repeating. Only tokens that end before the cursor count as used, so completing inside an earlier token on the line sees the same context as typing it fresh.
 
 ### Value-aware option handling
 
@@ -88,11 +89,7 @@ When the current token is in the remote target position, the completer offers sa
 - `\\*`
 - `@file`
 
-It also handles comma-separated target lists in the documented form:
-
-```text
-\\computer[,computer[,...]]
-```
+The documented `\\computer[,computer[,...]]` list form is not modelled: PowerShell splits a native argument at `,` before the completer runs, so the list is never seen as one word.
 
 When the current token starts with `@`, the completer switches to local path completion for the file portion while preserving the `@` prefix.
 In interactive PowerShell, you will usually want to type the token as `"@...` so PowerShell does not interpret bare `@` as splatting syntax before the native completer runs.

@@ -92,6 +92,7 @@ function Get-PsShutdownSwitchSpecs {
         [pscustomobject]@{ Token = '-p'; Description = 'Optional password for the remote connection user name.'; TakesValue = $true; ValueKind = 'Password' }
         [pscustomobject]@{ Token = '-n'; Description = 'Timeout in seconds for connecting to remote computers.'; TakesValue = $true; ValueKind = 'ConnectTimeout' }
         [pscustomobject]@{ Token = '-nobanner'; Description = 'Suppress the startup banner and copyright message.'; TakesValue = $false }
+        [pscustomobject]@{ Token = '-accepteula'; Description = 'Accept the Sysinternals license agreement without the first-run dialog.'; TakesValue = $false }
     )
 }
 
@@ -278,23 +279,27 @@ function Get-PsShutdownAtFileCompletions {
 
     $inputPath = $trimmedValue.Substring(1)
     $cleanInput = $inputPath
-    $parent = Split-Path -Path $cleanInput -Parent
-    if ([string]::IsNullOrWhiteSpace($parent)) {
+    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
+        $leaf = ''
+    } else {
+        $parent = Split-Path -Path $cleanInput -Parent
+        if ([string]::IsNullOrWhiteSpace($parent)) {
+            $parent = '.'
+        }
+
+        $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $leaf = Split-Path -Path $cleanInput -Leaf
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
     $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {
-        $pathText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
+        $pathText = if ($parent -eq '.') {
+            $item.Name
+        } elseif (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
+            Join-Path -Path $parent -ChildPath $item.Name
         } else {
             $item.FullName
         }
@@ -347,37 +352,8 @@ function Get-PsShutdownRemoteTargetCompletions {
 
     $results = New-Object System.Collections.Generic.List[object]
 
-    if ($typedValue.Contains(',')) {
-        $commaIndex = $typedValue.LastIndexOf(',')
-        $prefix = $typedValue.Substring(0, $commaIndex + 1)
-        $segment = $typedValue.Substring($commaIndex + 1)
-        $candidate = 'computer'
-
-        if ([string]::IsNullOrWhiteSpace($segment) -or
-            $candidate.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $completionText = $prefix + $candidate
-            [void]$results.Add((
-                New-PsShutdownCompletionResult `
-                    -CompletionText $completionText `
-                    -ListItemText $completionText `
-                    -ResultType 'ParameterValue' `
-                    -ToolTip 'Additional remote computer name in a comma-separated target list.'
-            ))
-        }
-
-        if ($results.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($CurrentWord)) {
-            [void]$results.Add((
-                New-PsShutdownCompletionResult `
-                    -CompletionText $CurrentWord `
-                    -ListItemText $CurrentWord `
-                    -ResultType 'ParameterValue' `
-                    -ToolTip 'Remote target list in \\computer[,computer[,...]] form.'
-            ))
-        }
-
-        return @($results.ToArray())
-    }
-
+    # PowerShell splits a native argument at ',' before the completer runs, so a
+    # '\\a,b' list is never seen as one word; only the single-target forms are modelled.
     $candidates = @(
         [pscustomobject]@{ CompletionText = '\\computer'; ToolTip = 'Remote computer target in \\computer form.' }
         [pscustomobject]@{ CompletionText = '\\*'; ToolTip = 'Broadcast shutdown target placeholder.' }
@@ -534,8 +510,6 @@ function Complete-PsShutdown {
 
     Initialize-PsShutdownCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
     $line = $commandAst.ToString()
     $currentWord = if ($null -eq $wordToComplete) {
         Get-PsShutdownCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
@@ -547,14 +521,14 @@ function Complete-PsShutdown {
         $wordToComplete
     }
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
-    }
+    # Only elements that end before the cursor are consumed, so completing inside
+    # or at the end of an earlier token sees the same context as typing it fresh.
+    $tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     $state = Get-PsShutdownCommandState -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -578,17 +552,16 @@ function Complete-PsShutdown {
         return @(Get-PsShutdownRemoteTargetCompletions -CurrentWord $currentWord)
     }
 
-    if ($state.HasRemoteTarget) {
-        return @()
-    }
-
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($result in @(Get-PsShutdownOptionCompletions -CurrentWord $currentWord -State $state)) {
         [void]$results.Add($result)
     }
 
-    foreach ($result in @(Get-PsShutdownRemoteTargetCompletions -CurrentWord $currentWord)) {
-        [void]$results.Add($result)
+    # Switches stay valid after the target; only the target candidates must not repeat.
+    if (-not $state.HasRemoteTarget) {
+        foreach ($result in @(Get-PsShutdownRemoteTargetCompletions -CurrentWord $currentWord)) {
+            [void]$results.Add($result)
+        }
     }
 
     @($results.ToArray())
