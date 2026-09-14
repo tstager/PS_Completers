@@ -53,8 +53,10 @@ That command path is matched in a `switch` statement and returns a static list o
 - `resource` completion exposes:
   - verbs such as `list`, `get`, `set`, `test`, `delete`, `schema`, and `export`
   - operation-specific switches like `--resource`, `--input`, `--file`, and `--output-format` where defined in the script
-- `extension list` and `schema` have their own small static switch sets.
+- `extension list`, `function list`, `mcp`, and `schema` have their own small static switch sets.
+- Enum-valued options complete their documented `[possible values]` in both the separate and the `--opt=value` form: `--trace-level`, `--trace-format`, `--progress-format`, every `-o/--output-format` variant (per command), `schema --type`, and the `completer <SHELL>` positional.
 - `help` command paths are also modeled, so `dsc help ...` receives guided subcommand completion.
+- Tokens to the right of the cursor are ignored, so completing mid-line still resolves the correct command path.
 
 ## Dependencies or external command expectations
 
@@ -82,5 +84,4 @@ dsc resource get --<Tab>
   - resource names
   - extension names
   - file paths
-  - output-format values
 - Like the `dotnet` completer, context detection stops when it reaches an option or another non-bareword token.

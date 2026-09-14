@@ -9,7 +9,8 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
         'dsc'
         for ($i = 1; $i -lt $commandElements.Count; $i++) {
             $element = $commandElements[$i]
-            if ($element -isnot [StringConstantExpressionAst] -or
+            if ($element.Extent.StartOffset -ge $cursorPosition -or
+                $element -isnot [StringConstantExpressionAst] -or
                 $element.StringConstantType -ne [StringConstantType]::BareWord -or
                 $element.Value.StartsWith('-') -or
                 $element.Value -eq $wordToComplete) {
@@ -17,6 +18,67 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
         }
         $element.Value
     }) -join ';'
+
+    # Value slots: the option token left of the cursor, or the '--option=' prefix of the current word.
+    $previousToken = ''
+    for ($i = $commandElements.Count - 1; $i -ge 1; $i--) {
+        if ($commandElements[$i].Extent.EndOffset -lt $cursorPosition) {
+            $previousToken = $commandElements[$i].Extent.Text
+            break
+        }
+    }
+
+    $valueOption = $null
+    $valuePrefix = ''
+    $valueWord = $wordToComplete
+    if ($wordToComplete -match '^(?<option>--?[A-Za-z][A-Za-z0-9-]*)=(?<value>.*)$') {
+        $valueOption = $Matches.option
+        $valuePrefix = $valueOption + '='
+        $valueWord = $Matches.value
+    } elseif ($previousToken.StartsWith('-')) {
+        $valueOption = $previousToken
+    }
+
+    if ($valueOption) {
+        $outputFormats = @('json', 'pretty-json', 'yaml')
+        $outputFormatsWithTable = @('json', 'pretty-json', 'yaml', 'table-no-truncate')
+        $valueTable = @{}
+        foreach ($entry in @(
+                @{ Node = 'dsc'; Options = @('-l', '--trace-level'); Values = @('error', 'warn', 'info', 'debug', 'trace') }
+                @{ Node = 'dsc'; Options = @('-t', '--trace-format'); Values = @('default', 'plaintext', 'json') }
+                @{ Node = 'dsc'; Options = @('-p', '--progress-format'); Values = @('default', 'none', 'json') }
+                @{ Node = 'dsc;config;get'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;config;set'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;config;test'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;config;validate'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;config;export'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;config;resolve'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;extension;list'; Options = @('-o', '--output-format'); Values = $outputFormatsWithTable }
+                @{ Node = 'dsc;function;list'; Options = @('-o', '--output-format'); Values = $outputFormatsWithTable }
+                @{ Node = 'dsc;resource;list'; Options = @('-o', '--output-format'); Values = $outputFormatsWithTable }
+                @{ Node = 'dsc;resource;get'; Options = @('-o', '--output-format'); Values = @('json', 'json-array', 'pass-through', 'pretty-json', 'yaml') }
+                @{ Node = 'dsc;resource;set'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;resource;test'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;resource;delete'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;resource;schema'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;resource;export'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;schema'; Options = @('-o', '--output-format'); Values = $outputFormats }
+                @{ Node = 'dsc;schema'; Options = @('-t', '--type'); Values = @('configuration', 'configuration-get-result', 'configuration-set-result', 'configuration-test-result', 'dsc-resource', 'extension-discover-result', 'extension-manifest', 'function-definition', 'get-result', 'include', 'manifest-list', 'resolve-result', 'resource', 'resource-manifest', 'restart-required', 'set-result', 'test-result') }
+            )) {
+            foreach ($optionName in $entry.Options) {
+                $valueTable["$($entry.Node) $optionName"] = $entry.Values
+            }
+        }
+
+        $valueKey = "$command $valueOption"
+        if ($valueTable.ContainsKey($valueKey)) {
+            return @(foreach ($value in $valueTable[$valueKey]) {
+                if ($value.StartsWith($valueWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [CompletionResult]::new($valuePrefix + $value, $value, [CompletionResultType]::ParameterValue, $value)
+                }
+            })
+        }
+    }
 
     $completions = @(switch ($command) {
         'dsc' {
@@ -33,6 +95,8 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
             [CompletionResult]::new('completer', 'completer', [CompletionResultType]::ParameterValue, 'Generate a shell completion script')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Apply a configuration document')
             [CompletionResult]::new('extension', 'extension', [CompletionResultType]::ParameterValue, 'Operations on DSC extensions')
+            [CompletionResult]::new('function', 'function', [CompletionResultType]::ParameterValue, 'Operations on DSC functions')
+            [CompletionResult]::new('mcp', 'mcp', [CompletionResultType]::ParameterValue, 'Use DSC as a MCP server')
             [CompletionResult]::new('resource', 'resource', [CompletionResultType]::ParameterValue, 'Invoke a specific DSC resource')
             [CompletionResult]::new('schema', 'schema', [CompletionResultType]::ParameterValue, 'Get the JSON schema for a DSC type')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
@@ -41,6 +105,11 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
         'dsc;completer' {
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('bash', 'bash', [CompletionResultType]::ParameterValue, 'Generate a bash completion script')
+            [CompletionResult]::new('elvish', 'elvish', [CompletionResultType]::ParameterValue, 'Generate an elvish completion script')
+            [CompletionResult]::new('fish', 'fish', [CompletionResultType]::ParameterValue, 'Generate a fish completion script')
+            [CompletionResult]::new('powershell', 'powershell', [CompletionResultType]::ParameterValue, 'Generate a PowerShell completion script')
+            [CompletionResult]::new('zsh', 'zsh', [CompletionResultType]::ParameterValue, 'Generate a zsh completion script')
             break
         }
         'dsc;config' {
@@ -188,6 +257,30 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
             break
         }
         'dsc;extension;help;help' {
+            break
+        }
+        'dsc;function' {
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'List or find functions')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'dsc;function;list' {
+            [CompletionResult]::new('-o', '-o', [CompletionResultType]::ParameterName, 'The output format to use')
+            [CompletionResult]::new('--output-format', '--output-format', [CompletionResultType]::ParameterName, 'The output format to use')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'dsc;function;help' {
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'List or find functions')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'dsc;mcp' {
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'dsc;resource' {
@@ -338,12 +431,18 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
             [CompletionResult]::new('completer', 'completer', [CompletionResultType]::ParameterValue, 'Generate a shell completion script')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Apply a configuration document')
             [CompletionResult]::new('extension', 'extension', [CompletionResultType]::ParameterValue, 'Operations on DSC extensions')
+            [CompletionResult]::new('function', 'function', [CompletionResultType]::ParameterValue, 'Operations on DSC functions')
+            [CompletionResult]::new('mcp', 'mcp', [CompletionResultType]::ParameterValue, 'Use DSC as a MCP server')
             [CompletionResult]::new('resource', 'resource', [CompletionResultType]::ParameterValue, 'Invoke a specific DSC resource')
             [CompletionResult]::new('schema', 'schema', [CompletionResultType]::ParameterValue, 'Get the JSON schema for a DSC type')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
         'dsc;help;completer' {
+            break
+        }
+        'dsc;help;function' {
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'List or find functions')
             break
         }
         'dsc;help;config' {
