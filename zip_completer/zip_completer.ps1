@@ -487,10 +487,18 @@ function Get-ZipStructuredOptionMetadata {
             continue
         }
 
-        foreach ($token in @(
+        $rowTokens = @(
             if (-not [string]::IsNullOrWhiteSpace($shortName) -and $shortName -ne '--') { '-' + $shortName }
             if (-not [string]::IsNullOrWhiteSpace($longName) -and $longName -ne '----') { '--' + $longName }
-        )) {
+        )
+
+        # A description shaped like 'UN=quit, warn, ignore, no, escape' spells out a closed value set.
+        $rowSuggestions = $null
+        if ($valueCode.Trim().Equals('req', [System.StringComparison]::OrdinalIgnoreCase) -and $description -match '^\w+=(?<values>[A-Za-z0-9]+(?:,\s*[A-Za-z0-9]+)+)$') {
+            $rowSuggestions = @($matches['values'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+
+        foreach ($token in $rowTokens) {
             if ([string]::IsNullOrWhiteSpace($token)) {
                 continue
             }
@@ -503,7 +511,19 @@ function Get-ZipStructuredOptionMetadata {
                 Description    = $description
             }
 
+            # Remember the other spelling on the same row so value metadata can be shared between them.
+            foreach ($sibling in $rowTokens) {
+                if ($sibling -ne $token) {
+                    $metadata['SiblingKey'] = Get-ZipCanonicalOptionKey -Token $sibling
+                }
+            }
+
             $valueKind = Get-ZipStructuredValueKind -ValueCode $valueCode -Token $token -LongName $longName -Description $description
+            if ($rowSuggestions) {
+                $valueKind = 'List'
+                $metadata['Suggestions'] = $rowSuggestions
+            }
+
             if (-not [string]::IsNullOrWhiteSpace($valueKind)) {
                 $metadata['ValueKind'] = $valueKind
             }
@@ -551,6 +571,22 @@ function Initialize-ZipCompletionCatalog {
         Add-ZipOptionRecord -Catalog $catalog -Metadata $entry -Overwrite
     }
 
+    # The static value table is keyed to the short spellings; copy Suggestions and ValueKind across
+    # to the long spelling from the same -so row (and back) so --split-size= behaves like -s.
+    foreach ($entry in @($catalog.Values)) {
+        if (-not $entry.ContainsKey('SiblingKey') -or -not $catalog.ContainsKey($entry['SiblingKey'])) {
+            continue
+        }
+
+        $sibling = $catalog[$entry['SiblingKey']]
+        if ($entry.ContainsKey('Suggestions') -and -not $sibling.ContainsKey('Suggestions')) {
+            $sibling['Suggestions'] = $entry['Suggestions']
+            if ($entry.ContainsKey('ValueKind')) {
+                $sibling['ValueKind'] = $entry['ValueKind']
+            }
+        }
+    }
+
     $script:ZipCompletionCatalog.Options = @(
         foreach ($entry in $catalog.Values) {
             [pscustomobject]$entry
@@ -574,7 +610,64 @@ function Initialize-ZipCompletionCatalog {
 
     $script:ZipCompletionCatalog.ValueOptionKeys = @($valueKeys | Sort-Object -Unique)
     $script:ZipCompletionCatalog.PatternListOptionKeys = @($patternKeys | Sort-Object -Unique)
+    $script:ZipCompletionCatalog.ShortOptionTokens = @(
+        $script:ZipCompletionCatalog.Options |
+            ForEach-Object { [string]$_.CompletionText } |
+            Where-Object { $_.StartsWith('-') -and -not $_.StartsWith('--') -and $_.Length -gt 1 } |
+            Select-Object -Unique |
+            Sort-Object -Property Length -Descending
+    )
     $script:ZipCompletionCatalog.Initialized = $true
+}
+
+function Resolve-ZipShortCluster {
+    # Decomposes a clustered short token such as -dbdcds or -rq by greedily matching the longest
+    # known short option at each position. Returns $null when any part is unknown.
+    param([string]$Token)
+
+    $cleanToken = Remove-ZipOuterQuotes $Token
+    if ([string]::IsNullOrWhiteSpace($cleanToken) -or $cleanToken.Length -lt 3 -or -not $cleanToken.StartsWith('-') -or $cleanToken.StartsWith('--')) {
+        return $null
+    }
+
+    $flags = New-Object System.Collections.Generic.List[string]
+    $valueOptionKey = $null
+    $attachedValue = ''
+    $position = 1
+
+    while ($position -lt $cleanToken.Length) {
+        $matchedToken = $null
+        foreach ($shortToken in $script:ZipCompletionCatalog.ShortOptionTokens) {
+            $letters = $shortToken.Substring(1)
+            if ($cleanToken.Length - $position -ge $letters.Length -and [string]::CompareOrdinal($cleanToken, $position, $letters, 0, $letters.Length) -eq 0) {
+                $matchedToken = $shortToken
+                break
+            }
+        }
+
+        if (-not $matchedToken) {
+            return $null
+        }
+
+        $flags.Add($matchedToken)
+        $position += $matchedToken.Length - 1
+        $optionKey = Get-ZipCanonicalOptionKey -Token $matchedToken
+        if ($script:ZipCompletionCatalog.ValueOptionKeys -contains $optionKey) {
+            $valueOptionKey = $optionKey
+            $attachedValue = $cleanToken.Substring($position)
+            break
+        }
+    }
+
+    if ($flags.Count -lt 2) {
+        return $null
+    }
+
+    [pscustomobject]@{
+        Flags          = @($flags.ToArray())
+        ValueOptionKey = $valueOptionKey
+        AttachedValue  = $attachedValue
+    }
 }
 
 function Get-ZipCurrentToken {
@@ -808,6 +901,19 @@ function Get-ZipCompletionContext {
                 break
             }
 
+            $cluster = Resolve-ZipShortCluster -Token $cleanArgument
+            if ($cluster) {
+                if ($cluster.ValueOptionKey -and [string]::IsNullOrEmpty($cluster.AttachedValue)) {
+                    if ($script:ZipCompletionCatalog.PatternListOptionKeys -contains $cluster.ValueOptionKey) {
+                        $patternListOption = $cluster.ValueOptionKey
+                    } else {
+                        $expectingValueOption = $cluster.ValueOptionKey
+                    }
+                }
+
+                break
+            }
+
             $positionals.Add($argument)
             break
         }
@@ -1028,6 +1134,8 @@ function Get-ZipValueCompletions {
         return @()
     }
 
+    $suggestions = if ($optionInfo.PSObject.Properties.Name -contains 'Suggestions') { @($optionInfo.Suggestions) } else { @() }
+
     switch ([string]$optionInfo.ValueKind) {
         'Directory' {
             return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Directory' -CompletionPrefix $CompletionPrefix)
@@ -1039,16 +1147,25 @@ function Get-ZipValueCompletions {
             return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Any' -CompletionPrefix $CompletionPrefix)
         }
         'Date' {
-            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
         }
         'SuffixList' {
-            return @(Get-ZipSeparatedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipSeparatedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
         }
         'List' {
-            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
         }
         'PatternList' {
             return @(Get-ZipPatternCompletions -CurrentValue $CurrentValue -CompletionPrefix $CompletionPrefix)
+        }
+        'Text' {
+            # Free-form value: echo what was typed, or a placeholder taken from the display text.
+            if (-not [string]::IsNullOrEmpty($CurrentValue)) {
+                return @(New-ZipCompletionResult -CompletionText ($CompletionPrefix + $CurrentValue) -ResultType 'ParameterValue' -ToolTip $optionInfo.Description)
+            }
+
+            $placeholder = if ([string]$optionInfo.Display -match '[ =](?<word>[a-z]+)$') { '<' + $matches['word'] + '>' } else { '<value>' }
+            return @(New-ZipCompletionResult -CompletionText ($CompletionPrefix + $placeholder) -ListItemText $placeholder -ResultType 'ParameterValue' -ToolTip $optionInfo.Description)
         }
     }
 
@@ -1114,9 +1231,23 @@ function Complete-Zip {
         $inlineValueMatch = Get-ZipInlineValueMatch -Token $currentWord -TreatExactShortValueOptionAsInline $true
         if ($inlineValueMatch) {
             $inlineCompletions = @(Get-ZipValueCompletions -OptionKey $inlineValueMatch.OptionKey -CurrentValue $inlineValueMatch.Value -CompletionPrefix $inlineValueMatch.Prefix)
-            if ($inlineCompletions.Count -gt 0) {
-                return $inlineCompletions
+            $exactOptionTyped = [string]::IsNullOrEmpty($inlineValueMatch.Value) -and -not $inlineValueMatch.Prefix.EndsWith('=')
+            if ($exactOptionTyped) {
+                # '-t' is one keystroke away from -tt, -T and -TT: offer the sibling options first,
+                # then the glued value hints.
+                $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
+                foreach ($result in @(Get-ZipOptionCompletions -WordToComplete $currentWord)) {
+                    $results.Add($result)
+                }
+                foreach ($result in $inlineCompletions) {
+                    $results.Add($result)
+                }
+
+                return @(Get-ZipUniqueCompletions -Results $results)
             }
+
+            # A typed value never falls through to the option list, which would rewrite the token.
+            return $inlineCompletions
         }
 
         if ($null -ne $context.ExpectingValueOption) {

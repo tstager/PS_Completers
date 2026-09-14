@@ -29,8 +29,10 @@ The script is standalone and self-contained. It builds a cached option catalog f
 - suffix-list hints for:
   - `-n`
 - selected enumerated values for:
-  - `-Z`
-  - `-s`
+  - `-Z` / `--compression-method`
+  - `-s` / `--split-size`
+  - `-UN` / `--unicode` (parsed from the `UN=quit, warn, ignore, no, escape` row in `zip -so`)
+- placeholders for free-text values such as `-P <password>` and `-TT <command>`
 
 ## Behavior notes
 
@@ -47,6 +49,9 @@ The script is standalone and self-contained. It builds a cached option catalog f
   - `--output-file=archive.zip`
   - `--out archive.zip`
   - `--out=archive.zip`
+- Value hints attached to a short option (`-s`, `-t`, `-n`, `-Z`) are shared with the long spelling from the same `zip -so` row, so `--split-size=` and `--from-date=` complete like `-s` and `-t`.
+- An exactly typed short value option (`-t`, `-s`, `-x`) offers its sibling options (`-tt`, `-T`, `-TT`) before the glued value hints; once a value character follows, only values are offered and a typed value never falls back to the option list.
+- Clustered short flags such as `-dbdcds` or `-rq` are decomposed against the catalog, so they no longer consume the archive positional; a cluster ending in a value option (`-ds`) opens that option's value slot.
 - Treats an in-progress `-` token as a short-option prefix.
 - Treats `--` as an option terminator and falls back to literal path completion after it.
 - Treats an in-progress `--` token as a long-option prefix, while a completed `-- ` still switches to literal path completion.
@@ -76,4 +81,4 @@ zip archive.zip -- -leading-dash-file<Tab>
 
 - The option catalog is only as complete as the locally installed `zip` help output (`-h`, `-h2`, `-so`) plus the script's targeted static metadata.
 - Pattern completion is path-oriented plus a few wildcard hints; it does not attempt full archive-aware pattern expansion.
-- Text-valued options such as passwords or test commands are intentionally not populated with suggestions.
+- Text-valued options such as passwords or test commands only get a placeholder, never real suggestions.
