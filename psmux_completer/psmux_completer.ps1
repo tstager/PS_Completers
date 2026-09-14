@@ -59,6 +59,7 @@ function New-PsmuxCommandSpec {
 function Get-PsmuxAliasMap {
     @{
         'new'            = 'new-session'
+        'new-session'    = 'new-session'
         'a'              = 'attach-session'
         'at'             = 'attach-session'
         'attach'         = 'attach-session'
@@ -69,6 +70,9 @@ function Get-PsmuxAliasMap {
         'has-session'    = 'has-session'
         'kill-ses'       = 'kill-session'
         'kill-session'   = 'kill-session'
+        'kill-server'    = 'kill-server'
+        'detach'         = 'detach-client'
+        'detach-client'  = 'detach-client'
         'rename'         = 'rename-session'
         'rename-session' = 'rename-session'
         'switchc'        = 'switch-client'
@@ -227,7 +231,50 @@ function Get-PsmuxEnvVarSuggestions {
 }
 
 function Get-PsmuxKeySuggestions {
-    @('Enter', 'Escape', 'Tab', 'Space', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'C-c', 'C-d')
+    @(
+        'Enter', 'Escape', 'Tab', 'Space', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PgUp', 'PgDn', 'BSpace', 'Delete', 'Insert',
+        'C-a', 'C-b', 'C-c', 'C-d', 'C-l', 'C-z', 'M-1', 'M-2', 'M-3', 'M-4', 'M-5',
+        'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'
+    )
+}
+
+function Get-PsmuxFormatSuggestionList {
+    @(
+        '#S', '#W', '#I', '#F', '#P', '#T', '#D', '#H', '#h',
+        '#{?window_active,yes,no}', '#{==:#I,1}', '#{!=:#W,bash}', '#{s/old/new/:variable}', '#{=20:variable}',
+        '#{b:pane_current_path}', '#{d:pane_current_path}', '#{l:text}', '<message>'
+    )
+}
+
+function Get-PsmuxColourSuggestionList {
+    @('default', 'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white') +
+        @(0..15 | ForEach-Object { "colour$_" }) + @('colour255', '#RRGGBB')
+}
+
+function Get-PsmuxStyleCompletion {
+    param([string]$CurrentWord)
+
+    # Style grammar from help: "fg=colour,bg=colour,bold,dim,underscore,italics,reverse"; complete the last comma segment.
+    $quoted = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
+    $typed = Remove-PsmuxOuterQuotes -Value $CurrentWord
+    $commaIndex = $typed.LastIndexOf(',')
+    $prefix = if ($commaIndex -ge 0) { $typed.Substring(0, $commaIndex + 1) } else { '' }
+    $segment = if ($commaIndex -ge 0) { $typed.Substring($commaIndex + 1) } else { $typed }
+
+    $candidates = if ($segment -match '^(fg=|bg=)') {
+        $colourPrefix = $matches[1]
+        @(Get-PsmuxColourSuggestionList | ForEach-Object { $colourPrefix + $_ })
+    } else {
+        @('fg=', 'bg=', 'bold', 'dim', 'underscore', 'italics', 'reverse') + @(Get-PsmuxColourSuggestionList)
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -like ([System.Management.Automation.WildcardPattern]::Escape($segment) + '*')) {
+            $text = $prefix + $candidate
+            if ($quoted) { $text = '"' + $text + '"' }
+            New-PsmuxCompletionResult -CompletionText $text -ListItemText $candidate -ToolTip 'Style: fg=colour,bg=colour,bold,dim,underscore,italics,reverse.'
+        }
+    }
 }
 
 function Get-PsmuxHookSuggestions {
@@ -247,7 +294,7 @@ function Get-PsmuxSessionSuggestions {
 
     try {
         @(
-            & $command.Source ls 2>$null |
+            $null | & $command.Source ls 2>$null |
                 ForEach-Object {
                     if ($_ -match '^\s*([A-Za-z0-9_.-]+)') { $matches[1] }
                 } |
@@ -283,6 +330,16 @@ function Get-PsmuxCommandSpecs {
         New-PsmuxCommandSpec -Path 'kill-session' -Description 'Kill a session.' -Subcommands @() -Options @(
             New-PsmuxOptionSpec -Tokens @('-t') -Description 'Target session name.' -ValueKind 'SessionTarget'
         ) -Positionals @()
+        New-PsmuxCommandSpec -Path 'kill-server' -Description 'Kill all sessions and the server.' -Subcommands @() -Options @() -Positionals @()
+        New-PsmuxCommandSpec -Path 'detach-client' -Description 'Detach attached client(s); session keeps running.' -Subcommands @() -Options @(
+            New-PsmuxOptionSpec -Tokens @('-t') -Description 'Target a specific client (tty path or %id).' -ValueKind 'ClientTarget'
+            New-PsmuxOptionSpec -Tokens @('-s') -Description 'Detach all clients of a specific session.' -ValueKind 'SessionTarget'
+            New-PsmuxOptionSpec -Tokens @('-a') -Description 'Detach all other clients (or all from CLI).' -ValueKind $null
+            New-PsmuxOptionSpec -Tokens @('-P') -Description 'Also kill the parent shell on detach.' -ValueKind $null
+        ) -Positionals @()
+        New-PsmuxCommandSpec -Path 'bind-key' -Description 'Bind a key to a command.' -Subcommands @() -Options @(
+            New-PsmuxOptionSpec -Tokens @('-T') -Description 'Key table to bind in.' -ValueKind 'KeyTable'
+        ) -Positionals @('Keys', 'CommandTail')
         New-PsmuxCommandSpec -Path 'rename-session' -Description 'Rename the current session.' -Subcommands @() -Options @() -Positionals @('SessionName')
         New-PsmuxCommandSpec -Path 'switch-client' -Description 'Switch to another session.' -Subcommands @() -Options @(
             New-PsmuxOptionSpec -Tokens @('-t') -Description 'Target session name.' -ValueKind 'SessionTarget'
@@ -491,20 +548,25 @@ function Get-PsmuxActiveContext {
     $activeSpec = $rootSpec
     $positionals = New-Object System.Collections.Generic.List[string]
     $expectedValue = $null
+    $afterDoubleDash = $false
 
     foreach ($token in @($TokensBeforeCurrent)) {
         if ($null -ne $expectedValue) {
-            $positionals.Add($token)
+            # The value consumed by an option is not an operand.
             $expectedValue = $null
             continue
         }
 
+        # Ordinal matching keeps case-distinct switches such as -s (session name) and -S (socket path) apart.
         $matchedOption = $null
         foreach ($option in $activeSpec.Options + $rootSpec.Options) {
-            if ($option.Tokens -contains $token) {
-                $matchedOption = $option
-                break
+            foreach ($optionToken in $option.Tokens) {
+                if ([string]::Equals($optionToken, $token, [System.StringComparison]::Ordinal)) {
+                    $matchedOption = $option
+                    break
+                }
             }
+            if ($matchedOption) { break }
         }
 
         if ($matchedOption) {
@@ -515,16 +577,18 @@ function Get-PsmuxActiveContext {
         }
 
         if ($token -eq '--') {
-            $positionals.Add($token)
-            continue
+            # Documented pass-through: everything after '--' is the command to run.
+            $afterDoubleDash = $true
+            break
         }
 
-        if ($activeSpec.Subcommands -contains $token -or $aliasMap.ContainsKey($token)) {
+        if ([string]::IsNullOrWhiteSpace($activePath) -and ($activeSpec.Subcommands -contains $token -or $aliasMap.ContainsKey($token))) {
             $canonical = if ($aliasMap.ContainsKey($token)) { $aliasMap[$token] } else { $token }
             $activePath = $canonical
             $activeSpec = Get-PsmuxCommandSpecByPath -Path $canonical
             if (-not $activeSpec) {
-                $activeSpec = $rootSpec
+                # A documented command without its own spec still consumes the command slot; only root switches remain.
+                $activeSpec = New-PsmuxCommandSpec -Path $canonical -Description 'psmux command.' -Subcommands @() -Options @() -Positionals @()
             }
             $positionals.Clear()
             continue
@@ -534,11 +598,12 @@ function Get-PsmuxActiveContext {
     }
 
     [pscustomobject]@{
-        RootSpec    = $rootSpec
-        ActivePath  = $activePath
-        ActiveSpec  = $activeSpec
-        Positionals = @($positionals.ToArray())
-        Expected    = $expectedValue
+        RootSpec        = $rootSpec
+        ActivePath      = $activePath
+        ActiveSpec      = $activeSpec
+        Positionals     = @($positionals.ToArray())
+        Expected        = $expectedValue
+        AfterDoubleDash = $afterDoubleDash
     }
 }
 
@@ -551,8 +616,16 @@ function Get-PsmuxOptionValueCompletions {
 
     switch ($ValueKind) {
         'Path'          { return @(Get-PsmuxPathCompletions -InputPath $CurrentWord) }
-        'SessionName'   { return ((Get-PsmuxSessionSuggestions + @('<session-name>')) | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session name.' }) }
-        'SessionTarget' { return ((Get-PsmuxSessionSuggestions + @('default', 'work')) | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target session.' }) }
+        'SessionName' {
+            $names = @(Get-PsmuxSessionSuggestions) + @('<session-name>')
+            return @($names | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session name.' })
+        }
+        'SessionTarget' {
+            $names = @(Get-PsmuxSessionSuggestions) + @('<session-name>')
+            return @($names | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target session.' })
+        }
+        'ClientTarget'  { return @('<client>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Client tty path or %id.' } }
+        'KeyTable'      { return @('prefix', 'root', 'copy-mode', 'copy-mode-vi') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Key table.' } }
         'WindowName'    { return @('<window-name>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Window name.' } }
         'PaneTarget'    { return @('%1', '%2', ':1.0', ':2.1') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Target pane.' } }
         'Target'        { return (Get-PsmuxTargetSuggestions | Sort-Object -Unique | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Session/window/pane target.' }) }
@@ -565,6 +638,27 @@ function Get-PsmuxOptionValueCompletions {
     }
 
     @()
+}
+
+function Get-PsmuxCommandTailCompletion {
+    param([string]$CurrentWord)
+
+    $suggestions = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @('pwsh', 'powershell', 'cmd', 'python', 'git')) {
+        if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
+            [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $name -ToolTip 'Executable name.'))
+        }
+    }
+
+    foreach ($command in @(Get-Command -Name "$CurrentWord*" -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
+        [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $command.Name -ToolTip $command.Source))
+    }
+
+    if ($suggestions.Count -eq 0) {
+        [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText '<command>' -ToolTip 'Shell command or executable.'))
+    }
+
+    @($suggestions.ToArray())
 }
 
 function Get-PsmuxPositionalCompletions {
@@ -597,25 +691,8 @@ function Get-PsmuxPositionalCompletions {
         'ChannelName'   { return @('build', 'deploy', 'sync') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Wait/signal channel.' } }
         'Query'         { return @('<query>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Search string.' } }
         'HelpTopic'     { return Get-PsmuxRootSubcommands | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'psmux command topic.' } }
-        'FormatOrMessage' { return @('#S', '#W', '#{?window_active,yes,no}', '<message>') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Message or format expression.' } }
-        'CommandTail' {
-            $suggestions = New-Object System.Collections.Generic.List[object]
-            foreach ($name in @('pwsh', 'powershell', 'cmd', 'python', 'git')) {
-                if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
-                    [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $name -ToolTip 'Executable name.'))
-                }
-            }
-
-            foreach ($command in @(Get-Command -Name "$CurrentWord*" -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
-                [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $command.Name -ToolTip $command.Source))
-            }
-
-            if ($suggestions.Count -eq 0) {
-                [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText '<command>' -ToolTip 'Shell command or executable.'))
-            }
-
-            return @($suggestions.ToArray())
-        }
+        'FormatOrMessage' { return Get-PsmuxFormatSuggestionList | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object { New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'Message or format expression.' } }
+        'CommandTail'   { return @(Get-PsmuxCommandTailCompletion -CurrentWord $CurrentWord) }
         'OptionName' {
             return Get-PsmuxOptionNames | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
                 New-PsmuxCompletionResult -CompletionText $_ -ToolTip 'psmux option name.'
@@ -623,6 +700,10 @@ function Get-PsmuxPositionalCompletions {
         }
         'OptionValue' {
             $optionName = if ($Positionals.Count -gt 0) { $Positionals[0] } else { '' }
+            if ($optionName -like '*-style' -or $optionName -in @('status-bg', 'status-fg')) {
+                return @(Get-PsmuxStyleCompletion -CurrentWord $CurrentWord)
+            }
+
             $boolOptions = @('mouse','status','focus-events','renumber-windows','automatic-rename','monitor-activity','synchronize-panes','remain-on-exit','aggressive-resize','set-titles','visual-bell','cursor-blink','prediction-dimming')
             if ($boolOptions -contains $optionName) {
                 return @('on','off','true','false') | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } | ForEach-Object {
@@ -681,6 +762,10 @@ function Complete-Psmux {
 
     $tokensBeforeCurrent = @(Get-PsmuxArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
     $context = Get-PsmuxActiveContext -TokensBeforeCurrent $tokensBeforeCurrent
+
+    if ($context.AfterDoubleDash) {
+        return @(Get-PsmuxCommandTailCompletion -CurrentWord $currentWord)
+    }
 
     if ($context.Expected) {
         return @(Get-PsmuxOptionValueCompletions -ValueKind $context.Expected.ValueKind -CurrentWord $currentWord -Positionals $context.Positionals)

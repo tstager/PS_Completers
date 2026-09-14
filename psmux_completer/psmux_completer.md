@@ -25,13 +25,17 @@ Register-ArgumentCompleter -Native -CommandName @('psmux', 'psmux.exe') -ScriptB
 
 ## Supported completion behavior
 
-- Root completion suggests the documented session, window, pane, copy-buffer, key-binding, configuration, layout, and display commands, including aliases like `new`, `attach`, `ls`, `splitw`, and `selectl`.
-- Global options such as `-f`, `-L`, `-S`, and `-t` are available from the root and from subcommands.
-- Session-targeted flags such as `attach-session -t`, `kill-session -t`, and `switch-client -t` offer local session names when `psmux ls` succeeds, plus safe placeholders.
+- Root completion suggests the documented session, window, pane, copy-buffer, key-binding, configuration, layout, and display commands, including aliases like `new`, `attach`, `ls`, `splitw`, and `selectl`, plus `kill-server` and `detach-client`/`detach`.
+- Global options such as `-f`, `-L`, `-S`, and `-t` are available from the root and from subcommands. A documented command without its own option table (for example `ls` or `kill-window`) offers only the root switches after the command word.
+- Option tokens match case-sensitively, so `new-session -s` (session name) never binds to the root `-S` (socket path).
+- `new-session -s` / `new -s` and the session-targeted flags `attach-session -t`, `kill-session -t`, `switch-client -t` and `detach-client -s` offer local session names when `psmux ls` succeeds (stdin closed), plus a `<session-name>` placeholder.
+- `detach-client` offers `-t <client>`, `-s <session>`, `-a` and `-P`; `bind-key -T` offers the key tables `prefix`, `root`, `copy-mode` and `copy-mode-vi`.
 - `split-window -c`, `new-window -c`, and `source-file` complete filesystem paths.
 - `select-layout` suggests the built-in presets: `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, and `tiled`.
-- `set-option` suggests documented option names and value hints for common booleans and enums such as `mode-keys`, `status-position`, `cursor-style`, and `bell-action`.
-- `send-keys` offers common key names like `Enter`, `Escape`, `Tab`, and arrow keys.
+- `set-option` suggests documented option names and value hints for common booleans and enums such as `mode-keys`, `status-position`, `cursor-style`, and `bell-action`; every `*-style` option (and `status-bg`/`status-fg`) completes the documented style grammar (`fg=`/`bg=` followed by a colour, `bold`, `dim`, `underscore`, `italics`, `reverse`, named colours, `colour0`-`colour255`, `#RRGGBB`) one comma-separated segment at a time.
+- `send-keys` offers key names including `Enter`, `Escape`, arrow and navigation keys, `C-`/`M-` chords and `F1`-`F12`; a value consumed by `-t` is not counted as the key operand.
+- `display-message` offers every documented format variable (`#S`, `#W`, `#I`, `#F`, `#P`, `#T`, `#D`, `#H`, `#h`) and the conditional, comparison, substitution, truncation, basename, dirname and literal forms.
+- After the documented `--` pass-through (`new-session -- <cmd>`, `new-window -- <cmd>`) the completer offers executable names.
 
 ## Dependencies or external command expectations
 
