@@ -10,7 +10,8 @@ if (-not (Get-Variable -Name WevtutilCompletionCatalog -Scope Script -ErrorActio
         CommandSuggestions         = @()
         OptionsByCommand           = @{}
         ValueHintsByCommand        = @{}
-        PathOptions                = @{}
+        PathOptionsByCommand       = @{}
+        PlaceholdersByCommand      = @{}
         LogNamesCache              = @()
         LogNamesCacheUpdated       = $null
         PublisherNamesCache        = @()
@@ -162,6 +163,8 @@ function Initialize-WevtutilCompletionCatalog {
             '/retention:'       = @('true', 'false')
             '/ab:'              = @('true', 'false')
             '/autobackup:'      = @('true', 'false')
+            '/l:'               = @('0', '1', '2', '3', '4', '5')
+            '/level:'           = @('0', '1', '2', '3', '4', '5')
         }
         'gp' = @{
             '/ge:'              = @('true', 'false')
@@ -195,23 +198,74 @@ function Initialize-WevtutilCompletionCatalog {
         }
     }
 
-    $script:WevtutilCompletionCatalog.PathOptions = @{
-        '/c:'                  = @('.xml')
-        '/config:'             = @('.xml')
-        '/lfn:'                = @('.etl', '.evt', '.evtx', '.log')
-        '/logfilename:'        = @('.etl', '.evt', '.evtx', '.log')
-        '/rf:'                 = @()
-        '/resourcefilepath:'   = @()
-        '/mf:'                 = @()
-        '/messagefilepath:'    = @()
-        '/pf:'                 = @()
-        '/parameterfilepath:'  = @()
-        '/bm:'                 = @('.xml')
-        '/bookmark:'           = @('.xml')
-        '/sbm:'                = @('.xml')
-        '/savebookmark:'       = @('.xml')
-        '/bu:'                 = @('.evtx')
-        '/backup:'             = @('.evtx')
+    # Path-taking options are keyed per command: the same prefix means different things on
+    # different verbs (sl /c: is a config file, qe /c: is an event count).
+    $script:WevtutilCompletionCatalog.PathOptionsByCommand = @{
+        'sl' = @{
+            '/c:'                  = @('.xml')
+            '/config:'             = @('.xml')
+            '/lfn:'                = @('.etl', '.evt', '.evtx', '.log')
+            '/logfilename:'        = @('.etl', '.evt', '.evtx', '.log')
+        }
+        'im' = @{
+            '/rf:'                 = @()
+            '/resourcefilepath:'   = @()
+            '/mf:'                 = @()
+            '/messagefilepath:'    = @()
+            '/pf:'                 = @()
+            '/parameterfilepath:'  = @()
+        }
+        'qe' = @{
+            '/bm:'                 = @('.xml')
+            '/bookmark:'           = @('.xml')
+            '/sbm:'                = @('.xml')
+            '/savebookmark:'       = @('.xml')
+        }
+        'cl' = @{
+            '/bu:'                 = @('.evtx')
+            '/backup:'             = @('.evtx')
+        }
+    }
+
+    # Value-bearing options with neither an enum nor a path get a placeholder so the slot
+    # is visible and the option name is never echoed back as a ParameterName.
+    $script:WevtutilCompletionCatalog.PlaceholdersByCommand = @{
+        '__common__' = @{
+            '/r:'               = '<computer>'
+            '/remote:'          = '<computer>'
+            '/u:'               = '<username>'
+            '/username:'        = '<username>'
+            '/p:'               = '<password>'
+            '/password:'        = '<password>'
+        }
+        'sl' = @{
+            '/fm:'              = '<n>'
+            '/filemax:'         = '<n>'
+            '/ms:'              = '<n>'
+            '/maxsize:'         = '<n>'
+            '/k:'               = '<keyword-mask>'
+            '/keywords:'        = '<keyword-mask>'
+            '/ca:'              = '<sddl>'
+            '/channelaccess:'   = '<sddl>'
+        }
+        'qe' = @{
+            '/q:'               = '<xpath>'
+            '/query:'           = '<xpath>'
+            '/l:'               = '<locale>'
+            '/locale:'          = '<locale>'
+            '/c:'               = '<n>'
+            '/count:'           = '<n>'
+            '/e:'               = '<root-element>'
+            '/element:'         = '<root-element>'
+        }
+        'epl' = @{
+            '/q:'               = '<xpath>'
+            '/query:'           = '<xpath>'
+        }
+        'al' = @{
+            '/l:'               = '<locale>'
+            '/locale:'          = '<locale>'
+        }
     }
 
     $script:WevtutilCompletionCatalog.Initialized = $true
@@ -306,28 +360,51 @@ function Get-WevtutilValueHints {
 }
 
 function Test-WevtutilPathLikeOption {
-    param([string]$OptionPrefix)
+    param(
+        [string]$Command,
+        [string]$OptionPrefix
+    )
 
-    if ([string]::IsNullOrWhiteSpace($OptionPrefix)) {
+    if ([string]::IsNullOrWhiteSpace($Command) -or [string]::IsNullOrWhiteSpace($OptionPrefix)) {
         return $false
     }
 
-    $script:WevtutilCompletionCatalog.PathOptions.ContainsKey($OptionPrefix.ToLowerInvariant())
+    $pathOptions = $script:WevtutilCompletionCatalog.PathOptionsByCommand
+    $pathOptions.ContainsKey($Command) -and $pathOptions[$Command].ContainsKey($OptionPrefix.ToLowerInvariant())
 }
 
 function Get-WevtutilAllowedExtensionsForOption {
-    param([string]$OptionPrefix)
+    param(
+        [string]$Command,
+        [string]$OptionPrefix
+    )
 
-    if ([string]::IsNullOrWhiteSpace($OptionPrefix)) {
+    if (-not (Test-WevtutilPathLikeOption -Command $Command -OptionPrefix $OptionPrefix)) {
         return @()
     }
 
-    $key = $OptionPrefix.ToLowerInvariant()
-    if ($script:WevtutilCompletionCatalog.PathOptions.ContainsKey($key)) {
-        return $script:WevtutilCompletionCatalog.PathOptions[$key]
+    @($script:WevtutilCompletionCatalog.PathOptionsByCommand[$Command][$OptionPrefix.ToLowerInvariant()])
+}
+
+function Get-WevtutilValuePlaceholder {
+    param(
+        [string]$Command,
+        [string]$OptionPrefix
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OptionPrefix)) {
+        return $null
     }
 
-    @()
+    $optionKey = $OptionPrefix.ToLowerInvariant()
+    $placeholders = $script:WevtutilCompletionCatalog.PlaceholdersByCommand
+    foreach ($bucket in @($Command, '__common__')) {
+        if ($bucket -and $placeholders.ContainsKey($bucket) -and $placeholders[$bucket].ContainsKey($optionKey)) {
+            return $placeholders[$bucket][$optionKey]
+        }
+    }
+
+    $null
 }
 
 function Get-WevtutilPathCompletions {
@@ -337,33 +414,31 @@ function Get-WevtutilPathCompletions {
     )
 
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ([System.IO.Path]::GetPathRoot($cleanInput) -eq $cleanInput) {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # Split on the last separator explicitly: a trailing '\' means "list this directory"
+    # (Split-Path -Leaf would hand back the directory's own name), and the typed parent is
+    # re-attached verbatim so a relative path is not rewritten to an absolute one.
+    $typedParent = ''
+    $leaf = $cleanInput
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $typedParent = $cleanInput.Substring(0, $separatorIndex + 1)
+        $leaf = $cleanInput.Substring($separatorIndex + 1)
     }
 
+    $enumeratePath = if ([string]::IsNullOrEmpty($typedParent)) { '.' } else { $typedParent }
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
 
-    $items = Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue
+    $items = @(Get-ChildItem -LiteralPath $enumeratePath -Filter $filter -ErrorAction Ignore)
     if ($AllowedExtensions -and $AllowedExtensions.Count -gt 0) {
-        $items = $items | Where-Object {
-            $_.PSIsContainer -or ($AllowedExtensions -contains $_.Extension.ToLowerInvariant())
-        }
+        $items = @($items | Where-Object {
+                $_.PSIsContainer -or ($AllowedExtensions -contains $_.Extension.ToLowerInvariant())
+            })
     }
 
-    $items | ForEach-Object {
-        ConvertTo-WevtutilQuotedValue -Value $_.FullName -AlwaysQuote $alwaysQuote
+    foreach ($item in $items) {
+        ConvertTo-WevtutilQuotedValue -Value ($typedParent + $item.Name) -AlwaysQuote $alwaysQuote
     }
 }
 
@@ -641,13 +716,23 @@ function Complete-Wevtutil {
                 }
         }
 
-        if (Test-WevtutilPathLikeOption -OptionPrefix $currentPrefix) {
-            $allowedExtensions = Get-WevtutilAllowedExtensionsForOption -OptionPrefix $currentPrefix
+        if (Test-WevtutilPathLikeOption -Command $activeCommand -OptionPrefix $currentPrefix) {
+            $allowedExtensions = Get-WevtutilAllowedExtensionsForOption -Command $activeCommand -OptionPrefix $currentPrefix
             return Get-WevtutilPathCompletions -InputPath $typedValue -AllowedExtensions $allowedExtensions |
                 ForEach-Object {
                     New-WevtutilCompletionResult -CompletionText "$currentPrefix$_" -ResultType 'ParameterValue' -ToolTip $_
                 }
         }
+
+        $placeholder = Get-WevtutilValuePlaceholder -Command $activeCommand -OptionPrefix $currentPrefix
+        if ($placeholder) {
+            $valueText = if ([string]::IsNullOrEmpty($typedValue)) { $placeholder } else { $typedValue }
+            return @(New-WevtutilCompletionResult -CompletionText "$currentPrefix$valueText" -ResultType 'ParameterValue' -ToolTip "$currentPrefix$placeholder")
+        }
+
+        # The word is already an /option: value slot; never fall through to option-name
+        # completion, which would only echo the option back as a ParameterName.
+        return @()
     }
 
     if (-not $activeCommand) {

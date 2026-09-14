@@ -66,9 +66,10 @@ Example aliases handled by the script include:
 When the current token looks like `/name:valuePrefix`, the script:
 
 - detects the option prefix,
-- checks whether that option has enumerated value hints,
-- otherwise checks whether that option expects a filesystem path,
-- and returns completion results in the same inline `/option:value` form.
+- checks whether that option has enumerated value hints for the active command,
+- otherwise checks whether that option expects a filesystem path on the active command (the tables are keyed per verb because `sl /c:` is a config file while `qe /c:` is an event count),
+- otherwise returns the option's placeholder (`/q:<xpath>`, `/ms:<n>`, `/r:<computer>`, ...),
+- and returns completion results in the same inline `/option:value` form; an `/option:` word never falls through to option-name completion.
 
 ### 4. Positional argument detection
 
@@ -141,6 +142,7 @@ The script has explicit value completion for these option groups.
 - `/i:` and `/isolation:` → `system`, `application`, `custom`
 - `/rt:` and `/retention:` → `true`, `false`
 - `/ab:` and `/autobackup:` → `true`, `false`
+- `/l:` and `/level:` → `0` to `5`
 
 #### `gp`
 
@@ -174,20 +176,26 @@ The script dynamically completes:
 
 These values come directly from `wevtutil.exe` at runtime.
 
+### Placeholder values
+
+Value-bearing options without an enum or a path return a placeholder in the same inline form:
+
+- common: `/r:<computer>`, `/u:<username>`, `/p:<password>`
+- `sl`: `/fm:<n>`, `/ms:<n>`, `/k:<keyword-mask>`, `/ca:<sddl>`
+- `qe`: `/q:<xpath>`, `/l:<locale>`, `/c:<n>`, `/e:<root-element>`
+- `epl`: `/q:<xpath>`
+- `al`: `/l:<locale>`
+
 ### Filesystem-aware completion
 
-The script treats several inline options as path-like and completes them with `Get-ChildItem`, including extension filtering where the implementation defines one.
+The script treats several inline options as path-like on the verbs that define them and completes them with `Get-ChildItem`, including extension filtering where the implementation defines one. A typed trailing `\` lists that directory, and completions keep the typed parent (relative paths stay relative).
 
 Path-aware options include:
 
-- `/c:` and `/config:` → `.xml`
-- `/lfn:` and `/logfilename:` → `.etl`, `.evt`, `.evtx`, `.log`
-- `/rf:` and `/resourcefilepath:`
-- `/mf:` and `/messagefilepath:`
-- `/pf:` and `/parameterfilepath:`
-- `/bm:` and `/bookmark:` → `.xml`
-- `/sbm:` and `/savebookmark:` → `.xml`
-- `/bu:` and `/backup:` → `.evtx`
+- `sl`: `/c:` and `/config:` → `.xml`; `/lfn:` and `/logfilename:` → `.etl`, `.evt`, `.evtx`, `.log`
+- `im`: `/rf:` and `/resourcefilepath:`, `/mf:` and `/messagefilepath:`, `/pf:` and `/parameterfilepath:`
+- `qe`: `/bm:` and `/bookmark:` → `.xml`; `/sbm:` and `/savebookmark:` → `.xml`
+- `cl`: `/bu:` and `/backup:` → `.evtx`
 
 ### Positional argument completion
 
