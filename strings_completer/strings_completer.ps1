@@ -14,6 +14,7 @@ if (-not (Get-Variable -Name StringsCompletionCatalog -Scope Script -ErrorAction
             @{ Token = '-s'; Description = 'Recurse subdirectories.'; TakesValue = $false }
             @{ Token = '-u'; Description = 'Unicode-only search.'; TakesValue = $false }
             @{ Token = '-nobanner'; Description = 'Do not display the startup banner.'; TakesValue = $false }
+            @{ Token = '-accepteula'; Description = 'Accept the Sysinternals license agreement (suppresses the first-run EULA dialog).'; TakesValue = $false }
             @{ Token = '-?'; Description = 'Show Strings help.'; TakesValue = $false }
             @{ Token = '/?'; Description = 'Show Strings help.'; TakesValue = $false }
         )
@@ -204,6 +205,29 @@ function Get-StringsStaticValueResults {
     @($results.ToArray())
 }
 
+function Expand-StringsPathText {
+    # Resolve the forms a user types at the prompt ($env:NAME, ${env:NAME}, %NAME%, ~) to a
+    # filesystem path for enumeration, while the typed text itself stays in the completion.
+    param([string]$Path)
+
+    if ([string]::IsNullOrEmpty($Path)) {
+        return $Path
+    }
+
+    $expanded = [regex]::Replace($Path, '\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?', {
+            param($match)
+            $value = [System.Environment]::GetEnvironmentVariable($match.Groups[1].Value)
+            if ($null -eq $value) { $match.Value } else { $value }
+        })
+    $expanded = [System.Environment]::ExpandEnvironmentVariables($expanded)
+
+    if ($expanded -eq '~' -or $expanded.StartsWith('~\') -or $expanded.StartsWith('~/')) {
+        $expanded = $HOME + $expanded.Substring(1)
+    }
+
+    $expanded
+}
+
 function Get-StringsPathCompletions {
     param(
         [string]$CurrentWord,
@@ -215,26 +239,22 @@ function Get-StringsPathCompletions {
     $alwaysQuote = $CurrentWord.StartsWith('"')
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            $candidateParent = Split-Path -Path $typedValue -Parent
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                $leaf = Split-Path -Path $typedValue -Leaf
-            }
-        }
+    # Split on the typed text (so the completion keeps the user's prefix verbatim) and
+    # enumerate the expanded form.
+    $typedParent = ''
+    $leaf = $typedValue
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $typedParent = $typedValue.Substring(0, $separatorIndex + 1)
+        $leaf = $typedValue.Substring($separatorIndex + 1)
     }
 
+    $enumeratePath = if ([string]::IsNullOrEmpty($typedParent)) { '.' } else { Expand-StringsPathText -Path $typedParent }
+    $items = @()
     try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
+        $items = @(Get-ChildItem -LiteralPath $enumeratePath -ErrorAction Ignore)
     } catch {
-        $items = @()
+        Write-Debug "strings path enumeration failed for '$enumeratePath': $($_.Exception.Message)"
     }
 
     foreach ($item in $items) {
@@ -243,7 +263,7 @@ function Get-StringsPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
+        $candidate = $typedParent + $item.Name
         if ($item.PSIsContainer) {
             $candidate += '\'
         }
@@ -252,12 +272,10 @@ function Get-StringsPathCompletions {
         [void]$results.Add((New-StringsCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
-    if ($results.Count -eq 0) {
-        if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
-            [void]$results.Add((New-StringsCompletionResult -CompletionText $Placeholder -ListItemText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip))
-        } else {
-            [void]$results.Add((New-StringsCompletionResult -CompletionText $CurrentWord -ListItemText $CurrentWord -ResultType 'ParameterValue' -ToolTip $ToolTip))
-        }
+    # With nothing typed, the placeholder keeps the slot visible; with a typed value that
+    # matches nothing, return nothing so PowerShell's own path completion can take over.
+    if ($results.Count -eq 0 -and [string]::IsNullOrWhiteSpace($CurrentWord)) {
+        [void]$results.Add((New-StringsCompletionResult -CompletionText $Placeholder -ListItemText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
     @($results.ToArray())
@@ -332,10 +350,12 @@ function Complete-Strings {
     )
 
     $line = if ($CommandAst.Extent -and $null -ne $CommandAst.Extent.Text) { $CommandAst.Extent.Text } else { $CommandAst.ToString() }
-    if (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length) {
-        $line = $line.PadRight($cursorPosition - $commandAst.Extent.StartOffset)
+    # $CursorPosition is line-absolute; the extent text is command-relative.
+    $relativeCursor = [Math]::Max(0, $CursorPosition - $CommandAst.Extent.StartOffset)
+    if ($relativeCursor -gt $line.Length) {
+        $line = $line.PadRight($relativeCursor)
     }
-    $tokenState = Get-StringsTokenState -Line $line -CursorPosition $CursorPosition
+    $tokenState = Get-StringsTokenState -Line $line -CursorPosition $relativeCursor
     $argumentsState = Get-StringsArgumentsFromTokenState -TokenState $tokenState
     $state = Get-StringsCommandState -ArgumentsBeforeCurrent $argumentsState.ArgumentsBeforeCurrent
     $currentWord = $argumentsState.CurrentArgument

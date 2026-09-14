@@ -37,6 +37,7 @@ The script completes the locally validated switches:
 - `-s`
 - `-u`
 - `-nobanner`
+- `-accepteula` (accepted by the binary, never printed by `/?`)
 - `-?`
 - `/?`
 
@@ -57,6 +58,10 @@ For the final `<file or directory>` operand, the completer uses local filesystem
 - blank path positions still return command-relevant completions
 - partial and quoted paths continue to complete cleanly
 - directory suggestions keep a trailing `\` for continued navigation
+- `$env:NAME`, `${env:NAME}`, `%NAME%` and `~` prefixes are expanded for enumeration while the completion keeps the text you typed (`strings $env:WINDIR\<TAB>` lists `$env:WINDIR\System32\`)
+- a typed path that matches nothing returns no results, so PowerShell's own path completion can take over instead of echoing the token back
+
+The cursor offset is rebased to the command, so completion also works mid-token when `strings` is not the first statement on the line.
 
 ## Dependencies or external command expectations
 
