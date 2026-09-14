@@ -29,7 +29,8 @@ function New-OllamaOptionSpec {
         [string[]]$Tokens,
         [string]$Description,
         [string]$ValueKind,
-        [switch]$OptionalValue
+        [switch]$OptionalValue,
+        [switch]$InlineOnly
     )
 
     foreach ($token in @($Tokens)) {
@@ -38,6 +39,7 @@ function New-OllamaOptionSpec {
             Description   = $Description
             ValueKind     = $ValueKind
             OptionalValue = [bool]$OptionalValue
+            InlineOnly    = [bool]$InlineOnly
         }
     }
 }
@@ -98,8 +100,8 @@ function Get-OllamaCompletionCatalog {
             New-OllamaOptionSpec -Tokens @('--insecure') -Description 'Use an insecure registry.'
             New-OllamaOptionSpec -Tokens @('--keepalive') -Description 'Duration to keep a model loaded.' -ValueKind 'Duration'
             New-OllamaOptionSpec -Tokens @('--nowordwrap') -Description 'Don''t wrap words to the next line automatically.'
-            New-OllamaOptionSpec -Tokens @('--think') -Description 'Enable thinking mode.' -ValueKind 'Think' -OptionalValue
-            New-OllamaOptionSpec -Tokens @('--truncate') -Description 'Control truncate behavior.' -ValueKind 'Boolean' -OptionalValue
+            New-OllamaOptionSpec -Tokens @('--think') -Description 'Enable thinking mode.' -ValueKind 'Think' -OptionalValue -InlineOnly
+            New-OllamaOptionSpec -Tokens @('--truncate') -Description 'Control truncate behavior.' -ValueKind 'Boolean' -OptionalValue -InlineOnly
             New-OllamaOptionSpec -Tokens @('--verbose') -Description 'Show timings for response.'
             New-OllamaOptionSpec -Tokens @('--width') -Description 'Image width.' -ValueKind 'Number'
             New-OllamaOptionSpec -Tokens @('--height') -Description 'Image height.' -ValueKind 'Number'
@@ -124,7 +126,7 @@ function Get-OllamaCompletionCatalog {
         New-OllamaCommandSpec -Name 'cp' -Description 'Copy a model.' -Positionals @('SourceModel', 'DestinationModel') -Options $defaultHelpOptions -Aliases @()
         New-OllamaCommandSpec -Name 'rm' -Description 'Remove a model.' -Positionals @('Model') -Options $defaultHelpOptions -Aliases @()
         New-OllamaCommandSpec -Name 'launch' -Description 'Launch the Ollama menu or an integration.' -Positionals @('Integration') -Options @(
-            New-OllamaOptionSpec -Tokens @('--config') -Description 'Configuration file or configure-without-launch mode.' -ValueKind 'ConfigPath' -OptionalValue
+            New-OllamaOptionSpec -Tokens @('--config') -Description 'Configure without launching.'
             New-OllamaOptionSpec -Tokens @('--model') -Description 'Model to use.' -ValueKind 'Model'
             New-OllamaOptionSpec -Tokens @('--restore') -Description 'Restore an integration to its default profile.'
             New-OllamaOptionSpec -Tokens @('-y', '--yes') -Description 'Automatically answer yes to confirmation prompts.'
@@ -140,6 +142,7 @@ function Get-OllamaCompletionCatalog {
 
     $catalog = @{
         Initialized         = $false
+        ParsedCommands      = @{}
         CommandPath         = $null
         Commands            = $commands
         CommandMap          = $commandMap
@@ -174,9 +177,11 @@ function Get-OllamaCompletionCatalog {
             'code'        = 'vscode'
         }
         EnumValues          = @{
-            'run.--think'    = @('true', 'false', 'high', 'medium', 'low')
-            'run.--format'   = @('json')
-            'run.--truncate' = @('true', 'false')
+            'run.--think'      = @('true', 'false', 'high', 'medium', 'low')
+            'run.--format'     = @('json')
+            'run.--truncate'   = @('true', 'false')
+            'run.--keepalive'  = @('5m', '10m', '30m', '1h', '0', '-1')
+            'create.--quantize' = @('q4_0', 'q4_1', 'q5_0', 'q5_1', 'q8_0', 'q3_K_S', 'q3_K_M', 'q3_K_L', 'q4_K_S', 'q4_K_M', 'q5_K_S', 'q5_K_M', 'q6_K')
         }
         Placeholders        = @{
             'Model'            = @('<model>')
@@ -188,7 +193,7 @@ function Get-OllamaCompletionCatalog {
             'Quantization'     = @('<quantization>')
             'NegativePrompt'   = @('<negative-prompt>')
             'Number'           = @('<number>')
-            'ConfigPath'       = @('<config-path>')
+            'String'           = @('<value>')
             'FilePath'         = @('<path>')
             'CommandName'      = @('<command>')
         }
@@ -221,7 +226,7 @@ function Resolve-OllamaCommandPath {
 }
 
 function Invoke-OllamaCaptureText {
-    param([string[]]$Arguments)
+    param([string[]]$Arguments, [int]$TimeoutMilliseconds = 1500)
 
     $commandPath = Resolve-OllamaCommandPath
     if ([string]::IsNullOrWhiteSpace($commandPath)) {
@@ -232,6 +237,7 @@ function Invoke-OllamaCaptureText {
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $commandPath
         $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $true
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $startInfo.CreateNoWindow = $true
@@ -245,10 +251,19 @@ function Invoke-OllamaCaptureText {
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         [void]$process.Start()
+        $process.StandardInput.Close()
 
-        $standardOutput = $process.StandardOutput.ReadToEnd()
-        $standardError = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
+        # Read both streams concurrently and never wait longer than the timeout, so a hung ollama.exe cannot block
+        # the prompt and a large stderr cannot fill its pipe while stdout is being read.
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+            return ''
+        }
+
+        $standardOutput = $outputTask.Result
+        $standardError = $errorTask.Result
 
         $text = ($standardOutput + [Environment]::NewLine + $standardError).Trim()
         if ([string]::IsNullOrWhiteSpace($text)) {
@@ -323,20 +338,48 @@ function Get-OllamaCommandEntriesFromLines {
 function Get-OllamaFlagEntriesFromLines {
     param([string[]]$Lines)
 
+    # The optional pflag type token is anchored to the pflag vocabulary (with the [="default"] NoOptDefVal suffix)
+    # so a flag without a type never loses the first word of its description; the type is kept to derive the
+    # value kind.
+    $typePattern = '(?:\s+(?<type>(?:string|int|uint\d*|float\d*|bool|duration|stringArray|stringSlice|strings|ints)(?:\[="?[^"\]]*"?\])?))?'
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($line in @($Lines)) {
-        if ($line -match '^\s*(-[A-Za-z])\s*,\s*(--[a-z][a-z0-9-]*)(?:\s+\S+)?\s+(.+?)\s*$') {
-            [void]$results.Add([pscustomobject]@{ Token = $matches[1]; Description = $matches[3] })
-            [void]$results.Add([pscustomobject]@{ Token = $matches[2]; Description = $matches[3] })
+        if ($line -match ('^\s*(?<short>-[A-Za-z])\s*,\s*(?<long>--[a-z][a-z0-9-]*)' + $typePattern + '\s{2,}(?<desc>.+?)\s*$')) {
+            $type = if ($matches.ContainsKey('type')) { $matches.type } else { '' }
+            [void]$results.Add([pscustomobject]@{ Token = $matches.short; Description = $matches.desc; Type = $type })
+            [void]$results.Add([pscustomobject]@{ Token = $matches.long; Description = $matches.desc; Type = $type })
             continue
         }
 
-        if ($line -match '^\s*(--[a-z][a-z0-9-]*)(?:\s+\S+)?\s+(.+?)\s*$') {
-            [void]$results.Add([pscustomobject]@{ Token = $matches[1]; Description = $matches[2] })
+        if ($line -match ('^\s*(?<long>--[a-z][a-z0-9-]*)' + $typePattern + '\s{2,}(?<desc>.+?)\s*$')) {
+            $type = if ($matches.ContainsKey('type')) { $matches.type } else { '' }
+            [void]$results.Add([pscustomobject]@{ Token = $matches.long; Description = $matches.desc; Type = $type })
         }
     }
 
     @($results.ToArray())
+}
+
+function Get-OllamaValueKindFromType {
+    param([string]$Type, [string]$OverlayKind)
+
+    # Absent type = bool (only '--flag=false' takes a value); 'type[=default]' = NoOptDefVal, inline form only.
+    if ([string]::IsNullOrEmpty($Type)) {
+        $kind = if ($OverlayKind -eq 'Boolean') { 'Boolean' } else { $null }
+        return [pscustomobject]@{ ValueKind = $kind; InlineOnly = $true }
+    }
+
+    $inlineOnly = $Type -match '\[='
+    $kind = $OverlayKind
+    if ([string]::IsNullOrEmpty($kind)) {
+        $kind = switch -Regex ($Type) {
+            '^(int|uint|float)' { 'Number'; break }
+            '^duration' { 'Duration'; break }
+            default { 'String' }
+        }
+    }
+
+    [pscustomobject]@{ ValueKind = $kind; InlineOnly = $inlineOnly }
 }
 
 function Merge-OllamaOptionOverlay {
@@ -357,26 +400,32 @@ function Merge-OllamaOptionOverlay {
             }
         }
 
+        $type = if ($parsed.PSObject.Properties['Type']) { $parsed.Type } else { '' }
         if ($matched) {
-            if (-not [string]::IsNullOrWhiteSpace($parsed.Description)) {
-                $matched.Description = $parsed.Description
-            }
-
-            if ($seen.Add($matched.Token)) {
-                [void]$results.Add($matched)
+            # Clone so the shared -h/--help objects are never mutated across commands; the overlay only enriches
+            # the value kind, the help type token decides whether a value exists and in which form.
+            $derived = Get-OllamaValueKindFromType -Type $type -OverlayKind $matched.ValueKind
+            $description = if ([string]::IsNullOrWhiteSpace($parsed.Description)) { $matched.Description } else { $parsed.Description }
+            $spec = New-OllamaOptionSpec -Tokens @($matched.Token) -Description $description -ValueKind $derived.ValueKind -OptionalValue:$matched.OptionalValue -InlineOnly:$derived.InlineOnly
+            if ($seen.Add($spec.Token)) {
+                [void]$results.Add($spec)
             }
 
             continue
         }
 
         if ($seen.Add($parsed.Token)) {
-            [void]$results.Add((New-OllamaOptionSpec -Tokens @($parsed.Token) -Description $parsed.Description))
+            $derived = Get-OllamaValueKindFromType -Type $type -OverlayKind $null
+            [void]$results.Add((New-OllamaOptionSpec -Tokens @($parsed.Token) -Description $parsed.Description -ValueKind $derived.ValueKind -InlineOnly:$derived.InlineOnly))
         }
     }
 
-    foreach ($overlay in @($OverlayOptions)) {
-        if ($seen.Add($overlay.Token)) {
-            [void]$results.Add($overlay)
+    # A successful parse is authoritative: overlay-only flags are stale for the installed build and are dropped.
+    if ($results.Count -eq 0) {
+        foreach ($overlay in @($OverlayOptions)) {
+            if ($seen.Add($overlay.Token)) {
+                [void]$results.Add($overlay)
+            }
         }
     }
 
@@ -413,39 +462,44 @@ function Initialize-OllamaCompletionCatalog {
         }
     }
 
-    foreach ($commandName in @('serve', 'create', 'show', 'run', 'stop', 'pull', 'push', 'signin', 'signout', 'list', 'ps', 'cp', 'rm', 'launch', 'help')) {
-        if (-not $catalog.CommandMap.ContainsKey($commandName)) {
-            continue
-        }
+    $catalog.Initialized = $true
+}
 
-        $helpText = Invoke-OllamaCaptureText -Arguments @($commandName, '--help')
-        if ([string]::IsNullOrWhiteSpace($helpText)) {
-            continue
-        }
+function Resolve-OllamaCommandHelp {
+    param([string]$CommandName)
 
-        $flagEntries = New-Object System.Collections.Generic.List[object]
-        foreach ($entry in @(Get-OllamaFlagEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Flags:' -StopHeaders @('Image Generation Flags (experimental):', 'Environment Variables:', 'Examples:')))) {
-            [void]$flagEntries.Add($entry)
-        }
-
-        foreach ($entry in @(Get-OllamaFlagEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Image Generation Flags (experimental):' -StopHeaders @('Environment Variables:', 'Examples:')))) {
-            [void]$flagEntries.Add($entry)
-        }
-
-        if ($flagEntries.Count -gt 0) {
-            $catalog.CommandMap[$commandName].Options =
-                Merge-OllamaOptionOverlay -OverlayOptions $catalog.CommandMap[$commandName].Options -ParsedOptions @($flagEntries.ToArray())
-        }
-
-        if ($commandName -eq 'launch') {
-            $integrationEntries = Get-OllamaCommandEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Supported integrations:' -StopHeaders @('Examples:'))
-            if ($integrationEntries.Count -gt 0) {
-                $catalog.LaunchIntegrations = @($integrationEntries)
-            }
-        }
+    # Subcommand help is parsed lazily, once per command, the first time completion needs that command.
+    $catalog = Get-OllamaCompletionCatalog
+    if ([string]::IsNullOrWhiteSpace($CommandName) -or $catalog.ParsedCommands.ContainsKey($CommandName) -or -not $catalog.CommandMap.ContainsKey($CommandName)) {
+        return
     }
 
-    $catalog.Initialized = $true
+    $catalog.ParsedCommands[$CommandName] = $true
+    $helpText = Invoke-OllamaCaptureText -Arguments @($CommandName, '--help')
+    if ([string]::IsNullOrWhiteSpace($helpText)) {
+        return
+    }
+
+    $flagEntries = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @(Get-OllamaFlagEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Flags:' -StopHeaders @('Image Generation Flags (experimental):', 'Environment Variables:', 'Examples:')))) {
+        [void]$flagEntries.Add($entry)
+    }
+
+    foreach ($entry in @(Get-OllamaFlagEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Image Generation Flags (experimental):' -StopHeaders @('Environment Variables:', 'Examples:')))) {
+        [void]$flagEntries.Add($entry)
+    }
+
+    if ($flagEntries.Count -gt 0) {
+        $catalog.CommandMap[$CommandName].Options =
+            Merge-OllamaOptionOverlay -OverlayOptions $catalog.CommandMap[$CommandName].Options -ParsedOptions @($flagEntries.ToArray())
+    }
+
+    if ($CommandName -eq 'launch') {
+        $integrationEntries = Get-OllamaCommandEntriesFromLines -Lines (Get-OllamaSectionLines -Text $helpText -SectionHeader 'Supported integrations:' -StopHeaders @('Examples:'))
+        if ($integrationEntries.Count -gt 0) {
+            $catalog.LaunchIntegrations = @($integrationEntries)
+        }
+    }
 }
 
 function Resolve-OllamaCommandAlias {
@@ -562,7 +616,8 @@ function Get-OllamaPathCompletions {
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput)) {
-        $completionText = ConvertTo-OllamaQuotedValue -Value $item.CompletionText -QuoteCharacter $quoteCharacter
+        # CompleteFilename quotes paths with spaces itself; re-quote from the bare path in the user's quote style.
+        $completionText = ConvertTo-OllamaQuotedValue -Value (Remove-OllamaOuterQuotes -InputText $item.CompletionText) -QuoteCharacter $quoteCharacter
         if (-not [string]::IsNullOrEmpty($InlinePrefix)) {
             $completionText = $InlinePrefix + $completionText
         }
@@ -669,7 +724,8 @@ function Get-OllamaTokenState {
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
     $hasTrailingSpace = $prefix -match '\s$'
-    $allTokens = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    # A quote still being typed has no partner yet, so both quoted forms accept a missing closing quote.
+    $allTokens = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
 
     if ($hasTrailingSpace) {
         return [pscustomobject]@{
@@ -702,6 +758,7 @@ function Get-OllamaCommandSpec {
 
     $canonicalName = Resolve-OllamaCommandAlias -Token $CommandName
     if ($catalog.CommandMap.ContainsKey($canonicalName)) {
+        Resolve-OllamaCommandHelp -CommandName $canonicalName
         return $catalog.CommandMap[$canonicalName]
     }
 
@@ -777,6 +834,8 @@ function Get-OllamaCommandContext {
             }
 
             $commandName = Resolve-OllamaCommandAlias -Token $token
+            # Resolving the spec parses that command's help lazily on first use.
+            [void](Get-OllamaCommandSpec -CommandName $commandName)
             continue
         }
 
@@ -793,7 +852,8 @@ function Get-OllamaCommandContext {
         $optionToken = if ($inlineToken) { $inlineToken } else { $token }
         $optionSpec = Get-OllamaOptionSpec -CommandName $commandName -Token $optionToken
         if ($optionSpec) {
-            if (($null -eq $inlineToken) -and $optionSpec.ValueKind) {
+            # NoOptDefVal flags (--think, --truncate) never consume the next token; only --flag=value is legal.
+            if (($null -eq $inlineToken) -and $optionSpec.ValueKind -and -not $optionSpec.InlineOnly) {
                 $pendingOption = $optionSpec
             }
 
@@ -877,6 +937,13 @@ function Get-OllamaOptionCompletions {
         }
 
         New-OllamaCompletionResult -CompletionText $option.Token -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -ToolTip $option.Description
+
+        # An inline-only flag typed in full also offers its legal --flag=value forms.
+        if ($option.InlineOnly -and $option.ValueKind -and $option.Token.Equals($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            foreach ($item in @(Get-OllamaValueCompletions -CommandName $CommandName -ValueKind $option.ValueKind -CurrentWord '' -InlinePrefix ($option.Token + '='))) {
+                $item
+            }
+        }
     }
 }
 
@@ -945,17 +1012,21 @@ function Get-OllamaValueCompletions {
         'FilePath' {
             return @(Get-OllamaPathCompletions -InputText $CurrentWord -InlinePrefix $InlinePrefix -Placeholder '<path>')
         }
-        'ConfigPath' {
-            return @(Get-OllamaPathCompletions -InputText $CurrentWord -InlinePrefix $InlinePrefix -Placeholder '<config-path>')
-        }
         'Model' {
             return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
         }
         'Duration' {
+            $durations = @(Get-OllamaEnumCompletions -Values $catalog.EnumValues['run.--keepalive'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
+            if ($durations.Count -gt 0) { return $durations }
             return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Duration'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
         }
         'Quantization' {
+            $levels = @(Get-OllamaEnumCompletions -Values $catalog.EnumValues['create.--quantize'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
+            if ($levels.Count -gt 0) { return $levels }
             return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Quantization'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
+        }
+        'String' {
+            return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['String'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
         }
         'NegativePrompt' {
             return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['NegativePrompt'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
