@@ -9,8 +9,14 @@ if (-not (Get-Variable -Name ProcDumpCompletionCatalog -Scope Script -ErrorActio
             '-mm', '-ma', '-mac', '-mt', '-mp', '-mc', '-md', '-mk',
             '-n', '-s', '-c', '-cl', '-u', '-cp', '-m', '-ml', '-p', '-pl',
             '-h', '-e', '-g', '-b', '-ld', '-ud', '-ct', '-et', '-l',
-            '-t', '-f', '-fx', '-dc', '-o', '-r', '-a', '-at', '-wer', '-64',
+            '-t', '-f', '-fx', '-dc', '-o', '-r', '-a', '-at', '-pt', '-wer', '-64',
             '-w', '-x', '-i', '-k', '-cancel', '-accepteula', '-?', '/?'
+        )
+        # v12.01 Install Usage lists exactly these alongside -i; Uninstall Usage is
+        # literally 'procdump.exe -u' with no additional options.
+        InstallSwitches        = @(
+            '-mm', '-ma', '-mac', '-mt', '-mp', '-mc', '-md', '-mk',
+            '-r', '-cp', '-at', '-pt', '-k', '-wer', '-accepteula'
         )
         SwitchInfo             = @{
             '-mm'        = 'Write a Mini dump file.'
@@ -48,6 +54,7 @@ if (-not (Get-Variable -Name ProcDumpCompletionCatalog -Scope Script -ErrorActio
             '-r'         = 'Dump using a clone. Optional concurrent clone limit 1..5.'
             '-a'         = 'Avoid outage. Requires -r.'
             '-at'        = 'Avoid outage timeout in seconds.'
+            '-pt'        = 'Include a Process Tree stream in the dump file.'
             '-wer'       = 'Queue the largest dump to Windows Error Reporting.'
             '-64'        = 'Capture a 64-bit dump for a WOW64 process.'
             '-w'         = 'Wait for the specified process to launch if it is not running.'
@@ -184,6 +191,48 @@ function New-ProcDumpLiteralValueResults {
     )
 }
 
+function Get-ProcDumpPathCompletion {
+    param(
+        [string]$CurrentValue,
+        [string]$Placeholder,
+        [string]$ToolTip,
+        [string[]]$FileExtension = @(),
+        [bool]$DirectoriesOnly = $false
+    )
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($match in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentValue))) {
+        if ($match.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
+            if ($DirectoriesOnly) {
+                continue
+            }
+
+            if ($FileExtension.Count -gt 0) {
+                $text = Remove-ProcDumpOuterQuotes -Value $match.CompletionText
+                $keep = $false
+                foreach ($extension in $FileExtension) {
+                    if ($text.TrimEnd([char]34).EndsWith($extension, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $keep = $true
+                        break
+                    }
+                }
+
+                if (-not $keep) {
+                    continue
+                }
+            }
+        }
+
+        $results.Add((New-ProcDumpCompletionResult -CompletionText $match.CompletionText -ResultType $match.ResultType -ToolTip $ToolTip))
+    }
+
+    if ($results.Count -gt 0) {
+        return @($results.ToArray())
+    }
+
+    @(New-ProcDumpLiteralValueResults -CurrentValue $CurrentValue -Placeholder $Placeholder -ToolTip $ToolTip)
+}
+
 function Get-ProcDumpSampleValueResults {
     param(
         [string]$CurrentValue,
@@ -204,8 +253,9 @@ function Get-ProcDumpSampleValueResults {
         $results.Add((New-ProcDumpCompletionResult -CompletionText $sample -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
-    if ([string]::IsNullOrWhiteSpace($typedValue) -or
-        $Placeholder.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (($Placeholder -notin $Samples) -and
+        ([string]::IsNullOrWhiteSpace($typedValue) -or
+            $Placeholder.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase))) {
         $results.Add((New-ProcDumpCompletionResult -CompletionText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
@@ -423,6 +473,14 @@ function Get-ProcDumpSwitchCompletions {
             continue
         }
 
+        if ($State.Mode -eq 'uninstall') {
+            continue
+        }
+
+        if ($State.Mode -eq 'install' -and $token -notin $script:ProcDumpCompletionCatalog.InstallSwitches) {
+            continue
+        }
+
         if ($token -eq '-a' -and -not $State.UsedSwitchLookup.ContainsKey('-r')) {
             continue
         }
@@ -450,12 +508,10 @@ function Complete-ProcDump {
     $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $safeCursor)
     $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    [object[]]$argumentTokens = if ($commandTokens.Count -gt 1) {
-        @($commandTokens | Select-Object -Skip 1)
-    } else {
-        @()
-    }
-    $argumentTokens = @($argumentTokens)
+    # Wrap the whole if-expression in @(): an [object[]]-constrained assignment from a
+    # branch that yields nothing binds $null, and re-wrapping that $null manufactures a
+    # one-element array holding $null, which would make every Count -eq 0 test false.
+    $argumentTokens = @(if ($commandTokens.Count -gt 1) { $commandTokens | Select-Object -Skip 1 })
 
     $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
         Get-ProcDumpCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
@@ -464,14 +520,11 @@ function Complete-ProcDump {
     }
 
     $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
-    [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    } elseif ($argumentTokens.Count -gt 0) {
-        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
-    } else {
-        @()
-    }
-    $tokensBeforeCurrent = @($tokensBeforeCurrent)
+    $tokensBeforeCurrent = @(if ($hasTrailingSpace) {
+            $argumentTokens
+        } elseif ($argumentTokens.Count -gt 0) {
+            $argumentTokens | Select-Object -First ($argumentTokens.Count - 1)
+        })
 
     $state = Get-ProcDumpCommandState -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -481,13 +534,21 @@ function Complete-ProcDump {
         )
     }
 
+    $typedDash = -not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')
+
+    # -r and -i take an optional value, so a typed dash is the next switch rather than a
+    # value; without this the sample helper echoes the bare '-' and hides every switch.
+    if ($state.ValueContext -and $typedDash -and ([string]$state.ValueContext.Switch) -in @('-r', '-i')) {
+        return @(Get-ProcDumpSwitchCompletions -CurrentWord $currentWord -State $state -NoArgumentsYet:($tokensBeforeCurrent.Count -eq 0))
+    }
+
     if ($state.ValueContext) {
         $switchName = [string]$state.ValueContext.Switch
         $position = [int]$state.ValueContext.Position
 
         switch ($switchName) {
             '-mc' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('0x00061907', '0x00000002') -Placeholder '<hex-mask>' -ToolTip 'MINIDUMP_TYPE mask in hexadecimal.') }
-            '-md' { return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\path\MiniDumpCallback.dll"' -ToolTip 'Callback DLL path.') }
+            '-md' { return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\path\MiniDumpCallback.dll"' -ToolTip 'Callback DLL path.' -FileExtension @('.dll')) }
             '-n' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('1', '3', '5') -Placeholder '<count>' -ToolTip 'Number of dumps to write.') }
             '-s' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('5', '10', '30') -Placeholder '<seconds>' -ToolTip 'Consecutive seconds before dump is written.') }
             '-c' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('20', '50', '80') -Placeholder '<cpu-percent>' -ToolTip 'CPU threshold percent.') }
@@ -515,11 +576,13 @@ function Complete-ProcDump {
             '-r' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('1', '2', '3', '5') -Placeholder '<concurrency>' -ToolTip 'Optional clone concurrency limit.') }
             '-at' { return @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('10', '30', '60') -Placeholder '<timeout-seconds>' -ToolTip 'Timeout for avoid-outage collection.') }
             '-cancel' { return @(Get-ProcDumpProcessCompletions -CurrentWord $currentWord -IdsOnly:$true) }
-            '-i' { return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Optional AeDebug dump folder.') }
+            '-i' { return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Optional AeDebug dump folder.' -DirectoriesOnly $true) }
             '-e' {
                 $results = [System.Collections.Generic.List[object]]::new()
-                foreach ($item in @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('1') -Placeholder '1' -ToolTip 'Optional first-chance exception value.')) {
-                    $results.Add($item)
+                if (-not $typedDash) {
+                    foreach ($item in @(Get-ProcDumpSampleValueResults -CurrentValue $currentWord -Samples @('1') -Placeholder '1' -ToolTip 'Optional first-chance exception value.')) {
+                        $results.Add($item)
+                    }
                 }
                 foreach ($item in @(Get-ProcDumpSwitchCompletions -CurrentWord '-' -State $state -NoArgumentsYet:$false | Where-Object { $_.CompletionText -in @('-g', '-b', '-ld', '-ud', '-ct', '-et') })) {
                     $results.Add($item)
@@ -528,10 +591,10 @@ function Complete-ProcDump {
             }
             '-x' {
                 if ($position -eq 1) {
-                    return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Dump folder for -x launch mode.')
+                    return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Dump folder for -x launch mode.' -DirectoriesOnly $true)
                 }
 
-                return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\path\image.exe"' -ToolTip 'Image path for -x launch mode.')
+                return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\path\image.exe"' -ToolTip 'Image path for -x launch mode.' -FileExtension @('.exe'))
             }
         }
     }
@@ -543,10 +606,10 @@ function Complete-ProcDump {
     if ($state.Mode -eq 'launch') {
         if ($state.Positionals.Count -lt 2) {
             if ($state.Positionals.Count -eq 0) {
-                return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Dump folder for -x launch mode.')
+                return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Dump folder for -x launch mode.' -DirectoriesOnly $true)
             }
 
-            return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\path\image.exe"' -ToolTip 'Image path for -x launch mode.')
+            return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\path\image.exe"' -ToolTip 'Image path for -x launch mode.' -FileExtension @('.exe'))
         }
 
         return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '<argument>' -ToolTip 'Argument passed to the launched image.')
@@ -559,6 +622,9 @@ function Complete-ProcDump {
         }
 
         switch ($state.Mode) {
+            'uninstall' {
+                $results.Add((New-ProcDumpCompletionResult -CompletionText '<no-more-arguments>' -ResultType 'ParameterValue' -ToolTip 'Uninstall usage is "procdump.exe -u" with no additional options.'))
+            }
             'install' {
                 if ($state.Positionals.Count -eq 0) {
                     $results.Add((New-ProcDumpCompletionResult -CompletionText '"C:\Dumps"' -ResultType 'ParameterValue' -ToolTip 'Optional AeDebug dump folder.'))
@@ -582,7 +648,7 @@ function Complete-ProcDump {
     switch ($state.Mode) {
         'install' {
             if ($state.Positionals.Count -eq 0) {
-                return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Optional AeDebug dump folder.')
+                return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '"C:\Dumps"' -ToolTip 'Optional AeDebug dump folder.' -DirectoriesOnly $true)
             }
         }
         'capture' {
@@ -591,7 +657,7 @@ function Complete-ProcDump {
             }
 
             if ($state.Positionals.Count -eq 1) {
-                return @(New-ProcDumpLiteralValueResults -CurrentValue $currentWord -Placeholder '<dump-file-or-folder>' -ToolTip 'Dump file or dump folder path.')
+                return @(Get-ProcDumpPathCompletion -CurrentValue $currentWord -Placeholder '<dump-file-or-folder>' -ToolTip 'Dump file or dump folder path.' -FileExtension @('.dmp'))
             }
         }
     }

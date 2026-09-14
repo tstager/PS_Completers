@@ -31,7 +31,7 @@ Load it with:
 The completer seeds the validated root surface, including:
 
 - dump types such as `-mm`, `-ma`, `-mac`, `-mt`, `-mp`, `-mc`, `-md`, `-mk`
-- trigger and threshold switches such as `-n`, `-s`, `-c`, `-cl`, `-cp`, `-m`, `-ml`, `-p`, `-pl`, `-f`, `-fx`, `-dc`, `-r`, `-at`
+- trigger and threshold switches such as `-n`, `-s`, `-c`, `-cl`, `-cp`, `-m`, `-ml`, `-p`, `-pl`, `-f`, `-fx`, `-dc`, `-r`, `-at`, `-pt`
 - exception and event switches such as `-e`, `-g`, `-b`, `-ld`, `-ud`, `-ct`, `-et`
 - mode switches such as `-w`, `-x`, `-i`, `-u`, `-cancel`, `-accepteula`
 
@@ -39,7 +39,7 @@ The completer seeds the validated root surface, including:
 
 The completer tracks:
 
-- whether ProcDump is in capture, install, uninstall, or `-x` launch mode
+- whether ProcDump is in capture, install, uninstall, or `-x` launch mode, and restricts the offered switches accordingly: install mode offers only the fourteen switches v12.01's Install Usage lists beside `-i`, and uninstall mode offers none at all, because Uninstall Usage is literally `procdump.exe -u`
 - whether the current slot is the value for a numeric/path/string switch
 - when `-p` or `-pl` is waiting on counter path versus numeric threshold
 - when `-e` is waiting for the optional first-chance `1`
@@ -82,14 +82,19 @@ For `-p` and `-pl`:
 
 ### Free-form and path slots
 
-The completer uses placeholders for:
+Genuinely path-shaped slots are completed from the filesystem with
+`[System.Management.Automation.CompletionCompleters]::CompleteFilename`, narrowed to
+what the slot accepts, and fall back to their placeholder only when nothing matches:
 
-- `-md` callback DLL path
+- `-md` -> directories and `*.dll`
+- `-i` and `-x` dump folder -> directories only
+- `-x` image file -> directories and `*.exe`
+- final capture dump file/folder slot -> directories and `*.dmp`
+
+The remaining value slots are free text, not paths, so they stay placeholder-driven:
+
 - `-f` / `-fx` filter text
 - `-dc` dump comment
-- `-i` optional dump folder
-- `-x` dump folder and image file
-- final capture dump file/folder slot
 
 ### Capture targets
 
@@ -103,7 +108,7 @@ At the capture target position, the completer offers:
 
 - `Get-Process` is used for local target hints
 - no live performance-counter enumeration is attempted
-- no filesystem probing is required to complete path placeholders
+- path slots use the in-process `CompleteFilename` completer; no external command is run
 
 ## Usage / loading example
 
@@ -124,6 +129,6 @@ Validated with `pwsh -NoProfile` and `TabExpansion2` for both root and represent
 
 ## Limitations / notes
 
-- The completer intentionally prefers placeholders over live introspection.
+- The completer prefers placeholders over live introspection everywhere except the path slots and the `Get-Process` target cache.
 - Service names are not enumerated.
 - Counter paths are representative samples, not discovered from the local machine.
