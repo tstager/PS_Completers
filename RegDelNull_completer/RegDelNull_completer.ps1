@@ -32,10 +32,13 @@ if (-not (Get-Variable -Name RegDelNullCompletionCatalog -Scope Script -ErrorAct
             'HKU'  = 'Registry::HKEY_USERS'
             'HKCC' = 'Registry::HKEY_CURRENT_CONFIG'
         }
+        ChildCache = @{}
+        MaxChildResults = 300
         Switches = @(
             @{ Token = '-s'; Description = 'Recurse into subkeys.' }
             @{ Token = '-y'; Description = 'Suppress confirmation before deleting null-embedded keys.' }
             @{ Token = '-nobanner'; Description = 'Do not display the startup banner and copyright message.' }
+            @{ Token = '-accepteula'; Description = 'Accept the Sysinternals license agreement (suppresses the first-run EULA dialog).' }
             @{ Token = '/?'; Description = 'Show RegDelNull help.' }
         )
     }
@@ -110,7 +113,7 @@ function Get-RegDelNullCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -156,6 +159,61 @@ function Get-RegDelNullProviderPath {
     $script:RegDelNullCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $rest
 }
 
+function Get-RegDelNullChildName {
+    param(
+        [string]$CanonicalRoot,
+        [string]$SubKeyPath
+    )
+
+    $cacheKey = $CanonicalRoot + '\' + $SubKeyPath
+    if ($script:RegDelNullCompletionCatalog.ChildCache.ContainsKey($cacheKey)) {
+        return @($script:RegDelNullCompletionCatalog.ChildCache[$cacheKey])
+    }
+
+    # RegistryKey.GetSubKeyNames lists the names held by the parent without opening
+    # each child, so keys the session cannot read (SECURITY, BCD00000000) are still
+    # offered, names containing '/' survive intact, and a large hive costs one call.
+    $baseKey = switch ($CanonicalRoot) {
+        'HKLM' { [Microsoft.Win32.Registry]::LocalMachine }
+        'HKCU' { [Microsoft.Win32.Registry]::CurrentUser }
+        'HKCR' { [Microsoft.Win32.Registry]::ClassesRoot }
+        'HKU' { [Microsoft.Win32.Registry]::Users }
+        'HKCC' { [Microsoft.Win32.Registry]::CurrentConfig }
+        default { $null }
+    }
+
+    $names = @()
+    $subKey = $null
+    $errorCountBefore = $Error.Count
+    try {
+        if ($null -ne $baseKey) {
+            if ([string]::IsNullOrEmpty($SubKeyPath)) {
+                $names = @($baseKey.GetSubKeyNames())
+            } else {
+                $subKey = $baseKey.OpenSubKey($SubKeyPath, $false)
+                if ($null -ne $subKey) {
+                    $names = @($subKey.GetSubKeyNames())
+                }
+            }
+        }
+    } catch {
+        $names = @()
+    } finally {
+        if ($null -ne $subKey) {
+            $subKey.Dispose()
+        }
+
+        # A key this session cannot read is an expected outcome when completing a
+        # hive RegDelNull is normally run elevated to repair, not a fault to report.
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
+        }
+    }
+
+    $script:RegDelNullCompletionCatalog.ChildCache[$cacheKey] = $names
+    @($names)
+}
+
 function Get-RegDelNullRootSuggestions {
     param([string]$CurrentValue)
 
@@ -199,33 +257,32 @@ function Get-RegDelNullRegistryPathCompletions {
 
     $remainder = if ($segments.Count -gt 1) { $segments[1] } else { '' }
     if ([string]::IsNullOrWhiteSpace($remainder)) {
-        $providerPath = $script:RegDelNullCompletionCatalog.RootProviderPaths[$canonicalRoot]
         $prefixPath = ''
         $leaf = ''
     } elseif ($remainder.EndsWith('\')) {
-        $providerPath = $script:RegDelNullCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $remainder.TrimEnd('\')
         $prefixPath = $remainder.TrimEnd('\')
         $leaf = ''
     } else {
         $lastSeparator = $remainder.LastIndexOf('\')
         if ($lastSeparator -lt 0) {
-            $providerPath = $script:RegDelNullCompletionCatalog.RootProviderPaths[$canonicalRoot]
             $prefixPath = ''
             $leaf = $remainder
         } else {
             $prefixPath = $remainder.Substring(0, $lastSeparator)
             $leaf = $remainder.Substring($lastSeparator + 1)
-            $providerPath = $script:RegDelNullCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $prefixPath
         }
     }
 
-    $children = @(Get-ChildItem -LiteralPath $providerPath -ErrorAction SilentlyContinue)
-    foreach ($child in ($children | Sort-Object -Property PSChildName)) {
-        $childName = [string]$child.PSChildName
-        if (-not $childName.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
+    # Filter on the typed leaf before sorting, and cap the emitted count so a hive
+    # the size of HKCR cannot stall the completion thread.
+    $matchedNames = @(
+        Get-RegDelNullChildName -CanonicalRoot $canonicalRoot -SubKeyPath $prefixPath |
+            Where-Object { $_.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object |
+            Select-Object -First $script:RegDelNullCompletionCatalog.MaxChildResults
+    )
 
+    foreach ($childName in $matchedNames) {
         $candidate = if ([string]::IsNullOrWhiteSpace($prefixPath)) {
             $displayRoot + '\' + $childName + '\'
         } else {
@@ -304,7 +361,10 @@ function Complete-RegDelNull {
     if (-not $pathProvided) {
         $results = @()
         $results += @(Get-RegDelNullRegistryPathCompletions -CurrentValue $currentWord)
-        $results += @(Get-RegDelNullSwitchCompletions -CurrentWord '' -UsedSwitches $usedSwitches)
+        if ([string]::IsNullOrEmpty((Remove-RegDelNullOuterQuotes -Value $currentWord))) {
+            $results += @(Get-RegDelNullSwitchCompletions -CurrentWord '' -UsedSwitches $usedSwitches)
+        }
+
         if ($results.Count -gt 0) {
             return @($results)
         }
