@@ -925,6 +925,14 @@
             )
         }
         @{
+            Path    = 'sbx_completer/sbx_completer.ps1'
+            Trusted = $false
+            Targets = @(
+                @{ CommandName = 'sbx'; Native = $true }
+                @{ CommandName = 'sbx.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'sc_completer/sc_completer.ps1'
             Trusted = $false
             Targets = @(
