@@ -71,7 +71,7 @@ function Invoke-CargoClippyText {
     }
 
     try {
-        @(& $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        @(& $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }
@@ -86,7 +86,7 @@ function Invoke-CargoText {
     }
 
     try {
-        @(& $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        @(& $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }
@@ -303,7 +303,7 @@ function Get-CargoClippyLintCatalog {
     }
 
     $raw = try {
-        $null | & $driver.Source '-W' 'help' 2>&1 | ForEach-Object { $_.ToString() }
+        $null | & $driver.Source '-W' 'help' 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
     } catch {
         @()
     }

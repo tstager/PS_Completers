@@ -232,7 +232,7 @@ function Complete-GitNative {
 
         $flags = [System.Collections.Generic.List[string]]::new()
         $inUsage = $false
-        foreach ($helpLine in @($null | git --help 2>$null)) {
+        foreach ($helpLine in @($null | git --help 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })) {
             if ($helpLine -match '^usage:\s+git\b') {
                 $inUsage = $true
             }
@@ -542,7 +542,7 @@ function Complete-GitNative {
 
         $helpLines = @(
             & git @commandPath -h 2>&1 |
-                ForEach-Object { $_.ToString() }
+                ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
         )
 
         $optionPattern = '(?<!\w)(--\[(?:no-)\][A-Za-z0-9][A-Za-z0-9-]*|--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])'

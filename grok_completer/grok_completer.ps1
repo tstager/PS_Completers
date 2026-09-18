@@ -66,7 +66,7 @@ function Invoke-GrokHelpCapture {
                 return ''
             }
 
-            return $outputTask.Result + $errorTask.Result
+            return ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + ($errorTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
         } finally {
             $process.Dispose()
         }

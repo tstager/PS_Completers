@@ -60,7 +60,7 @@ function Get-OhMyPoshHelp {
     $executable = Get-OhMyPoshExecutable
     if ($executable) {
         try {
-            $text = $null | & $executable @CommandPath --help 2>&1 | Out-String
+            $text = $null | & $executable @CommandPath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
         } catch {
             $text = ''
         }

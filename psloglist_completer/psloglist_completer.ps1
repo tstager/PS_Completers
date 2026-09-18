@@ -124,7 +124,7 @@ function Invoke-PsLogListCapture {
             return @()
         }
         [void]$errorTask.Result
-        @($outputTask.Result -split '\r?\n')
+        @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n')
     } catch {
         @()
     }

@@ -39,9 +39,9 @@ function Invoke-ZipHelpText {
 
     try {
         @(
-            & $commandName -h 2>$null
-            & $commandName -h2 2>$null
-            & $commandName -so 2>$null
+            & $commandName -h 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
+            & $commandName -h2 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
+            & $commandName -so 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
         )
     } catch {
         @()

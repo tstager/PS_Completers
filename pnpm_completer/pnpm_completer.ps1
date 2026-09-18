@@ -81,7 +81,7 @@ function Get-PnpmHelpText {
     }
 
     try {
-        $helpText = $null | & $executablePath @arguments 2>$null | Out-String
+        $helpText = $null | & $executablePath @arguments 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
     } catch {
         return ''
     }

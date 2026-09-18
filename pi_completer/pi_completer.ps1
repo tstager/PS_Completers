@@ -396,7 +396,7 @@ function Invoke-PiCapture {
             try { $process.Kill($true) } catch { }
             return @()
         }
-        $standardOutput = $outputTask.GetAwaiter().GetResult()
+        $standardOutput = ($outputTask.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
         $null = $errorTask.GetAwaiter().GetResult()
 
         if ([string]::IsNullOrWhiteSpace($standardOutput)) {

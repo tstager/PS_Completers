@@ -78,7 +78,7 @@ function Invoke-TasklistCommandText {
             }
 
             $null = $errorTask.Result
-            return @($outputTask.Result -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            return @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         } finally {
             $process.Dispose()
         }

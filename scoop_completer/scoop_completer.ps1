@@ -298,7 +298,7 @@ function Invoke-ScoopCapture {
     }
 
     try {
-        @(& $commandName @Arguments 2>$null 3>$null 4>$null 5>$null 6>$null)
+        @(& $commandName @Arguments 2>$null 3>$null 4>$null 5>$null 6>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

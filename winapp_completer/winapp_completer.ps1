@@ -54,7 +54,7 @@ function Initialize-WinAppCompleterData {
         $exePath = if ($command.Source) { $command.Source } else { $command.Path }
         if ([string]::IsNullOrWhiteSpace($exePath)) { return }
 
-        $schemaJson = & $exePath --cli-schema 2>$null | Out-String
+        $schemaJson = & $exePath --cli-schema 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
         if ([string]::IsNullOrWhiteSpace($schemaJson)) { return }
 
         $script:WinAppTree = $schemaJson | ConvertFrom-Json

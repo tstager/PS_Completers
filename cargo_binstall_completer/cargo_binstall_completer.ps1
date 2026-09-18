@@ -39,7 +39,7 @@ function Invoke-CargoBinstallText {
     }
 
     try {
-        @(& $commandPath @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        @(& $commandPath @Arguments 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

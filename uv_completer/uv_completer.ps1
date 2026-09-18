@@ -410,7 +410,7 @@ function Invoke-UvHelp {
                 return @()
             }
 
-            $text = $outputTask.Result
+            $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             if ([string]::IsNullOrEmpty($text)) {
                 return @()
             }

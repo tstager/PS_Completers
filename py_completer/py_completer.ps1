@@ -190,9 +190,9 @@ function Invoke-PyProcessOutput {
                 return $null
             }
 
-            $text = $outputTask.Result
+            $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             if ([string]::IsNullOrWhiteSpace($text)) {
-                $text = $errorTask.Result
+                $text = ($errorTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             }
 
             return $text

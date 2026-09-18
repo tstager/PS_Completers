@@ -89,7 +89,7 @@ function Invoke-GrepCapture {
     }
 
     try {
-        @(& $commandName @Arguments 2>$null)
+        @(& $commandName @Arguments 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

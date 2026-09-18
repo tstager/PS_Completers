@@ -852,7 +852,7 @@ function Initialize-TarCompletionCatalog {
     if ((Get-TarFlavor) -eq 'gnu') {
         $helpLines = @()
         try {
-            $helpLines = @($null | & $script:TarCompletionCatalog.CommandPath --help 2>$null)
+            $helpLines = @($null | & $script:TarCompletionCatalog.CommandPath --help 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
         } catch {
             Write-Debug "tar --help probe failed: $($_.Exception.Message)"
         }

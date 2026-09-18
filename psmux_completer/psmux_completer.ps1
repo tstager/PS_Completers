@@ -294,7 +294,7 @@ function Get-PsmuxSessionSuggestions {
 
     try {
         @(
-            $null | & $command.Source ls 2>$null |
+            $null | & $command.Source ls 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } |
                 ForEach-Object {
                     if ($_ -match '^\s*([A-Za-z0-9_.-]+)') { $matches[1] }
                 } |

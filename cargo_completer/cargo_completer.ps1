@@ -53,7 +53,7 @@ function Invoke-CargoText {
     }
 
     try {
-        @($null | & $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        @($null | & $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

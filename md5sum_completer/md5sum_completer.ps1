@@ -18,7 +18,7 @@ function Get-Md5sumCompletionOptions {
         }
 
         try {
-            $helpOutput = $null | & $command.Source --help 2>&1 | Out-String
+            $helpOutput = $null | & $command.Source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
         } catch {
             continue
         }

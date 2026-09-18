@@ -85,7 +85,7 @@ function Invoke-PslistHelpText {
     try {
         @(
             $null | & $commandPath '/?' 2>&1 |
-                ForEach-Object { $_.ToString() }
+                ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
         )
     } catch {
         @()

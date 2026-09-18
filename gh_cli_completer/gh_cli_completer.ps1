@@ -32,7 +32,7 @@ function Get-GhCliGeneratedCompletionScript {
     }
 
     try {
-        $completionScript = $null | & $ghCommandPath completion -s powershell 2>$null | Out-String
+        $completionScript = $null | & $ghCommandPath completion -s powershell 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
 
         if ([string]::IsNullOrWhiteSpace($completionScript)) {
             Write-Verbose 'gh returned an empty completion script.'
@@ -163,7 +163,7 @@ function Get-GhCliHelpTopicList {
     $ghCommandPath = Get-GhCliCommandPath
     if ($ghCommandPath) {
         $inTopics = $false
-        foreach ($line in @($null | & $ghCommandPath --help 2>$null)) {
+        foreach ($line in @($null | & $ghCommandPath --help 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })) {
             if ($line -match '^HELP TOPICS') {
                 $inTopics = $true
                 continue

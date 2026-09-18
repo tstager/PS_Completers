@@ -366,7 +366,7 @@ function Invoke-RtkHelp {
                 return $null
             }
 
-            $text = $outputTask.Result + $errorTask.Result
+            $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + ($errorTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             if ([string]::IsNullOrWhiteSpace($text)) {
                 return $null
             }

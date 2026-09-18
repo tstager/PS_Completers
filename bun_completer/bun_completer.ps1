@@ -224,7 +224,7 @@ function Invoke-BunCapture {
     }
 
     try {
-        @(& $executablePath @Arguments 2>$null)
+        @(& $executablePath @Arguments 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

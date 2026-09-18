@@ -56,7 +56,7 @@ function Get-CodexGeneratedCompletionScript {
     }
 
     try {
-        $completionScript = & $codexExecutablePath completion powershell 2>$null | Out-String
+        $completionScript = & $codexExecutablePath completion powershell 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
     } catch {
         return
     }

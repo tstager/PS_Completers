@@ -91,7 +91,7 @@ function Get-DockerHelpText {
         $stderr = $process.StandardError.ReadToEndAsync()
 
         if ($process.WaitForExit(4000)) {
-            $helpText = $stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()
+            $helpText = ($stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + "`n" + ($stderr.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
         } else {
             $process.Kill($true)
         }

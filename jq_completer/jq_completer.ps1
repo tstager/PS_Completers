@@ -65,7 +65,7 @@ function Get-JqHelpOutput {
     }
 
     try {
-        $helpOutput = $null | & $commandPath --help 2>&1 | Out-String
+        $helpOutput = $null | & $commandPath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
     } catch {
         $helpOutput = ''
     }

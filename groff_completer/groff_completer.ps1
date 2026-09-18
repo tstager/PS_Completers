@@ -256,7 +256,7 @@ function Get-GroffHelpText {
     }
 
     try {
-        $script:GroffCompletionCatalog.HelpText = (($null | & $executablePath --help 2>&1) -join [Environment]::NewLine)
+        $script:GroffCompletionCatalog.HelpText = (($null | & $executablePath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }) -join [Environment]::NewLine)
     } catch {
         $script:GroffCompletionCatalog.HelpText = ''
     }

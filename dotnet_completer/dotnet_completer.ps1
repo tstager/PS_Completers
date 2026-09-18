@@ -72,7 +72,7 @@ function Get-DotnetLiveCompletion {
         $standardError = $process.StandardError.ReadToEndAsync()
 
         if ($process.WaitForExit(2500)) {
-            $output = $standardOutput.GetAwaiter().GetResult()
+            $output = ($standardOutput.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             [void]$standardError.GetAwaiter().GetResult()
         } else {
             $process.Kill($true)

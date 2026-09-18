@@ -57,7 +57,7 @@ function Get-CursorAgentRootHelpOutput {
     }
 
     try {
-        return ($null | & $commandPath --help 2>&1 | Out-String)
+        return ($null | & $commandPath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
     } catch {
         return ''
     }
@@ -72,7 +72,7 @@ function Get-CursorAgentSubcommandHelpOutput {
     }
 
     try {
-        return ($null | & $launcherPath @CommandPath --help 2>&1 | Out-String)
+        return ($null | & $launcherPath @CommandPath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
     } catch {
         return ''
     }

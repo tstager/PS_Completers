@@ -262,8 +262,8 @@ function Invoke-OllamaCaptureText {
             return ''
         }
 
-        $standardOutput = $outputTask.Result
-        $standardError = $errorTask.Result
+        $standardOutput = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+        $standardError = ($errorTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
 
         $text = ($standardOutput + [Environment]::NewLine + $standardError).Trim()
         if ([string]::IsNullOrWhiteSpace($text)) {

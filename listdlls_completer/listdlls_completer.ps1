@@ -138,7 +138,7 @@ function Invoke-ListdllsHelpText {
                 return @()
             }
 
-            $text = $outputTask.Result + $errorTask.Result
+            $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + ($errorTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
             return @($text -split '\r?\n')
         } finally {
             $process.Dispose()

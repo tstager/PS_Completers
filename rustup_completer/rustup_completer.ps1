@@ -46,7 +46,7 @@ function Invoke-RustupText {
     }
 
     try {
-        @(& $commandPath @Arguments 2>$null)
+        @(& $commandPath @Arguments 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

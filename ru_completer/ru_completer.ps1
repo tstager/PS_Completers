@@ -60,7 +60,7 @@ function Invoke-RuHelpText {
     }
 
     try {
-        @($null | & $commandName '/?' 2>$null)
+        @($null | & $commandName '/?' 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

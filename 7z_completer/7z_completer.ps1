@@ -41,7 +41,7 @@ function Invoke-SevenZipHelpText {
     }
 
     try {
-        @($null | & $commandName --help 2>$null)
+        @($null | & $commandName --help 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }
@@ -346,7 +346,7 @@ function Get-SevenZipArchiveTypeList {
     }
 
     $raw = try {
-        $null | & $commandName i 2>$null
+        $null | & $commandName i 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }
     } catch {
         @()
     }

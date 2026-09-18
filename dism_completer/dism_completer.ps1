@@ -330,7 +330,7 @@ function Invoke-DismHelpText {
         }
 
         [void]$errorTask.Result
-        $text = $outputTask.Result
+        $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
         if ([string]::IsNullOrWhiteSpace($text) -or $text -match 'Error:\s*740' -or $text -match 'Elevated permissions are required') {
             return @()
         }

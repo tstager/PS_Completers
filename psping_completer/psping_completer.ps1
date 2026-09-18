@@ -118,7 +118,7 @@ function Get-PsPingRootHelpText {
     }
 
     try {
-        $script:PsPingCompletionCatalog.RootHelpText = (($null | & $commandName -? 2>&1) -join [Environment]::NewLine)
+        $script:PsPingCompletionCatalog.RootHelpText = (($null | & $commandName -? 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }) -join [Environment]::NewLine)
     } catch {
         $script:PsPingCompletionCatalog.RootHelpText = ''
     }

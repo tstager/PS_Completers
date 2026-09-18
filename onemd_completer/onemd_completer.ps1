@@ -53,20 +53,20 @@ function Get-OnemdHelpOutput {
 
     try {
         if ($subcommandPath.Count -eq 0) {
-            $resultText = ($null | & $resolvedCommandPath --help 2>&1 | Out-String)
+            $resultText = ($null | & $resolvedCommandPath --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
             if (-not [string]::IsNullOrWhiteSpace($resultText)) {
                 return $resultText
             }
 
-            return ($null | & $resolvedCommandPath help 2>&1 | Out-String)
+            return ($null | & $resolvedCommandPath help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
         }
 
-        $resultText = ($null | & $resolvedCommandPath help $subcommandPath[0] 2>&1 | Out-String)
+        $resultText = ($null | & $resolvedCommandPath help $subcommandPath[0] 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
         if (-not [string]::IsNullOrWhiteSpace($resultText)) {
             return $resultText
         }
 
-        return ($null | & $resolvedCommandPath $subcommandPath[0] --help 2>&1 | Out-String)
+        return ($null | & $resolvedCommandPath $subcommandPath[0] --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String)
     } catch {
         return ''
     }

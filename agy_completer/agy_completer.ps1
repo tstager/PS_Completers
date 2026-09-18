@@ -29,7 +29,7 @@ function Get-AgyCompletionCatalog {
             $process.StandardInput.Close()
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            if ($process.WaitForExit(2000)) { $helpText = $stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult() }
+            if ($process.WaitForExit(2000)) { $helpText = ($stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + "`n" + ($stderr.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') }
             else { $process.Kill($true) }
         } catch { $helpText = '' } finally { $process.Dispose() }
     }

@@ -221,7 +221,7 @@ function Get-SedHelpText {
     }
 
     try {
-        (($null | & $executablePath --help 2>$null) -join "`n")
+        (($null | & $executablePath --help 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }) -join "`n")
     } catch {
         ''
     }

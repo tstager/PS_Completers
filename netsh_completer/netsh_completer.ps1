@@ -177,7 +177,7 @@ function Invoke-NetshHelpText {
             }
 
             [void]$errorTask.Result
-            @($outputTask.Result -split '\r?\n')
+            @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n')
         } finally {
             $process.Dispose()
         }

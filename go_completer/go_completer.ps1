@@ -165,7 +165,7 @@ function Get-GoText {
 
     try {
         # Standard input is closed so a tool that reads it cannot hang the prompt.
-        $text = ($null | & $goPath @Arguments 2>&1 | Out-String -Width 4096)
+        $text = ($null | & $goPath @Arguments 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String -Width 4096)
     } catch {
         $text = ''
     }

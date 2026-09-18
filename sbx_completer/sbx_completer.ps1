@@ -34,7 +34,7 @@ function Get-SbxGeneratedCompletionScript {
     }
 
     try {
-        $completionScript = $null | & $sbxCommandPath completion powershell 2>$null | Out-String
+        $completionScript = $null | & $sbxCommandPath completion powershell 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
 
         if ([string]::IsNullOrWhiteSpace($completionScript)) {
             Write-Verbose 'sbx returned an empty completion script.'

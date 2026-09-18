@@ -33,7 +33,7 @@ function Invoke-DuHelpText {
     }
 
     try {
-        @($null | & $commandName --help 2>&1)
+        @($null | & $commandName --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
     }

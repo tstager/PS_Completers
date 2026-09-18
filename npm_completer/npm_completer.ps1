@@ -318,8 +318,8 @@ function Invoke-NpmCommandCapture {
             return @()
         }
 
-        $stdout = $stdoutTask.Result
-        $stderr = $stderrTask.Result
+        $stdout = ($stdoutTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+        $stderr = ($stderrTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
     } finally {
         $process.Dispose()
     }

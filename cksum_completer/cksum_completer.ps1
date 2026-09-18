@@ -104,7 +104,7 @@ function Get-CksumCompletionCatalog {
 
     $command = Get-Command -Name 'cksum.exe', 'cksum' -ErrorAction Ignore | Select-Object -First 1
     if ($null -ne $command) {
-        $helpOutput = try { $null | & $command.Source --help 2>&1 | Out-String } catch { '' }
+        $helpOutput = try { $null | & $command.Source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String } catch { '' }
         if (-not [string]::IsNullOrWhiteSpace($helpOutput)) {
             $parsed = ConvertFrom-CksumHelpText -HelpText $helpOutput
             $options = @($parsed.Options)
