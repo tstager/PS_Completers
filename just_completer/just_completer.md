@@ -21,27 +21,20 @@ The completer script block:
 
 1. Receives the standard native completer parameters: `$wordToComplete`, `$commandAst`, and `$cursorPosition`.
 2. Lazily resolves the installed `just` executable with `Get-Command -Name just.exe, just -CommandType Application, ExternalScript` and reuses that resolved command name for later completions.
-3. Saves the current `JUST_COMPLETE` environment variable value, if any.
-4. Sets `JUST_COMPLETE=powershell` so `just` emits PowerShell-oriented completion rows.
-5. Reads the command line text from `$commandAst.Extent.Text` and truncates it to the current cursor position.
-6. If the current word is empty, appends `' '` so the upstream completer still sees an empty trailing argument position.
-7. Invokes the resolved `just` command with:
-
-   ```powershell
-   & '<resolved-just-command>' -- $args
-   ```
-
-8. Restores `JUST_COMPLETE` to its previous value, or removes it if it was not set before completion ran.
-9. Splits each returned line on a tab character:
+3. Projects `$commandAst.CommandElements` up to the cursor to literal argument text: string constants contribute their unquoted value, every other element contributes its raw extent text, and the element under the cursor is cut at the cursor. Nothing the user typed is evaluated.
+4. If the current word is empty, appends an empty argument so the upstream completer still sees an empty trailing argument position.
+5. Starts the resolved `just` executable directly through `System.Diagnostics.ProcessStartInfo` with `--` followed by those arguments, `JUST_COMPLETE=powershell` set on the child process only, stdin closed, and a 5-second timeout after which the child is killed and no results are returned.
+6. Strips ANSI escape sequences from the captured output and splits it into lines.
+7. Splits each returned line on a tab character:
    - column 1 becomes the completion text
    - column 2, when present, becomes the tooltip text
    - if no tab is present, the completion text is also used as the tooltip
-10. Emits each row as a `System.Management.Automation.CompletionResult` with `ParameterValue` result type.
+8. Emits each row as a `System.Management.Automation.CompletionResult` with `ParameterValue` result type.
 
 ## Key completion behaviors / supported values
 
 - Completion behavior is delegated to the installed `just` executable rather than defined statically in this repository.
-- The script forwards the full command line prefix up to the cursor, so upstream `just` completion can inspect subcommands, recipe names, flags, and value positions.
+- The script forwards the literal arguments up to the cursor, so upstream `just` completion can inspect subcommands, recipe names, flags, and value positions.
 - When the cursor is after a space and there is no current word yet, the script intentionally preserves that empty argument slot before invoking `just`.
 - Tooltip text comes from the second tab-separated field returned by `just`, when present.
 
@@ -71,5 +64,5 @@ just build <Tab>
 
 - The completer is a wrapper around `just`'s own completion output; coverage changes with the installed `just` version.
 - If `Get-Command` cannot resolve `just`, the completer returns no results.
-- The script uses `Invoke-Expression` to execute the constructed `just.exe -- ...` command line.
+- Arguments are passed to `just` as an argument vector built from the AST; the completer never re-parses or evaluates the typed text, and the parent session's `JUST_COMPLETE` variable is never touched.
 - There is no repository-local fallback if the upstream executable errors or returns no completions.

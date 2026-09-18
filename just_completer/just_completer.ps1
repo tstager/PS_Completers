@@ -15,39 +15,91 @@ function Resolve-JustCommandName {
     $script:JustCompletionCommandName
 }
 
+function Get-JustCompletionArguments {
+    param($CommandAst, [int]$CursorPosition, [string]$WordToComplete)
+
+    # Project the AST to literal argument text without evaluating anything the user typed.
+    $relativeCursor = $CursorPosition - $CommandAst.Extent.StartOffset
+    $arguments = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($element in $CommandAst.CommandElements) {
+        $start = $element.Extent.StartOffset - $CommandAst.Extent.StartOffset
+        if ($start -ge $relativeCursor) {
+            break
+        }
+
+        $end = $element.Extent.EndOffset - $CommandAst.Extent.StartOffset
+        if ($end -gt $relativeCursor) {
+            $arguments.Add($element.Extent.Text.Substring(0, $relativeCursor - $start))
+            break
+        }
+
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $arguments.Add($element.Value)
+        } else {
+            $arguments.Add($element.Extent.Text)
+        }
+    }
+
+    if ($WordToComplete -eq '') {
+        $arguments.Add('')
+    }
+
+    $arguments.ToArray()
+}
+
 function Invoke-JustCompletion {
-    param([string]$CommandLine)
+    param([string[]]$Arguments)
 
     $commandName = Resolve-JustCommandName
     if (-not $commandName) {
         return @()
     }
 
-    $escapedCommandName = $commandName.Replace("'", "''")
-    Invoke-Expression "& '$escapedCommandName' -- $CommandLine"
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $commandName
+        [void]$startInfo.ArgumentList.Add('--')
+        foreach ($argument in $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.Environment['JUST_COMPLETE'] = 'powershell'
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+                return @()
+            }
+
+            $text = ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+            if ([string]::IsNullOrWhiteSpace($text)) {
+                return @()
+            }
+
+            @($text -split '\r?\n' | Where-Object { $_ -ne '' })
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        @()
+    }
 }
 
 Register-ArgumentCompleter -Native -CommandName @("just", "just.exe") -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $prev = $env:JUST_COMPLETE
-    $env:JUST_COMPLETE = "powershell"
-
-    $args1 = $commandAst.Extent.Text
-    $args1 = $args1.Substring(0, [math]::Min($cursorPosition, $args1.Length))
-    if ($wordToComplete -eq "") {
-        $args1 += " ''"
-    }
-
-    try {
-        $results = Invoke-JustCompletion -CommandLine $args1
-    } finally {
-        if ($null -eq $prev) {
-            Remove-Item Env:\JUST_COMPLETE -ErrorAction SilentlyContinue
-        } else {
-            $env:JUST_COMPLETE = $prev
-        }
-    }
+    $arguments = Get-JustCompletionArguments -CommandAst $commandAst -CursorPosition $cursorPosition -WordToComplete $wordToComplete
+    $results = Invoke-JustCompletion -Arguments $arguments
 
     $results | ForEach-Object {
         $split = $_.Split("`t")
