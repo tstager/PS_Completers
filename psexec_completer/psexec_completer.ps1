@@ -211,6 +211,14 @@ function Get-PsExecExecutableCompletions {
         }
     }
 
+    if ($trimmed.StartsWith('\\')) {
+        # A UNC copy source is never enumerated: resolving the share blocks the
+        # completion thread on SMB name resolution for seconds when the host is
+        # unknown, and leaves a Get-ChildItem record in $Error.
+        [void]$results.Add((New-PsExecCompletionResult -CompletionText $CurrentWord -ResultType 'ParameterValue' -ToolTip 'Network path to copy with -c; UNC paths are not enumerated during completion.'))
+        return @($results.ToArray())
+    }
+
     if ($trimmed -match '[\\/]|^\.' -or $trimmed -match '^[A-Za-z]:') {
         $parts = Split-PsExecPath -Path $trimmed
         $parent = $parts.Parent

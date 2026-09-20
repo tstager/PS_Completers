@@ -44,7 +44,7 @@ Before the command slot is chosen, the completer suggests safe remote-target for
 A partially typed `\\host` that matches none of these is echoed back, so the slot
 never proposes a `<command>` placeholder where only a host name is legal.
 
-When the current token starts with `@`, completion switches to local path completion for the file portion while preserving the `@` prefix. Path completion handles a trailing separator and the `.` / `..` leaves, so `@.\` and `-c .\` enumerate the current directory.
+When the current token starts with `@`, completion switches to local path completion for the file portion while preserving the `@` prefix. Path completion handles a trailing separator and the `.` / `..` leaves, so `@.\` and `-c .\` enumerate the current directory. A UNC copy source (`-c \\server\share\...`) is never enumerated: resolving the share can block the prompt for seconds on an unknown host, so the typed path is echoed back unchanged.
 
 ### Switches and value slots
 
