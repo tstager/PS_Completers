@@ -58,7 +58,9 @@ regjump -c <TAB>
 
 ## Dependencies or external command expectations
 
-- Depends on the local PowerShell registry provider for key enumeration
+- Enumerates subkeys through the native `Microsoft.Win32.Registry` API (`RegistryKey.GetSubKeyNames`), cached per key for the session and capped at 300 results per slot; keys the session cannot open produce no results and leave nothing in `$Error`
+- Emits keys as `ProviderContainer` results so accepting one keeps the path open for the next level (a quoted key gets its trailing `\` inserted before the closing quote by PSReadLine)
+- Accepts both the abbreviated (`HKLM`) and standard (`HKEY_LOCAL_MACHINE`) root forms and offers whichever the typed prefix matches
 - Does not execute `regjump.exe` during completion
 
 ## Limitations / notes

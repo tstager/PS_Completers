@@ -25,13 +25,8 @@ if (-not (Get-Variable -Name RegJumpCompletionCatalog -Scope Script -ErrorAction
             'HKEY_USERS'          = 'HKU'
             'HKEY_CURRENT_CONFIG' = 'HKCC'
         }
-        RootProviderPaths = @{
-            'HKLM' = 'Registry::HKEY_LOCAL_MACHINE'
-            'HKCU' = 'Registry::HKEY_CURRENT_USER'
-            'HKCR' = 'Registry::HKEY_CLASSES_ROOT'
-            'HKU'  = 'Registry::HKEY_USERS'
-            'HKCC' = 'Registry::HKEY_CURRENT_CONFIG'
-        }
+        ChildCache = @{}
+        MaxChildResults = 300
     }
 }
 
@@ -104,7 +99,7 @@ function Get-RegJumpCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -132,14 +127,78 @@ function Get-RegJumpRootSuggestions {
     param([string]$CurrentValue)
 
     $cleanCurrent = Remove-RegJumpOuterQuotes -Value $CurrentValue
-    $preferLongNames = $cleanCurrent.StartsWith('HKEY_', [System.StringComparison]::OrdinalIgnoreCase)
     foreach ($root in $script:RegJumpCompletionCatalog.RootKeys) {
-        $displayRoot = if ($preferLongNames) { $script:RegJumpCompletionCatalog.RootLongNames[$root] } else { $root }
+        # regjump accepts both the abbreviated (HKLM) and standard (HKEY_LOCAL_MACHINE)
+        # root form, so offer whichever one the typed text is a prefix of.
+        $longName = $script:RegJumpCompletionCatalog.RootLongNames[$root]
+        $displayRoot = if ($root.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $root
+        } elseif ($longName.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $longName
+        } else {
+            continue
+        }
+
         $candidate = $displayRoot + '\'
-        if ($candidate.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase) -or $displayRoot.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-RegJumpCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Registry path to open in Regedit: ' + $displayRoot)
+        New-RegJumpCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ProviderContainer' -ToolTip ('Registry path to open in Regedit: ' + $displayRoot)
+    }
+}
+
+function Get-RegJumpChildName {
+    param(
+        [string]$CanonicalRoot,
+        [string]$SubKeyPath
+    )
+
+    $cacheKey = $CanonicalRoot + '\' + $SubKeyPath
+    if ($script:RegJumpCompletionCatalog.ChildCache.ContainsKey($cacheKey)) {
+        return @($script:RegJumpCompletionCatalog.ChildCache[$cacheKey])
+    }
+
+    # RegistryKey.GetSubKeyNames lists the names held by the parent without opening
+    # each child, so it is ~40x faster than the Registry provider on HKCR, never
+    # shows the provider's merged-view duplicates, and still lists keys the session
+    # cannot open (SECURITY, BCD00000000).
+    $baseKey = switch ($CanonicalRoot) {
+        'HKLM' { [Microsoft.Win32.Registry]::LocalMachine }
+        'HKCU' { [Microsoft.Win32.Registry]::CurrentUser }
+        'HKCR' { [Microsoft.Win32.Registry]::ClassesRoot }
+        'HKU' { [Microsoft.Win32.Registry]::Users }
+        'HKCC' { [Microsoft.Win32.Registry]::CurrentConfig }
+        default { $null }
+    }
+
+    $names = @()
+    $subKey = $null
+    $errorCountBefore = $Error.Count
+    try {
+        if ($null -ne $baseKey) {
+            if ([string]::IsNullOrEmpty($SubKeyPath)) {
+                $names = @($baseKey.GetSubKeyNames())
+            } else {
+                $subKey = $baseKey.OpenSubKey($SubKeyPath, $false)
+                if ($null -ne $subKey) {
+                    $names = @($subKey.GetSubKeyNames())
+                }
+            }
+        }
+    } catch {
+        Write-Debug ('regjump completer: cannot enumerate ' + $cacheKey + ': ' + $_.Exception.Message)
+        $names = @()
+    } finally {
+        if ($null -ne $subKey) {
+            $subKey.Dispose()
+        }
+
+        # An unreadable key is an expected outcome while completing, not a fault to
+        # leave behind in $Error.
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
         }
     }
+
+    $script:RegJumpCompletionCatalog.ChildCache[$cacheKey] = $names
+    @($names)
 }
 
 function Get-RegJumpRegistryPathCompletions {
@@ -171,41 +230,49 @@ function Get-RegJumpRegistryPathCompletions {
 
     $remainder = if ($segments.Count -gt 1) { $segments[1] } else { '' }
     if ([string]::IsNullOrWhiteSpace($remainder)) {
-        $providerPath = $script:RegJumpCompletionCatalog.RootProviderPaths[$canonicalRoot]
         $prefixPath = ''
         $leaf = ''
     } elseif ($remainder.EndsWith('\')) {
-        $providerPath = $script:RegJumpCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $remainder.TrimEnd('\')
         $prefixPath = $remainder.TrimEnd('\')
         $leaf = ''
     } else {
         $lastSeparator = $remainder.LastIndexOf('\')
         if ($lastSeparator -lt 0) {
-            $providerPath = $script:RegJumpCompletionCatalog.RootProviderPaths[$canonicalRoot]
             $prefixPath = ''
             $leaf = $remainder
         } else {
             $prefixPath = $remainder.Substring(0, $lastSeparator)
             $leaf = $remainder.Substring($lastSeparator + 1)
-            $providerPath = $script:RegJumpCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $prefixPath
         }
     }
 
-    $children = @(Get-ChildItem -LiteralPath $providerPath -ErrorAction SilentlyContinue)
-    foreach ($child in ($children | Sort-Object -Property PSChildName)) {
-        $childName = [string]$child.PSChildName
-        if (-not $childName.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
+    # Filter on the typed leaf before sorting, and cap the emitted count so a hive
+    # the size of HKCR cannot stall the completion thread.
+    $matchedNames = @(
+        Get-RegJumpChildName -CanonicalRoot $canonicalRoot -SubKeyPath $prefixPath |
+            Where-Object { $_.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object |
+            Select-Object -First $script:RegJumpCompletionCatalog.MaxChildResults
+    )
 
+    foreach ($childName in $matchedNames) {
         $candidate = if ([string]::IsNullOrWhiteSpace($prefixPath)) {
             $displayRoot + '\' + $childName + '\'
         } else {
             $displayRoot + '\' + $prefixPath + '\' + $childName + '\'
         }
 
-        $quoted = ConvertTo-RegJumpQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        New-RegJumpCompletionResult -CompletionText $quoted -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Registry path to open in Regedit: ' + $candidate.TrimEnd('\'))
+        # Keys are emitted as ProviderContainer so the accepted text keeps inviting
+        # the next level: an unquoted key already ends in '\', and for a quoted key
+        # PSReadLine inserts the separator before the closing quote and parks the
+        # cursor there, exactly as it does for a quoted directory.
+        $completionText = if ($alwaysQuote -or $candidate -match '\s') {
+            ConvertTo-RegJumpQuotedValue -Value $candidate.TrimEnd('\') -AlwaysQuote $true
+        } else {
+            $candidate
+        }
+
+        New-RegJumpCompletionResult -CompletionText $completionText -ListItemText $candidate -ResultType 'ProviderContainer' -ToolTip ('Registry path to open in Regedit: ' + $candidate.TrimEnd('\'))
     }
 }
 
@@ -248,6 +315,11 @@ function Complete-RegJump {
         )
     }
 
+    if ($pathProvided) {
+        # Usage is 'regjump <<path>|-c>': once a path is present nothing else is valid.
+        return @()
+    }
+
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
         if ('-c'.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
             return @(
@@ -258,16 +330,12 @@ function Complete-RegJump {
         return @()
     }
 
-    if (-not $pathProvided) {
-        $results = @()
-        if ('-c'.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $results += New-RegJumpCompletionResult -CompletionText '-c' -ListItemText '-c' -ResultType 'ParameterName' -ToolTip 'Copy the path from the clipboard.'
-        }
-        $results += @(Get-RegJumpRegistryPathCompletions -CurrentValue $currentWord)
-        return @($results)
+    $results = @()
+    if ('-c'.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $results += New-RegJumpCompletionResult -CompletionText '-c' -ListItemText '-c' -ResultType 'ParameterName' -ToolTip 'Copy the path from the clipboard.'
     }
-
-    @()
+    $results += @(Get-RegJumpRegistryPathCompletions -CurrentValue $currentWord)
+    @($results)
 }
 
 Register-ArgumentCompleter -Native -CommandName 'regjump', 'regjump.exe' -ScriptBlock {
