@@ -12,7 +12,7 @@ function Get-UnameCompletionOptions {
     $fallbackOptions = @('-a', '--all', '-s', '--kernel-name', '-n', '--nodename', '-r', '--kernel-release', '-v', '--kernel-version', '-m', '--machine', '-p', '--processor', '-i', '--hardware-platform', '-o', '--operating-system', '--help', '--version')
     $commandCandidates = @('uname.exe', 'uname')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,34 +84,6 @@ function New-UnameCompletionResult {
     )
 }
 
-function Remove-UnameOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-UnameQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
-}
-
 function Get-UnameCurrentToken {
     param(
         [string]$Line,
@@ -137,54 +109,34 @@ function Get-UnameCurrentToken {
     $Fallback
 }
 
-function Get-UnamePathCompletions {
-    param([string]$InputPath)
+function Get-UnameShortFlagClusterCompletions {
+    param([string]$CurrentWord)
 
-    $cleanInput = Remove-UnameOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    # uname parses with getopt_long, so '-sn' is '-s -n'; extend a cluster of known short flags
+    # with each flag not yet in it.
+    if ($CurrentWord -notmatch '^-[A-Za-z]{2,}$') {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
-
-    foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
-        }
-
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
-        }
-
-        $quotedPath = ConvertTo-UnameQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        if ($item.PSIsContainer) {
-            New-UnameCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
-        } else {
-            New-UnameCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderItem' -ToolTip $item.FullName
+    $shortFlags = @(Get-UnameCompletionOptions | Where-Object { $_ -cmatch '^-[A-Za-z]$' })
+    $usedLetters = @($CurrentWord.Substring(1).ToCharArray() | ForEach-Object { [string]$_ })
+    foreach ($letter in $usedLetters) {
+        if (('-' + $letter) -cnotin $shortFlags) {
+            return @()
         }
     }
+
+    @(
+        foreach ($flag in $shortFlags) {
+            $letter = $flag.Substring(1)
+            if ($letter -cin $usedLetters) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $letter
+            New-UnameCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $flag, (Get-UnameOptionDescription -Option $flag))
+        }
+    )
 }
 
 function Get-UnameOptionDescription {
@@ -211,21 +163,24 @@ function Complete-Uname {
         Get-UnameCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
-    }
-
-    if ($currentWord.StartsWith('-')) {
-        return @(
+    # uname takes no operands ('Usage: uname [OPTION]...'), so the empty slot offers the option
+    # catalog and a typed non-option word gets nothing from this completer.
+    if ([string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-')) {
+        $optionMatches = @(
             foreach ($option in Get-UnameCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-UnameCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-UnameOptionDescription -Option $option)
                 }
             }
         )
+        if ($optionMatches.Count -gt 0) {
+            return $optionMatches
+        }
+
+        return Get-UnameShortFlagClusterCompletions -CurrentWord $currentWord
     }
 
-    Get-UnamePathCompletions -InputPath $currentWord
+    @()
 }
 
 Register-ArgumentCompleter -Native -CommandName 'uname', 'uname.exe' -ScriptBlock {
