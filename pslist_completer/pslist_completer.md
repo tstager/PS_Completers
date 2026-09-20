@@ -143,9 +143,11 @@ If the user has already started typing a remote target value, the completer echo
 
 ### `-e` exact-match behavior
 
-`-e` is only suggested when the positional target is recognized as a non-numeric process name.
+`-e` exact-matches a process name, so it is offered before the operand (`pslist -e notepad`) and after a name operand alike.
 
 If the positional target is numeric, `-e` is suppressed because it is not meaningful for a PID target.
+
+Switch entries offered in the operand and value slots are filtered on the typed word, so `pslist pw` lists only matching process names and `pslist 1` only matching PIDs. `-accepteula` is offered even though `pslist /?` does not document it; every Sysinternals tool accepts it.
 
 ## Dependencies or external command expectations
 

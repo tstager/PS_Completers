@@ -7,7 +7,7 @@ Set-StrictMode -Version 2.0
 if (-not (Get-Variable -Name PslistCompletionCatalog -Scope Script -ErrorAction Ignore)) {
     $script:PslistCompletionCatalog = @{
         Initialized             = $false
-        SwitchOrder             = @('-d', '-m', '-x', '-t', '-s', '-r', '-nobanner', '-u', '-p', '-e', '-?', '/?')
+        SwitchOrder             = @('-d', '-m', '-x', '-t', '-s', '-r', '-nobanner', '-accepteula', '-u', '-p', '-e', '-?', '/?')
         SwitchInfo              = @{}
         PositionalInfo          = @{}
         SampleSecondsHints      = @('1', '2', '5', '10')
@@ -46,6 +46,7 @@ function Get-PslistStaticSwitchCatalog {
         '-s'        = 'Run in task-manager mode, optionally specifying sample seconds.'
         '-r'        = 'Task-manager mode refresh rate in seconds (default is 1).'
         '-nobanner' = 'Do not display the startup banner and copyright message.'
+        '-accepteula' = 'Accept the Sysinternals license agreement silently (undocumented in pslist /?, accepted by every Sysinternals tool).'
         '-u'        = 'Optional user name for remote login.'
         '-p'        = 'Optional password for remote login. Prompts if omitted when needed.'
         '-e'        = 'Exact-match the process name. Valid only with a process name target.'
@@ -495,7 +496,9 @@ function Get-PslistSwitchCompletions {
                 }
             }
             '-e' {
-                if ($State.ProcessTargetKind -ne 'Name') {
+                # -e exact-matches a process NAME; it is valid before the operand
+                # ('pslist -e notepad') and only meaningless once a PID is given.
+                if ($State.ProcessTargetKind -eq 'Pid') {
                     $includeSwitch = $false
                 }
             }
@@ -552,32 +555,21 @@ function Complete-Pslist {
 
     Initialize-PslistCompletionCatalog
 
-    [object[]]$allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    [object[]]$tokens = if ($allTokens.Count -gt 1) {
-        @($allTokens | Select-Object -Skip 1)
-    } else {
-        @()
-    }
-
+    # Tokens are split at the cursor rather than at the end of the line, so a
+    # cursor inside an earlier token completes that token and ignores the rest.
     $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
+    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
-    } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
-        $wordToComplete
+        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-    [object[]]$tokensBeforeCurrent = if ($hasTrailingSpace) {
-        @($tokens)
-    } elseif ($tokens.Count -gt 0) {
-        @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        @()
-    }
+    [object[]]$tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     $state = Get-PslistCommandState -TokensBeforeCurrent $tokensBeforeCurrent
     if ($state.HasHelp) {
@@ -628,7 +620,7 @@ function Complete-Pslist {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($completion in @(Get-PslistSwitchCompletions -CurrentWord '' -State $state)) {
+    foreach ($completion in @(Get-PslistSwitchCompletions -CurrentWord $currentWord -State $state)) {
         $results.Add($completion)
     }
 
