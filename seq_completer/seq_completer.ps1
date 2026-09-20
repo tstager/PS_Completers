@@ -85,32 +85,21 @@ function New-SeqCompletionResult {
     )
 }
 
-function Remove-SeqOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-SeqQuotedValue {
+function Get-SeqLineTokens {
     param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Line,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
+    # Tokens are taken from the raw command text rather than CommandElements because the
+    # PowerShell parser swallows a bare ',' ('seq -s ,') and drops it from the AST.
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return @()
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
+    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
+    $prefix = $Line.Substring(0, $safeCursor)
+    @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
 }
 
 function Get-SeqCurrentToken {
@@ -125,12 +114,11 @@ function Get-SeqCurrentToken {
     }
 
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
+    if ($Line.Substring(0, $safeCursor) -match '\s$') {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @(Get-SeqLineTokens -Line $Line -CursorPosition $CursorPosition)
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -138,59 +126,63 @@ function Get-SeqCurrentToken {
     $Fallback
 }
 
-function Get-SeqPathCompletions {
-    param([string]$InputPath)
+function Get-SeqValueOptionList {
+    @('-s', '--separator', '-t', '--terminator', '-f', '--format')
+}
 
-    $cleanInput = Remove-SeqOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+function Get-SeqOperandCount {
+    param([string[]]$TokensBeforeCurrent)
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
+    # Operands are the numbers (including negative ones such as '-5') that are neither options
+    # nor the separate-form value of -s/-t/-f.
+    $count = 0
+    $skipNext = $false
+    foreach ($token in @($TokensBeforeCurrent)) {
+        if ($skipNext) {
+            $skipNext = $false
+            continue
         }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        if ($token -ceq '--') {
+            continue
+        }
+
+        if ($token -match '^-[A-Za-z]|^--') {
+            if ($token -cin (Get-SeqValueOptionList)) {
+                $skipNext = $true
+            }
+
+            continue
+        }
+
+        $count++
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        return @()
+    $count
+}
+
+function Complete-SeqOperand {
+    param([int]$OperandCount)
+
+    # 'seq [OPTION]... LAST | FIRST LAST | FIRST INCREMENT LAST': the operands are floating-point
+    # numbers, so the empty slot is described by placeholders rather than filesystem paths.
+    switch ($OperandCount) {
+        0 { $slots = @(@{ Text = '<LAST>'; Tip = 'Count from 1 to LAST.' }, @{ Text = '<FIRST>'; Tip = 'First number, followed by LAST (or INCREMENT LAST).' }) }
+        1 { $slots = @(@{ Text = '<LAST>'; Tip = 'Last number of the sequence.' }, @{ Text = '<INCREMENT>'; Tip = 'Step between numbers, followed by LAST.' }) }
+        2 { $slots = @(@{ Text = '<LAST>'; Tip = 'Last number of the sequence.' }) }
+        default { return @() }
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
-
-    foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+    @(
+        foreach ($slot in $slots) {
+            New-SeqCompletionResult -CompletionText $slot.Text -ListItemText $slot.Text -ResultType 'ParameterValue' -ToolTip $slot.Tip
         }
-
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
-        }
-
-        $quotedPath = ConvertTo-SeqQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        if ($item.PSIsContainer) {
-            New-SeqCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
-        } else {
-            New-SeqCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderItem' -ToolTip $item.FullName
-        }
-    }
+    )
 }
 
 function Get-SeqOptionValueCompletions {
     param(
-        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string[]]$TokensBeforeCurrent,
         [string]$CurrentWord
     )
 
@@ -201,65 +193,62 @@ function Get-SeqOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
-    } elseif (-not $CurrentWord.StartsWith('-')) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-        if ([string]::IsNullOrEmpty($CurrentWord)) {
-            if ($elements.Count -gt 1) {
-                $option = $elements[-1]
-            }
-        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
-            $option = $elements[-2]
+    } elseif (-not ($CurrentWord -match '^-[A-Za-z]|^--') -and $null -ne $TokensBeforeCurrent -and $TokensBeforeCurrent.Count -gt 0) {
+        $option = $TokensBeforeCurrent[-1]
+    }
+
+    if ([string]::IsNullOrEmpty($option) -or $option -cnotin (Get-SeqValueOptionList)) {
+        return @()
+    }
+
+    # A quoted or half-quoted value ('";"', "' ") is matched on its bare text and re-quoted the
+    # same way; entries that need PowerShell escapes carry their own quoted spelling.
+    $quote = ''
+    if ($prefix.Length -gt 0 -and ($prefix[0] -eq '"' -or $prefix[0] -eq "'")) {
+        $quote = [string]$prefix[0]
+        $prefix = $prefix.Substring(1)
+        if ($prefix.EndsWith($quote)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
         }
     }
 
-    if ([string]::IsNullOrEmpty($option)) {
-        return @()
-    }
-
-    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $table['-f'] = @(
-        @{ Text = '%g'; Tip = 'General floating-point format.' }
-        @{ Text = '%f'; Tip = 'Fixed-point format.' }
-        @{ Text = '%e'; Tip = 'Scientific format.' }
-        @{ Text = '%.2f'; Tip = 'Two decimal places.' }
-        @{ Text = '%05g'; Tip = 'Zero-padded to width 5.' }
-    )
-    $table['--format'] = @(
-        @{ Text = '%g'; Tip = 'General floating-point format.' }
-        @{ Text = '%f'; Tip = 'Fixed-point format.' }
-        @{ Text = '%e'; Tip = 'Scientific format.' }
-        @{ Text = '%.2f'; Tip = 'Two decimal places.' }
-        @{ Text = '%05g'; Tip = 'Zero-padded to width 5.' }
-    )
-    $table['-s'] = @(
+    $separators = @(
         @{ Text = ','; Tip = 'Comma separator.' }
         @{ Text = ';'; Tip = 'Semicolon separator.' }
-        @{ Text = '<string>'; Tip = 'Custom separator.' }
+        @{ Text = ':'; Tip = 'Colon separator.' }
+        @{ Text = ' '; Display = '<space>'; Quoted = "' '"; Tip = 'Single space separator.' }
+        @{ Text = "`t"; Display = '<tab>'; Quoted = '"`t"'; Tip = 'Tab separator (PowerShell "`t" escape).' }
+        @{ Text = "`n"; Display = '<newline>'; Quoted = '"`n"'; Tip = 'Newline separator, the default.' }
+        @{ Text = '<string>'; Tip = 'Custom separator string.' }
     )
-    $table['--separator'] = @(
-        @{ Text = ','; Tip = 'Comma separator.' }
-        @{ Text = ';'; Tip = 'Semicolon separator.' }
-        @{ Text = '<string>'; Tip = 'Custom separator.' }
+    $formats = @(
+        @{ Text = '%g'; Tip = 'General floating-point format, the default for non-fixed-point input.' }
+        @{ Text = '%f'; Tip = 'Fixed-point format.' }
+        @{ Text = '%e'; Tip = 'Scientific format.' }
+        @{ Text = '%.1f'; Tip = 'One decimal place.' }
+        @{ Text = '%.2f'; Tip = 'Two decimal places.' }
+        @{ Text = '%03g'; Tip = 'Zero-padded to width 3.' }
+        @{ Text = '%05g'; Tip = 'Zero-padded to width 5.' }
+        @{ Text = '%05.2f'; Tip = 'Zero-padded to width 5 with two decimal places.' }
     )
-    if (-not $table.ContainsKey($option)) {
-        return @()
-    }
+    $values = if ($option -cin @('-f', '--format')) { $formats } else { $separators }
 
-    $spec = $table[$option]
-    if ($spec -is [string] -and $spec -eq 'path') {
-        return @(
-            foreach ($result in Get-SeqPathCompletions -InputPath $prefix) {
-                New-SeqCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
-            }
-        )
-    }
-
-    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
     @(
         foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-SeqCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            if (-not $entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                continue
             }
+
+            $display = if ($entry.ContainsKey('Display')) { $entry.Display } else { $entry.Text }
+            $completion = if ($entry.ContainsKey('Quoted')) {
+                $entry.Quoted
+            } elseif ($quote) {
+                $quote + $entry.Text + $quote
+            } else {
+                $entry.Text
+            }
+
+            New-SeqCompletionResult -CompletionText ($attached + $completion) -ListItemText $display -ResultType 'ParameterValue' -ToolTip $entry.Tip
         }
     )
 }
@@ -282,22 +271,31 @@ function Complete-Seq {
         [int]$cursorPosition
     )
 
+    $commandText = $commandAst.ToString()
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-SeqCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-SeqCurrentToken -Line $commandText -CursorPosition $relativeCursor -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-SeqOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $lineTokens = @(Get-SeqLineTokens -Line $commandText -CursorPosition $relativeCursor | Select-Object -Skip 1)
+    $tokensBeforeCurrent = @(if ([string]::IsNullOrEmpty($currentWord)) {
+        $lineTokens
+    } else {
+        $lineTokens | Select-Object -First ([Math]::Max(0, $lineTokens.Count - 1))
+    })
+
+    $optionValues = @(Get-SeqOptionValueCompletions -TokensBeforeCurrent $tokensBeforeCurrent -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
+        return Complete-SeqOperand -OperandCount (Get-SeqOperandCount -TokensBeforeCurrent $tokensBeforeCurrent)
     }
 
-    if ($currentWord.StartsWith('-')) {
+    if ($currentWord -match '^-[A-Za-z]|^--|^-$') {
         return @(
             foreach ($option in Get-SeqCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -307,7 +305,8 @@ function Complete-Seq {
         )
     }
 
-    Get-SeqPathCompletions -InputPath $currentWord
+    # A partially typed operand is a number; there is nothing to complete and no path slot.
+    @()
 }
 
 Register-ArgumentCompleter -Native -CommandName 'seq', 'seq.exe' -ScriptBlock {
