@@ -189,9 +189,33 @@ function Get-TruncatePathCompletions {
 
 function Get-TruncateOptionValueCompletions {
     param(
-        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string[]]$TokensBeforeCurrent,
         [string]$CurrentWord
     )
+
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-r'] = 'path'
+    $table['--reference'] = 'path'
+    # SIZE grammar from the help: optional modifier prefix, integer, optional unit (K/M/G/T/P/E/Z/Y
+    # are powers of 1024, KB/MB/GB/... powers of 1000). '<' and '>' are PowerShell operators, so
+    # those two forms are emitted quoted.
+    $sizes = @(
+        @{ Text = '<size>'; Tip = 'Set the size to SIZE bytes (or I/O blocks with --io-blocks).' }
+        @{ Text = '+1M'; Tip = "'+' extend by SIZE." }
+        @{ Text = '-1M'; Tip = "'-' reduce by SIZE." }
+        @{ Text = '<1M'; Quoted = "'<1M'"; Tip = "'<' at most SIZE." }
+        @{ Text = '>1M'; Quoted = "'>1M'"; Tip = "'>' at least SIZE." }
+        @{ Text = '/1M'; Tip = "'/' round down to a multiple of SIZE." }
+        @{ Text = '%1M'; Tip = "'%' round up to a multiple of SIZE." }
+        @{ Text = '1K'; Tip = 'K = 1024 bytes (kibibytes).' }
+        @{ Text = '1M'; Tip = 'M = 1024*1024 bytes (mebibytes).' }
+        @{ Text = '1G'; Tip = 'G = 1024*1024*1024 bytes (gibibytes).' }
+        @{ Text = '1KB'; Tip = 'KB = 1000 bytes (kilobytes).' }
+        @{ Text = '1MB'; Tip = 'MB = 1000*1000 bytes (megabytes).' }
+        @{ Text = '1GB'; Tip = 'GB = 1000*1000*1000 bytes (gigabytes).' }
+    )
+    $table['-s'] = $sizes
+    $table['--size'] = $sizes
 
     $option = $null
     $prefix = $CurrentWord
@@ -200,32 +224,12 @@ function Get-TruncateOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
-    } elseif (-not $CurrentWord.StartsWith('-')) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-        if ([string]::IsNullOrEmpty($CurrentWord)) {
-            if ($elements.Count -gt 1) {
-                $option = $elements[-1]
-            }
-        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
-            $option = $elements[-2]
-        }
+    } elseif ($null -ne $TokensBeforeCurrent -and $TokensBeforeCurrent.Count -gt 0 -and $table.ContainsKey($TokensBeforeCurrent[-1])) {
+        # The option is the token before the cursor, so mid-line editing keeps the value slot and
+        # a leading '-' (the reduce-by form) stays in the SIZE slot instead of the option catalog.
+        $option = $TokensBeforeCurrent[-1]
     }
 
-    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $table['-r'] = 'path'
-    $table['--reference'] = 'path'
-    $table['-s'] = @(
-        @{ Text = '<size>'; Tip = 'Absolute size.' }
-        @{ Text = '+<size>'; Tip = 'Extend by SIZE.' }
-        @{ Text = '-<size>'; Tip = 'Reduce by SIZE.' }
-        @{ Text = '1M'; Tip = '1 MiB.' }
-    )
-    $table['--size'] = @(
-        @{ Text = '<size>'; Tip = 'Absolute size.' }
-        @{ Text = '+<size>'; Tip = 'Extend by SIZE.' }
-        @{ Text = '-<size>'; Tip = 'Reduce by SIZE.' }
-        @{ Text = '1M'; Tip = '1 MiB.' }
-    )
     if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
         return @()
     }
@@ -239,12 +243,31 @@ function Get-TruncateOptionValueCompletions {
         )
     }
 
-    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    # A quoted or half-quoted value is matched on its bare text and re-quoted the same way.
+    $quote = ''
+    if ($prefix.Length -gt 0 -and ($prefix[0] -eq '"' -or $prefix[0] -eq "'")) {
+        $quote = [string]$prefix[0]
+        $prefix = $prefix.Substring(1)
+        if ($prefix.EndsWith($quote)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
+        }
+    }
+
     @(
-        foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-TruncateCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+        foreach ($entry in $spec) {
+            if (-not $entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                continue
             }
+
+            $completion = if ($entry.ContainsKey('Quoted')) {
+                $entry.Quoted
+            } elseif ($quote) {
+                $quote + $entry.Text + $quote
+            } else {
+                $entry.Text
+            }
+
+            New-TruncateCompletionResult -CompletionText ($attached + $completion) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
         }
     )
 }
@@ -273,7 +296,15 @@ function Complete-Truncate {
         Get-TruncateCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-TruncateOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $tokensBeforeCurrent = @(
+        foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+            if ($element.Extent.EndOffset -lt $cursorPosition) {
+                $element.Extent.Text
+            }
+        }
+    )
+
+    $optionValues = @(Get-TruncateOptionValueCompletions -TokensBeforeCurrent $tokensBeforeCurrent -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }

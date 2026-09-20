@@ -65,7 +65,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ## Option values
 
 - `-r`, `--reference`: filesystem paths
-- `-s`, `--size`: `<size>`, `+<size>`, `-<size>`, `1M`
+- `-s`, `--size`: `<size>`, the six modifier forms `+1M`, `-1M`, `'<1M'`, `'>1M'`, `/1M`, `%1M` (`<` and `>` are PowerShell operators, so those two are emitted quoted) and the unit ladder `1K`, `1M`, `1G` (powers of 1024) and `1KB`, `1MB`, `1GB` (powers of 1000)
+- the option that owns a value slot is the command element before the cursor, so `truncate -s 1M file.txt` with the cursor inside `1M` still completes sizes, and a leading `-` in the slot (`truncate -s -`) stays in the SIZE slot instead of switching to the option catalog
 
 ## Representative validation scenarios
 
