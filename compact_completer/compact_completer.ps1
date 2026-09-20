@@ -199,22 +199,22 @@ function Get-CompactAttachedTokenInfo {
         return $null
     }
 
-    $match = [regex]::Match($Token, '^(?<root>/(?:S|EXE|CompactOs|WinDir)):(?<value>.*)$')
+    $match = [regex]::Match($Token, '^(?i)(?<root>/(?:S|EXE|CompactOs|WinDir)):(?<value>.*)$')
     if (-not $match.Success) {
         return $null
     }
 
     $catalog = Get-CompactCatalog
-    $switchToken = $match.Groups['root'].Value + ':'
-    $switchKey = $switchToken.ToLowerInvariant()
+    $switchKey = ($match.Groups['root'].Value + ':').ToLowerInvariant()
     if (-not $catalog.SwitchLookup.ContainsKey($switchKey)) {
         return $null
     }
 
+    $switch = $catalog.SwitchLookup[$switchKey]
     [pscustomobject]@{
-        Prefix = $switchToken
+        Prefix = $switch.Token
         Value  = $match.Groups['value'].Value
-        Switch = $catalog.SwitchLookup[$switchKey]
+        Switch = $switch
     }
 }
 
@@ -267,7 +267,8 @@ function Get-CompactPathCompletions {
         [ValidateSet('File','Directory','Any')]
         [string]$Kind,
         [string]$ToolTip,
-        [string]$Placeholder
+        [string]$Placeholder,
+        [switch]$NoPlaceholder
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
@@ -301,7 +302,7 @@ function Get-CompactPathCompletions {
     }
 
     try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
+        $items = @(Get-ChildItem -LiteralPath $parentPath -Force -ErrorAction Stop)
     } catch {
         $items = @()
     }
@@ -325,7 +326,7 @@ function Get-CompactPathCompletions {
         [void]$results.Add((New-CompactCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $completionText)))
     }
 
-    if ($results.Count -eq 0) {
+    if ($results.Count -eq 0 -and -not $NoPlaceholder) {
         $fallback = if ([string]::IsNullOrWhiteSpace($typedValue)) { $Prefix + $Placeholder } else { $Prefix + $typedValue }
         [void]$results.Add((New-CompactCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $fallback))
     }
@@ -349,7 +350,7 @@ function Complete-Compact {
         [int]$cursorPosition
     )
 
-    $tokenState = Get-CompactTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    $tokenState = Get-CompactTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-CompactArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
@@ -388,7 +389,10 @@ function Complete-Compact {
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {
-        return @(Get-CompactSwitchCompletions -CurrentWord $currentWord)
+        return @(
+            Get-CompactSwitchCompletions -CurrentWord $currentWord
+            Get-CompactPathCompletions -CurrentValue '' -Prefix '' -Kind 'Any' -ToolTip 'File or directory pattern.' -Placeholder '<path>' -NoPlaceholder
+        )
     }
 
     @(Get-CompactPathCompletions -CurrentValue $currentWord -Prefix '' -Kind 'Any' -ToolTip 'File or directory pattern.' -Placeholder '<path>')
