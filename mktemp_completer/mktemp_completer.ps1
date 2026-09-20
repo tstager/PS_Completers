@@ -338,6 +338,19 @@ function Complete-Mktemp {
         return $optionValues
     }
 
+    # A value slot with no match ('mktemp -p sub' with no such directory) stays a value slot;
+    # it must not fall through to the TEMPLATE shapes.
+    $previousToken = $null
+    foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.EndOffset -lt $cursorPosition) {
+            $previousToken = $element.Extent.Text
+        }
+    }
+
+    if ($currentWord -match '^(?:--?[A-Za-z0-9][A-Za-z0-9-]*=|-p.)' -or ((-not $currentWord.StartsWith('-')) -and $previousToken -cin @('-p', '--tmpdir', '--suffix'))) {
+        return @()
+    }
+
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-MktempCompletionOptions) {
