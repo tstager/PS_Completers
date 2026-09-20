@@ -56,7 +56,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
-- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped. The documented `-` (read standard input) leads the empty operand slot and is offered for a bare `-` word ahead of the options.
+- The parsed option set is seeded with the static list, so a lossy help parse can add spellings but never lose them, and the harvest lookahead accepts `]`/`)` so uutils' `decode data [alias: -D]` contributes `-D`.
+- A single-dash word made only of known short flags (`-di`) is treated as a cluster and completed by appending each remaining flag; a cluster that already holds the value-taking `-w` is complete.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 

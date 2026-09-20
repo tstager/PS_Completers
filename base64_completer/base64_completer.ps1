@@ -27,10 +27,12 @@ function Get-Base64CompletionOptions {
             continue
         }
 
-        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        # Seeded with the static list so a lossy parse can only add spellings, never lose them.
+        $options = [System.Collections.Generic.HashSet[string]]::new([string[]]$fallbackOptions, [System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
-            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
+            # ']' and ')' close the lookahead so uutils' 'decode data [alias: -D]' contributes -D.
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|\]|\)|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
                 if ($normalized.StartsWith('--')) {
@@ -245,6 +247,40 @@ function Get-Base64OptionValueCompletions {
     )
 }
 
+function Complete-Base64ShortFlagCluster {
+    param([string]$CurrentWord)
+
+    # Both installed builds merge short flags ('-di'); extend a cluster of known short flags with
+    # each remaining one. A cluster already holding the value-taking -w is complete.
+    if ($CurrentWord -notmatch '^-[A-Za-z]{2,}$') {
+        return @()
+    }
+
+    $shortFlags = @(Get-Base64CompletionOptions | Where-Object { $_ -cmatch '^-[A-Za-z]$' })
+    $usedLetters = @($CurrentWord.Substring(1).ToCharArray() | ForEach-Object { [string]$_ })
+    foreach ($letter in $usedLetters) {
+        if (('-' + $letter) -cnotin $shortFlags) {
+            return @()
+        }
+    }
+
+    if ('w' -cin $usedLetters) {
+        return @()
+    }
+
+    @(
+        foreach ($flag in $shortFlags) {
+            $letter = $flag.Substring(1)
+            if ($letter -cin $usedLetters) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $letter
+            New-Base64CompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $flag, (Get-Base64OptionDescription -Option $flag))
+        }
+    )
+}
+
 function Get-Base64OptionDescription {
     param([string]$Option)
 
@@ -274,18 +310,33 @@ function Complete-Base64 {
         return $optionValues
     }
 
+    # 'With no FILE, or when FILE is -, read standard input': the documented '-' operand leads
+    # the empty slot and the bare '-' word, ahead of the paths and options.
+    $stdinResult = New-Base64CompletionResult -CompletionText '-' -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'Read standard input instead of a FILE.'
+
     if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
+        return @(
+            $stdinResult
+            Get-Base64PathCompletions -InputPath ''
+        )
     }
 
     if ($currentWord.StartsWith('-')) {
-        return @(
+        $optionMatches = @(
+            if ($currentWord -ceq '-') {
+                $stdinResult
+            }
             foreach ($option in Get-Base64CompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-Base64CompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-Base64OptionDescription -Option $option)
                 }
             }
         )
+        if ($optionMatches.Count -gt 0) {
+            return $optionMatches
+        }
+
+        return Complete-Base64ShortFlagCluster -CurrentWord $currentWord
     }
 
     Get-Base64PathCompletions -InputPath $currentWord
