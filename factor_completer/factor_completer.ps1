@@ -110,8 +110,16 @@ function Get-FactorCurrentToken {
 }
 
 function Get-FactorValueCompletions {
+    param([string]$WordToComplete)
+
+    # The placeholder is only safe in an empty slot; returned against a typed prefix it would
+    # replace the user's digits with the literal '<number>'.
+    if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+        return @()
+    }
+
     @(
-        New-FactorCompletionResult -CompletionText '<number>' -ListItemText '<number>' -ResultType 'ParameterValue' -ToolTip 'Integer or file operand for factor.'
+        New-FactorCompletionResult -CompletionText '<number>' -ListItemText '<number>' -ResultType 'ParameterValue' -ToolTip 'Integer operand for factor.'
     )
 }
 
@@ -133,14 +141,22 @@ function Complete-Factor {
         [int]$cursorPosition
     )
 
+    $commandText = $commandAst.ToString()
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-FactorCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-FactorCurrentToken -Line $commandText -CursorPosition $relativeCursor -Fallback $wordToComplete
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        return Get-FactorValueCompletions
+        # An empty word with a token starting right at the cursor ('factor --version |1') is not a
+        # free slot; inserting the placeholder there would corrupt that token.
+        if ($relativeCursor -lt $commandText.Length -and -not [char]::IsWhiteSpace($commandText[$relativeCursor])) {
+            return @()
+        }
+
+        return Get-FactorValueCompletions -WordToComplete ''
     }
 
     if ($currentWord.StartsWith('-')) {
@@ -153,7 +169,7 @@ function Complete-Factor {
         )
     }
 
-    Get-FactorValueCompletions
+    Get-FactorValueCompletions -WordToComplete $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'factor', 'factor.exe' -ScriptBlock {
