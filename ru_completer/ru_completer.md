@@ -94,7 +94,7 @@ ru -l <TAB>
 
 - Expects `ru.exe` or `ru` to be available if help text should be harvested
 - Falls back to the static catalog if help capture is unavailable
-- Registry completion depends on the local PowerShell registry provider
+- Registry completion enumerates subkeys through the native `Microsoft.Win32.Registry` API, cached per key for the session and capped at 300 results per slot; a key the session cannot read yields a single `<access denied>` placeholder that keeps the typed path and leaves nothing in `$Error`
 - Hive-file completion depends on local filesystem access
 
 ## Limitations / notes

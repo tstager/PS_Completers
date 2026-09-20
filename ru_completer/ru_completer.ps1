@@ -30,13 +30,8 @@ if (-not (Get-Variable -Name RuCompletionCatalog -Scope Script -ErrorAction Igno
             'HKEY_USERS'          = 'HKU'
             'HKEY_CURRENT_CONFIG' = 'HKCC'
         }
-        RootProviderPaths = @{
-            'HKLM' = 'Registry::HKEY_LOCAL_MACHINE'
-            'HKCU' = 'Registry::HKEY_CURRENT_USER'
-            'HKCR' = 'Registry::HKEY_CLASSES_ROOT'
-            'HKU'  = 'Registry::HKEY_USERS'
-            'HKCC' = 'Registry::HKEY_CURRENT_CONFIG'
-        }
+        ChildCache = @{}
+        MaxChildResults = 300
     }
 }
 
@@ -135,26 +130,42 @@ function Initialize-RuCompletionCatalog {
         '/?'        = [pscustomobject]@{ Token = '/?'; Description = 'Show ru help.'; TakesValue = $false }
     }
 
+    # ru /? wraps option bodies onto indented continuation lines (-c and -h), and
+    # -nobanner starts its body on the following line, so join every indented line
+    # that follows an option token onto that option's description.
+    $helpEntries = [ordered]@{}
+    $currentToken = $null
     foreach ($line in (Invoke-RuHelpText)) {
-        if ($line -match '^\s*(-c(?:\[t\])?|-h|-l|-n|-q|-v|-nobanner)\s{2,}(.*)$') {
-            $token = $matches[1]
-            $description = $matches[2].Trim()
-            switch ($token.ToLowerInvariant()) {
-                '-c[t]' {
-                    $catalog['-c'] = [pscustomobject]@{ Token = '-c'; Description = $description; TakesValue = $false }
-                    $catalog['-ct'] = [pscustomobject]@{ Token = '-ct'; Description = 'Print output as CSV with tab delimiters.'; TakesValue = $false }
-                }
-                default {
-                    if ($catalog.Contains($token.ToLowerInvariant())) {
-                        $entry = $catalog[$token.ToLowerInvariant()]
-                        $catalog[$token.ToLowerInvariant()] = [pscustomobject]@{
-                            Token       = $entry.Token
-                            Description = $description
-                            TakesValue  = $entry.TakesValue
-                            ValueKind   = if ($entry.PSObject.Properties.Name -contains 'ValueKind') { $entry.ValueKind } else { $null }
-                        }
-                    }
-                }
+        if ($line -match '^\s*(-c(?:\[t\])?|-h|-l|-n|-q|-v|-nobanner)(?:\s{2,}(.*))?$') {
+            $currentToken = $matches[1].ToLowerInvariant()
+            $helpEntries[$currentToken] = if ($matches.Count -gt 2) { $matches[2].Trim() } else { '' }
+            continue
+        }
+
+        if ($currentToken -and $line -match '^\s{6,}(\S.*)$') {
+            $helpEntries[$currentToken] = ($helpEntries[$currentToken] + ' ' + $matches[1].Trim()).Trim()
+            continue
+        }
+
+        $currentToken = $null
+    }
+
+    foreach ($token in $helpEntries.Keys) {
+        $description = $helpEntries[$token]
+        if ([string]::IsNullOrWhiteSpace($description)) {
+            continue
+        }
+
+        if ($token -eq '-c[t]') {
+            $catalog['-c'] = [pscustomobject]@{ Token = '-c'; Description = $description; TakesValue = $false }
+            $catalog['-ct'] = [pscustomobject]@{ Token = '-ct'; Description = 'Print output as CSV with tab delimiters.'; TakesValue = $false }
+        } elseif ($catalog.Contains($token)) {
+            $entry = $catalog[$token]
+            $catalog[$token] = [pscustomobject]@{
+                Token       = $entry.Token
+                Description = $description
+                TakesValue  = $entry.TakesValue
+                ValueKind   = if ($entry.PSObject.Properties.Name -contains 'ValueKind') { $entry.ValueKind } else { $null }
             }
         }
     }
@@ -374,6 +385,67 @@ function Get-RuRootSuggestions {
     }
 }
 
+function Get-RuChildKeyState {
+    param(
+        [string]$CanonicalRoot,
+        [string]$SubKeyPath
+    )
+
+    $cacheKey = $CanonicalRoot + '\' + $SubKeyPath
+    if ($script:RuCompletionCatalog.ChildCache.ContainsKey($cacheKey)) {
+        return $script:RuCompletionCatalog.ChildCache[$cacheKey]
+    }
+
+    # RegistryKey.GetSubKeyNames lists the names held by the parent without opening
+    # each child, so it is ~40x faster than the Registry provider on HKCR and still
+    # lists keys the session cannot open (SECURITY, BCD00000000). Opening a key the
+    # session may not read throws, and that is recorded as Denied so the slot can
+    # say so instead of looking empty.
+    $baseKey = switch ($CanonicalRoot) {
+        'HKLM' { [Microsoft.Win32.Registry]::LocalMachine }
+        'HKCU' { [Microsoft.Win32.Registry]::CurrentUser }
+        'HKCR' { [Microsoft.Win32.Registry]::ClassesRoot }
+        'HKU' { [Microsoft.Win32.Registry]::Users }
+        'HKCC' { [Microsoft.Win32.Registry]::CurrentConfig }
+        default { $null }
+    }
+
+    $names = @()
+    $denied = $false
+    $subKey = $null
+    $errorCountBefore = $Error.Count
+    try {
+        if ($null -ne $baseKey) {
+            if ([string]::IsNullOrEmpty($SubKeyPath)) {
+                $names = @($baseKey.GetSubKeyNames())
+            } else {
+                $subKey = $baseKey.OpenSubKey($SubKeyPath, $false)
+                if ($null -ne $subKey) {
+                    $names = @($subKey.GetSubKeyNames())
+                }
+            }
+        }
+    } catch {
+        Write-Debug ('ru completer: cannot enumerate ' + $cacheKey + ': ' + $_.Exception.Message)
+        $names = @()
+        $denied = $true
+    } finally {
+        if ($null -ne $subKey) {
+            $subKey.Dispose()
+        }
+
+        # An unreadable key is an expected outcome while completing, not a fault to
+        # leave behind in $Error.
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
+        }
+    }
+
+    $state = [pscustomobject]@{ Names = @($names); Denied = $denied }
+    $script:RuCompletionCatalog.ChildCache[$cacheKey] = $state
+    $state
+}
+
 function Get-RuRegistryPathCompletions {
     param([string]$CurrentValue)
 
@@ -403,33 +475,41 @@ function Get-RuRegistryPathCompletions {
 
     $remainder = if ($segments.Count -gt 1) { $segments[1] } else { '' }
     if ([string]::IsNullOrWhiteSpace($remainder)) {
-        $providerPath = $script:RuCompletionCatalog.RootProviderPaths[$canonicalRoot]
         $prefixPath = ''
         $leaf = ''
     } elseif ($remainder.EndsWith('\')) {
-        $providerPath = $script:RuCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $remainder.TrimEnd('\')
         $prefixPath = $remainder.TrimEnd('\')
         $leaf = ''
     } else {
         $lastSeparator = $remainder.LastIndexOf('\')
         if ($lastSeparator -lt 0) {
-            $providerPath = $script:RuCompletionCatalog.RootProviderPaths[$canonicalRoot]
             $prefixPath = ''
             $leaf = $remainder
         } else {
             $prefixPath = $remainder.Substring(0, $lastSeparator)
             $leaf = $remainder.Substring($lastSeparator + 1)
-            $providerPath = $script:RuCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $prefixPath
         }
     }
 
-    $children = @(Get-ChildItem -LiteralPath $providerPath -ErrorAction SilentlyContinue)
-    foreach ($child in ($children | Sort-Object -Property PSChildName)) {
-        $childName = [string]$child.PSChildName
-        if (-not $childName.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
+    $childState = Get-RuChildKeyState -CanonicalRoot $canonicalRoot -SubKeyPath $prefixPath
+    if ($childState.Denied) {
+        # Keep the typed path intact and say why nothing is listed, instead of
+        # letting the engine substitute filesystem entries for a registry slot.
+        return @(
+            New-RuCompletionResult -CompletionText $CurrentValue -ListItemText '<access denied>' -ResultType 'ParameterValue' -ToolTip ('This session cannot read ' + $displayRoot + '\' + $prefixPath + '; run ru elevated to size it.')
+        )
+    }
 
+    # Filter on the typed leaf before sorting, and cap the emitted count so a hive
+    # the size of HKCR cannot stall the completion thread.
+    $matchedNames = @(
+        $childState.Names |
+            Where-Object { $_.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object |
+            Select-Object -First $script:RuCompletionCatalog.MaxChildResults
+    )
+
+    foreach ($childName in $matchedNames) {
         $candidate = if ([string]::IsNullOrWhiteSpace($prefixPath)) {
             $displayRoot + '\' + $childName + '\'
         } else {
@@ -490,7 +570,7 @@ function Complete-Ru {
     $results = New-Object System.Collections.Generic.List[object]
     $canOfferRootSwitches = [string]::IsNullOrEmpty($currentWord) -or $state.Positionals.Count -gt 0
     if ($canOfferRootSwitches) {
-        foreach ($switchItem in @(Get-RuSwitchCompletions -CurrentWord '' -State $state)) {
+        foreach ($switchItem in @(Get-RuSwitchCompletions -CurrentWord $currentWord -State $state)) {
             $results.Add($switchItem)
         }
     }
@@ -500,27 +580,24 @@ function Complete-Ru {
             foreach ($item in @(Get-RuFileCompletions -InputPath $currentWord)) {
                 $results.Add($item)
             }
-            return @($results.ToArray())
-        }
-
-        if ($state.Positionals.Count -eq 0) {
+        } elseif ($state.Positionals.Count -eq 0) {
             foreach ($item in @(Get-RuHiveRelativePathCompletions -CurrentWord $currentWord)) {
                 $results.Add($item)
             }
-            return @($results.ToArray())
         }
 
-        return @()
+        return @($results.ToArray())
     }
 
     if ($state.Positionals.Count -eq 0) {
         foreach ($item in @(Get-RuRegistryPathCompletions -CurrentValue $currentWord)) {
             $results.Add($item)
         }
-        return @($results.ToArray())
     }
 
-    @()
+    # After the operand only the remaining switches are valid, so the switch list
+    # built above is the whole answer here.
+    @($results.ToArray())
 }
 
 Register-ArgumentCompleter -Native -CommandName 'ru', 'ru.exe' -ScriptBlock {
