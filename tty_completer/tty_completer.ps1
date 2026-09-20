@@ -12,7 +12,7 @@ function Get-TtyCompletionOptions {
     $fallbackOptions = @('-s', '--silent', '--help', '--version')
     $commandCandidates = @('tty.exe', 'tty')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,34 +84,6 @@ function New-TtyCompletionResult {
     )
 }
 
-function Remove-TtyOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-TtyQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
-}
-
 function Get-TtyCurrentToken {
     param(
         [string]$Line,
@@ -135,56 +107,6 @@ function Get-TtyCurrentToken {
     }
 
     $Fallback
-}
-
-function Get-TtyPathCompletions {
-    param([string]$InputPath)
-
-    $cleanInput = Remove-TtyOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        return @()
-    }
-
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
-
-    foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
-        }
-
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
-        }
-
-        $quotedPath = ConvertTo-TtyQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        if ($item.PSIsContainer) {
-            New-TtyCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
-        } else {
-            New-TtyCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderItem' -ToolTip $item.FullName
-        }
-    }
 }
 
 function Get-TtyOptionDescription {
@@ -211,11 +133,9 @@ function Complete-Tty {
         Get-TtyCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
-    }
-
-    if ($currentWord.StartsWith('-')) {
+    # tty takes no operands ('Usage: tty [OPTION]...'), so the empty slot offers the option
+    # catalog and a typed non-option word gets nothing from this completer.
+    if ([string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-TtyCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -225,7 +145,7 @@ function Complete-Tty {
         )
     }
 
-    Get-TtyPathCompletions -InputPath $currentWord
+    @()
 }
 
 Register-ArgumentCompleter -Native -CommandName 'tty', 'tty.exe' -ScriptBlock {

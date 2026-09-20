@@ -4,12 +4,12 @@
 
 tty_completer.ps1 registers a standalone native PowerShell completer for tty and tty.exe.
 
-It is a help-driven completer with a static fallback for terminal device inspection. The script exposes the command's option catalog and falls back to filesystem path completion for operand slots.
+It is a help-driven completer with a static fallback for terminal device inspection. The script exposes the command's option catalog; tty accepts no operands, so the completer never offers filesystem paths.
 
 The completer covers:
 
 - option-name suggestions for the supported short and long flags
-- operand completion for file or path-like arguments
+- the option catalog in the empty slot after `tty ` or a flag, since the tool has no operands
 - a simple import-safe registration shape that can be loaded directly in PowerShell
 
 Representative options include (parsed from the installed build's `--help`):
@@ -52,7 +52,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
-- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- `Usage: tty [OPTION]...` has no operand, so an empty word returns the whole option catalog (which also keeps PowerShell's filename fallback away) and a typed non-option word returns nothing.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
@@ -66,7 +66,7 @@ tty --
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
-- operand slots offer filesystem completion
+- `tty ` and `tty -s ` list the option catalog instead of files
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes
