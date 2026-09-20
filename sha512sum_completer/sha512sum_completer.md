@@ -64,7 +64,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
-- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped; hidden and system entries are included (`Get-ChildItem -Force`) so a typed prefix never drops candidates the empty slot offered.
+- An unquoted path with spaces (`sha512sum C:\Program Files\cor`) reaches the completer as its last whitespace-split piece; the completer re-joins that piece with the operand tokens typed before it until a parent directory exists and emits only the piece PowerShell will replace (`Files\coreutils\`).
+- After `-c`/`--check` (or a cluster containing `c`) the operand is a checksum manifest, so files named `SHA512SUMS`, `*.sha512`, `*.sum`, `*.txt` and similar are listed first with a manifest tooltip.
+- A single-dash word made only of known short flags (`-cw`) is treated as a getopt cluster and completed by appending each remaining short flag (`-cwz`, `-cwh`, ...).
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 

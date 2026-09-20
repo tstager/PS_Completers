@@ -162,7 +162,7 @@ function Get-Sha512sumPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -185,6 +185,101 @@ function Get-Sha512sumPathCompletions {
             New-Sha512sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderItem' -ToolTip $item.FullName
         }
     }
+}
+
+function Complete-Sha512sumOperand {
+    param(
+        [string]$CurrentWord,
+        [string[]]$TokensBeforeCurrent
+    )
+
+    # An unquoted path with spaces ('C:\Program Files\cor') reaches the completer as the last
+    # whitespace-split piece. Re-join it with the operand tokens typed before it until a parent
+    # directory exists, and emit only the piece PowerShell will replace.
+    $head = ''
+    $inputPath = $CurrentWord
+    if (-not ($CurrentWord.StartsWith('"') -or $CurrentWord.StartsWith("'"))) {
+        $operands = @($TokensBeforeCurrent | Where-Object { -not $_.StartsWith('-') -and -not $_.Contains('"') -and -not $_.Contains("'") })
+        $joined = $CurrentWord
+        $joinedHead = ''
+        for ($i = $operands.Count - 1; $i -ge [Math]::Max(0, $operands.Count - 3); $i--) {
+            $joinedHead = $operands[$i] + ' ' + $joinedHead
+            $joined = $operands[$i] + ' ' + $joined
+            $parent = if ($joined -match '[\\/]+$') { $joined } else { Split-Path -Path $joined -Parent }
+            if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path -LiteralPath $parent -PathType Container)) {
+                $head = $joinedHead
+                $inputPath = $joined
+                break
+            }
+        }
+    }
+
+    $results = @(Get-Sha512sumPathCompletions -InputPath $inputPath)
+    if ($head) {
+        # The line is unquoted, so the emitted piece stays unquoted too (ListItemText is the bare path).
+        $results = @(
+            foreach ($result in $results) {
+                if ($result.ListItemText.StartsWith($head, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    New-Sha512sumCompletionResult -CompletionText $result.ListItemText.Substring($head.Length) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
+                }
+            }
+        )
+    }
+
+    # After -c/--check (or a cluster containing c) the operand is a checksum manifest, so
+    # manifest-shaped files are listed first.
+    $checking = $false
+    foreach ($token in $TokensBeforeCurrent) {
+        if ($token -ceq '--check' -or ($token -cmatch '^-[A-Za-z]+$' -and $token.Contains('c'))) {
+            $checking = $true
+        }
+    }
+
+    if (-not $checking) {
+        return $results
+    }
+
+    $manifests = [System.Collections.Generic.List[object]]::new()
+    $others = [System.Collections.Generic.List[object]]::new()
+    foreach ($result in $results) {
+        if ($result.ResultType -eq 'ProviderItem' -and $result.ListItemText -match '(?i)(^|[\\/])(SHA512SUMS?|CHECKSUMS?(\.txt)?|[^\\/]*\.(sha512|sha512sum|sha|sum|sums|txt))$') {
+            $manifests.Add((New-Sha512sumCompletionResult -CompletionText $result.CompletionText -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip ('Checksum manifest to verify: ' + $result.ToolTip)))
+        } else {
+            $others.Add($result)
+        }
+    }
+
+    @($manifests.ToArray() + $others.ToArray())
+}
+
+function Complete-Sha512sumShortFlagCluster {
+    param([string]$CurrentWord)
+
+    # Every sha512sum option is a boolean switch, so '-cw' is '-c -w'; extend a cluster of known
+    # short flags with each flag not yet in it.
+    if ($CurrentWord -notmatch '^-[A-Za-z]{2,}$') {
+        return @()
+    }
+
+    $shortFlags = @(Get-Sha512sumCompletionOptions | Where-Object { $_ -cmatch '^-[A-Za-z]$' })
+    $usedLetters = @($CurrentWord.Substring(1).ToCharArray() | ForEach-Object { [string]$_ })
+    foreach ($letter in $usedLetters) {
+        if (('-' + $letter) -cnotin $shortFlags) {
+            return @()
+        }
+    }
+
+    @(
+        foreach ($flag in $shortFlags) {
+            $letter = $flag.Substring(1)
+            if ($letter -cin $usedLetters) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $letter
+            New-Sha512sumCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $flag, (Get-Sha512sumOptionDescription -Option $flag))
+        }
+    )
 }
 
 function Get-Sha512sumOptionDescription {
@@ -211,21 +306,39 @@ function Complete-Sha512sum {
         Get-Sha512sumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
+    $tokensBeforeCurrent = @(
+        foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+            if ($element.Extent.EndOffset -lt $cursorPosition) {
+                $element.Extent.Text
+            }
+        }
+    )
+
     if ([string]::IsNullOrEmpty($currentWord)) {
+        $checking = @($tokensBeforeCurrent | Where-Object { $_ -ceq '--check' -or ($_ -cmatch '^-[A-Za-z]+$' -and $_.Contains('c')) }).Count -gt 0
+        if ($checking) {
+            return Complete-Sha512sumOperand -CurrentWord '' -TokensBeforeCurrent $tokensBeforeCurrent
+        }
+
         return @()
     }
 
     if ($currentWord.StartsWith('-')) {
-        return @(
+        $optionMatches = @(
             foreach ($option in Get-Sha512sumCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-Sha512sumCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-Sha512sumOptionDescription -Option $option)
                 }
             }
         )
+        if ($optionMatches.Count -gt 0) {
+            return $optionMatches
+        }
+
+        return Complete-Sha512sumShortFlagCluster -CurrentWord $currentWord
     }
 
-    Get-Sha512sumPathCompletions -InputPath $currentWord
+    Complete-Sha512sumOperand -CurrentWord $currentWord -TokensBeforeCurrent $tokensBeforeCurrent
 }
 
 Register-ArgumentCompleter -Native -CommandName 'sha512sum', 'sha512sum.exe' -ScriptBlock {
