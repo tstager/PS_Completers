@@ -343,7 +343,6 @@ function Initialize-FdCompletionCatalog {
     }
 
     $helpLines = Invoke-FdCapture -Arguments @('--help')
-    $parsedCount = 0
     $pendingTokenPart = $null
     $descriptionLines = [System.Collections.Generic.List[string]]::new()
     $inOptions = $false
@@ -360,7 +359,7 @@ function Initialize-FdCompletionCatalog {
         # clap prints option rows at 2 or 6 spaces; the example lines inside descriptions are
         # indented 10 or more, so they never start a spec.
         if ($line -match '^\s{2,7}(?<tokenPart>--?[A-Za-z0-9?].*?)\s*$') {
-            $parsedCount += Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
+            $null = Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
             $pendingTokenPart = $matches.tokenPart.Trim()
             $descriptionLines.Clear()
             continue
@@ -372,19 +371,15 @@ function Initialize-FdCompletionCatalog {
         }
 
         if (-not [string]::IsNullOrWhiteSpace($line) -and $null -ne $pendingTokenPart) {
-            $parsedCount += Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
+            $null = Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
             $pendingTokenPart = $null
             $descriptionLines.Clear()
         }
     }
 
-    $parsedCount += Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
+    $null = Add-FdHelpSpec -Catalog $catalog -TokenPart $pendingTokenPart -DescriptionLines $descriptionLines.ToArray()
 
-    # Only latch once the help produced specs, so a session whose first completion ran while fd
-    # was unresolvable is not frozen on the static seed.
-    if ($parsedCount -gt 0) {
-        $catalog.Initialized = $true
-    }
+    $catalog.Initialized = $true
 }
 
 function Remove-FdOuterQuotes {
