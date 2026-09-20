@@ -46,6 +46,33 @@ function Initialize-WinAppCompleterData {
         'ManifestTemplates' = @('Packaged', 'Sparse')
     }
 
+    # Closed value sets the schema spells out only inside description strings
+    # (typed System.String), keyed by '<command path> <canonical option>'.
+    $script:WinAppValueChoices = @{
+        'find-ui --source'      = @('gallery', 'toolkit', 'reactor', 'core')
+        'new --template'        = @('winui', 'winui-navview', 'winui-mvvm', 'winui-lib', 'winui-unittest')
+        'new --template-version' = @('latest', 'installed')
+        'run --arch'            = @('x64', 'arm64', 'x86')
+        'run --configuration'   = @('Debug', 'Release')
+        'run --runtime'         = @('win-x64', 'win-arm64', 'win-x86')
+        'ui scroll --direction' = @('up', 'down', 'left', 'right')
+        'ui scroll --to'        = @('top', 'bottom')
+        'ui send-keys --via'    = @('post-message', 'send-input')
+        'ui touch --direction'  = @('right', 'left', 'up', 'down')
+        'ui touch --gesture'    = @('tap', 'double-tap', 'long-press', 'swipe', 'pinch', 'stretch')
+    }
+
+    # Path-valued options and operands the schema types as System.String, keyed
+    # the same way ('<command path> <argument>' for a positional).
+    $script:WinAppPathValues = @{
+        'package --executable'                   = 'File'
+        'run --executable'                       = 'File'
+        'run --project'                          = 'Any'
+        'ui record --output'                     = 'File'
+        'ui screenshot --output'                 = 'File'
+        'create-external-catalog <input-folder>' = 'Directory'
+    }
+
     try {
         $command = Get-Command -Name winapp -CommandType Application -ErrorAction SilentlyContinue |
             Select-Object -First 1
@@ -112,6 +139,49 @@ function Get-WinAppNode {
         $node = $node.subcommands.$Cmd2
     }
     return $node
+}
+
+# Resolves a subcommand token against a node's subcommands by property name or by
+# a declared alias (package -> pack, tool -> run-buildtool).  Returns the
+# canonical name, or $null when the token names no subcommand.
+function Resolve-WinAppSubcommandName {
+    param($Node, [string]$Token)
+
+    if (-not (Test-WinAppNodeProperty $Node 'subcommands')) { return $null }
+    if (Test-WinAppNodeProperty $Node.subcommands $Token) { return $Token }
+
+    foreach ($p in $Node.subcommands.PSObject.Properties) {
+        if ((Test-WinAppNodeProperty $p.Value 'aliases') -and (@($p.Value.aliases) -contains $Token)) {
+            return $p.Name
+        }
+    }
+    return $null
+}
+
+# Emits filesystem completions for a path-valued slot of the given kind.
+function Write-WinAppPathValue {
+    param(
+        [string]$Kind,
+        [string]$WordToComplete,
+        [string]$InlinePrefix = ''
+    )
+
+    if ($Kind -eq 'Directory') {
+        Write-WinAppDirectoryCompletion -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+        return
+    }
+
+    [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
+        ForEach-Object {
+            if ($InlinePrefix) {
+                New-WinAppCompletion "$InlinePrefix$($_.CompletionText)" `
+                    -ListItemText $_.ListItemText `
+                    -ResultType   $_.ResultType `
+                    -Tooltip      $_.ToolTip
+            } else {
+                $_
+            }
+        }
 }
 
 # Returns the option node object for a (possibly aliased) token in the given
@@ -198,7 +268,8 @@ function Write-WinAppOptionValue {
         $Node,
         [string]$OptionToken,
         [string]$WordToComplete,
-        [string]$InlinePrefix = ''
+        [string]$InlinePrefix = '',
+        [string]$CommandPath = ''
     )
 
     $opt = Get-WinAppOption -Node $Node -Token $OptionToken
@@ -215,8 +286,17 @@ function Write-WinAppOptionValue {
     #    --switch= (e.g. --verbose=) does not produce a spurious <value> placeholder.
     if ($valueType -eq 'System.Boolean' -or $valueType -eq 'System.Void') { return }
 
-    # 1. Enum overlay.
+    # 1. Enum overlay, then the description-documented value sets and the
+    #    path-valued strings keyed by command path.
     $enumVals = Get-WinAppEnumChoices -ValueType $valueType
+    $overlayKey = ($CommandPath + ' ' + $canonical).Trim()
+    if (-not $enumVals -and $script:WinAppValueChoices.ContainsKey($overlayKey)) {
+        $enumVals = $script:WinAppValueChoices[$overlayKey]
+    }
+    if (-not $enumVals -and $script:WinAppPathValues.ContainsKey($overlayKey)) {
+        Write-WinAppPathValue -Kind $script:WinAppPathValues[$overlayKey] -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+        return
+    }
     if ($enumVals) {
         $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
             $tip = "$canonical value: $_"
@@ -229,19 +309,9 @@ function Write-WinAppOptionValue {
         return
     }
 
-    # 2. File path (files + directories).
-    if ($valueType -like '*System.IO.FileInfo*') {
-        [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-            ForEach-Object {
-                if ($InlinePrefix) {
-                    New-WinAppCompletion "$InlinePrefix$($_.CompletionText)" `
-                        -ListItemText $_.ListItemText `
-                        -ResultType   $_.ResultType `
-                        -Tooltip      $_.ToolTip
-                } else {
-                    $_
-                }
-            }
+    # 2. File path (files + directories); FileSystemInfo accepts either.
+    if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
+        Write-WinAppPathValue -Kind 'Any' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
         return
     }
 
@@ -336,16 +406,23 @@ function Write-WinAppOptionList {
         $aliases = @()
         if (Test-WinAppNodeProperty $opt 'aliases') { $aliases = @($opt.aliases) }
 
+        $typedPattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
         if ($isShort) {
-            # Offer any alias (short or long) that matches what was typed.
+            # Offer any alias (short or long) that matches what was typed, and the
+            # canonical name too so a lone '-' still reaches --help / --version.
             foreach ($alias in $aliases) {
-                if ($alias -notlike "$WordToComplete*") { continue }
+                if ($alias -notlike $typedPattern) { continue }
                 $tip = "$alias -> ${name} ${typeTag}: $desc"
                 New-WinAppCompletion $alias -ResultType ParameterName -Tooltip $tip
             }
+            if ($name -like $typedPattern) {
+                $aliasNote = if ($aliases.Count -gt 0) { " (alias: $($aliases -join ', '))" } else { '' }
+                $tip = "${name}${aliasNote} ${typeTag}: $desc"
+                New-WinAppCompletion $name -ResultType ParameterName -Tooltip $tip
+            }
         } else {
             $aliasNote = if ($aliases.Count -gt 0) { " (alias: $($aliases -join ', '))" } else { '' }
-            if ($name -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+            if ($name -like $typedPattern) {
                 $tip = "${name}${aliasNote} ${typeTag}: $desc"
                 New-WinAppCompletion $name -ResultType ParameterName -Tooltip $tip
             }
@@ -353,7 +430,7 @@ function Write-WinAppOptionList {
             # match the typed prefix even when the canonical name does not.
             foreach ($alias in $aliases) {
                 if ($alias -notlike '--*') { continue }
-                if ($alias -notlike "$WordToComplete*") { continue }
+                if ($alias -notlike $typedPattern) { continue }
                 $tip = "$alias -> ${name} ${typeTag}: $desc"
                 New-WinAppCompletion $alias -ResultType ParameterName -Tooltip $tip
             }
@@ -410,14 +487,19 @@ function Get-WinAppPositionalSlot {
 
 # Emits completion for a positional argument slot based on its valueType.
 function Write-WinAppPositionalValue {
-    param($Slot, [string]$WordToComplete)
+    param($Slot, [string]$WordToComplete, [string]$CommandPath = '')
 
     if ($null -eq $Slot) { return }
     $argNode  = $Slot.Node
     $valueType = if (Test-WinAppNodeProperty $argNode 'valueType') { $argNode.valueType } else { '' }
     $name      = $Slot.Name
 
-    if ($valueType -like '*System.IO.FileInfo*') {
+    $overlayKey = ($CommandPath + ' <' + $name + '>').Trim()
+    if ($script:WinAppPathValues.ContainsKey($overlayKey)) {
+        Write-WinAppPathValue -Kind $script:WinAppPathValues[$overlayKey] -WordToComplete $WordToComplete
+        return
+    }
+    if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
         [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)
         return
     }
@@ -437,10 +519,21 @@ function Write-WinAppSubcommandList {
     param($Node, [string]$WordToComplete)
 
     if (-not (Test-WinAppNodeProperty $Node 'subcommands')) { return }
+    $typedPattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
     foreach ($p in $Node.subcommands.PSObject.Properties) {
-        if ($p.Name -notlike "$WordToComplete*") { continue }
         $desc = if (Test-WinAppNodeProperty $p.Value 'description') { $p.Value.description } else { $p.Name }
-        New-WinAppCompletion $p.Name -Tooltip $desc
+        if ($p.Name -like $typedPattern) {
+            New-WinAppCompletion $p.Name -Tooltip $desc
+        }
+        # Declared aliases (package -> pack, tool -> run-buildtool) are real
+        # command names too.
+        if (Test-WinAppNodeProperty $p.Value 'aliases') {
+            foreach ($alias in @($p.Value.aliases)) {
+                if ($alias -like $typedPattern) {
+                    New-WinAppCompletion $alias -Tooltip "$alias -> $($p.Name): $desc"
+                }
+            }
+        }
     }
 }
 
@@ -526,7 +619,10 @@ function Complete-WinAppNative {
             # or a finished flag (-* with no trailing '=').
             $topNames = @()
             if (Test-WinAppNodeProperty $script:WinAppTree 'subcommands') {
-                $topNames = $script:WinAppTree.subcommands.PSObject.Properties.Name
+                $topNames = @($script:WinAppTree.subcommands.PSObject.Properties | ForEach-Object {
+                        $_.Name
+                        if (Test-WinAppNodeProperty $_.Value 'aliases') { @($_.Value.aliases) }
+                    })
             }
             $isCompleteTok = ($topNames -contains $lastTokVal) -or
                              (($lastTokVal -like '-*') -and
@@ -613,11 +709,11 @@ function Complete-WinAppNative {
             continue
         }
 
-        # Positional token: descend the tree where possible.
+        # Positional token: descend the tree where possible (by name or alias).
         if ($null -eq $cmd1) {
-            if ((Test-WinAppNodeProperty $script:WinAppTree 'subcommands') -and
-                (Test-WinAppNodeProperty $script:WinAppTree.subcommands $token)) {
-                $cmd1 = $token
+            $resolved = Resolve-WinAppSubcommandName -Node $script:WinAppTree -Token $token
+            if ($resolved) {
+                $cmd1 = $resolved
                 continue
             }
             $positionalCount++
@@ -626,9 +722,9 @@ function Complete-WinAppNative {
 
         if ($null -eq $cmd2) {
             $c1node = Get-WinAppNode -Cmd1 $cmd1
-            if ((Test-WinAppIsContainer $c1node) -and
-                (Test-WinAppNodeProperty $c1node.subcommands $token)) {
-                $cmd2 = $token
+            $resolved = if (Test-WinAppIsContainer $c1node) { Resolve-WinAppSubcommandName -Node $c1node -Token $token } else { $null }
+            if ($resolved) {
+                $cmd2 = $resolved
                 continue
             }
             $positionalCount++
@@ -640,6 +736,7 @@ function Complete-WinAppNative {
 
     $currentNode = Get-WinAppNode -Cmd1 $cmd1 -Cmd2 $cmd2
     if ($null -eq $currentNode) { $currentNode = $script:WinAppTree }
+    $commandPath = (@($cmd1, $cmd2) | Where-Object { $_ }) -join ' '
 
     # =========================================================================
     # 1.  Inline --flag=value completion
@@ -649,7 +746,7 @@ function Complete-WinAppNative {
         $flagPart = $WordToComplete.Substring(0, $eqIdx)
         $valPfx   = $WordToComplete.Substring($eqIdx + 1)
         Write-WinAppOptionValue -Node $currentNode -OptionToken $flagPart `
-            -WordToComplete $valPfx -InlinePrefix "$flagPart="
+            -WordToComplete $valPfx -InlinePrefix "$flagPart=" -CommandPath $commandPath
         return
     }
 
@@ -658,7 +755,7 @@ function Complete-WinAppNative {
     # =========================================================================
     if ($expectingValue) {
         Write-WinAppOptionValue -Node $currentNode -OptionToken $currentOption `
-            -WordToComplete $WordToComplete
+            -WordToComplete $WordToComplete -CommandPath $commandPath
         return
     }
 
@@ -683,7 +780,7 @@ function Complete-WinAppNative {
     # 4b. Leaf node -> positional slot completion (+ option list when empty word).
     if (Test-WinAppNodeProperty $currentNode 'arguments') {
         $slot = Get-WinAppPositionalSlot -Node $currentNode -ConsumedCount $positionalCount
-        Write-WinAppPositionalValue -Slot $slot -WordToComplete $WordToComplete
+        Write-WinAppPositionalValue -Slot $slot -WordToComplete $WordToComplete -CommandPath $commandPath
 
         if ([string]::IsNullOrEmpty($WordToComplete)) {
             Write-WinAppOptionList -Node $currentNode -WordToComplete ''

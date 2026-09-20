@@ -44,7 +44,14 @@ itself, so it stays correct as the (public-preview) CLI evolves:
 - The schema invocation is **probe-once**: it runs at most a single time per
   session. A failed or missing winapp is never retried.
 - A small **static enum overlay** supplies the choice sets the schema does not
-  carry (the schema reports enum option types but not their values).
+  carry (the schema reports enum option types but not their values), plus two
+  overlays keyed by command path for values the schema types as `System.String`:
+  the closed sets its descriptions spell out (`ui scroll --direction`,
+  `ui touch --gesture`, `run --arch`, `new --template`, `find-ui --source`, ...)
+  and the path-valued strings (`run --executable`, `run --project`,
+  `ui screenshot --output`, the `create-external-catalog <input-folder>` operand).
+- Declared subcommand aliases (`pack` for `package`, `run-buildtool` for `tool`)
+  are offered alongside the canonical names and resolve to the same node.
 - If winapp is missing or the schema cannot be parsed, completion is a **graceful
   no-op** — it returns no results and never throws. (PowerShell then falls back
   to its default filesystem completion, as it does for any native command without
@@ -96,8 +103,9 @@ both short and long aliases complete without any hand-maintained maps:
   (`init --use-defaults`), `--entrypoint` (`manifest generate --executable`), and
   `--exe` (`package`/`run --executable`).
 
-Typing a single dash offers any matching alias (short or long); typing two
-dashes offers the canonical long option names, with aliases noted in the
+Typing a single dash offers any matching alias (short or long) together with
+the canonical long names, so `--help` and `--version` are reachable from `-`;
+typing two dashes offers the canonical long option names, with aliases noted in the
 tooltip.
 
 ### Enum value choices (static overlay)
@@ -120,7 +128,8 @@ also handles the `System.Nullable<...>` wrapper):
 | `System.IO.FileInfo` | `CompleteFilename` (files **and** directories) |
 | `System.IO.DirectoryInfo` / `DirectoryInfo[]` | Directory-only completion |
 | `System.Int32` / `System.Nullable<System.Int64>` | `<n>` placeholder (suppresses filesystem fallback) |
-| `System.String` / `System.String[]` | `<helpName>` or `<value>` placeholder |
+| `System.IO.FileSystemInfo` | Files and directories (`run <input>`) |
+| `System.String` / `System.String[]` | Overlay choices or path completion when the option is listed above, else `<helpName>` or `<value>` placeholder |
 | `System.Boolean` / `System.Void` | Switch — never consumes a value |
 
 ### Positional argument completion
