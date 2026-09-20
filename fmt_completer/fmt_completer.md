@@ -46,6 +46,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- Only option-table rows (lines starting with whitespace and `-`) are harvested, and all-uppercase short tokens are rejected, so GNU's prose `The option -WIDTH is an abbreviated form of --width=DIGITS.` no longer yields a bogus `-WIDTH` option. The row's metavariable (`--width=WIDTH`, `--skip-prefix <PSKIP>`) is cached per option, so options the static table does not list still get a typed hint: `WIDTH`/`GOAL`/`DIGITS` -> `72`, `80`, `<width>`; `TABWIDTH` -> `4`, `8`, `<tabwidth>`; anything else -> `<name>`.
+- `-72` (the legacy `-WIDTH` abbreviation of `--width=72`) is echoed as a value with an explanatory tooltip, and `-<width>` is listed next to the options as a reminder of that form.
+- A single-dash word made only of known value-less short flags (`-csu`) is treated as a getopt cluster and completed by appending each remaining boolean flag.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
@@ -53,6 +56,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - `-p`, `--prefix`: `<string>`
 - `-w`, `--width`, `-g`, `--goal`: `72`, `80`, `<width>`
+- any other value-taking option in the live help (uutils: `-P`/`--skip-prefix <PSKIP>`, `-T`/`--tab-width <TABWIDTH>`): hint derived from the metavariable, for example `4`, `8`, `<tabwidth>` and `<pskip>`
 
 ## Representative validation scenarios
 
@@ -67,5 +71,6 @@ Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--prefix` shows its documented values in both the separate and the attached form
+- `fmt -72` echoes the legacy width, `fmt -csu` offers cluster extensions, `fmt -T ` offers tab widths
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
