@@ -30,7 +30,7 @@ function Get-CsplitCompletionOptions {
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
-            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|\]|\)|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
                 if ($normalized.StartsWith('--')) {
@@ -261,6 +261,68 @@ function Get-CsplitOptionValueCompletions {
     )
 }
 
+function Get-CsplitOperandIndex {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [int]$cursorPosition
+    )
+
+    # Count the operands typed before the cursor: skip options, and the token that follows a
+    # value-taking option in its separate form ('-f PREFIX', '--digits N').
+    $valueOptions = @('-b', '--suffix-format', '-f', '--prefix', '-n', '--digits')
+    $index = 0
+    $skipNext = $false
+    foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.EndOffset -ge $cursorPosition) {
+            break
+        }
+
+        $text = $element.Extent.Text
+        if ($skipNext) {
+            $skipNext = $false
+            continue
+        }
+
+        if ($text -ceq '--') {
+            continue
+        }
+
+        if ($text.StartsWith('-') -and $text.Length -gt 1) {
+            if ($text -cin $valueOptions) {
+                $skipNext = $true
+            }
+
+            continue
+        }
+
+        $index++
+    }
+
+    $index
+}
+
+function Complete-CsplitPattern {
+    param([string]$CurrentWord)
+
+    # 'csplit [OPTION]... FILE PATTERN...': every operand after FILE is a pattern from the
+    # grammar in the help text, never a path.
+    $patterns = @(
+        @{ Text = '<INTEGER>'; Tip = 'Copy up to but not including the specified line number.' }
+        @{ Text = '/REGEXP/'; Tip = 'Copy up to but not including a matching line; an optional +N or -N line offset may follow.' }
+        @{ Text = '%REGEXP%'; Tip = 'Skip to, but not including, a matching line; an optional +N or -N line offset may follow.' }
+        @{ Text = '{INTEGER}'; Tip = 'Repeat the previous pattern the specified number of times.' }
+        @{ Text = '{*}'; Tip = 'Repeat the previous pattern as many times as possible.' }
+    )
+
+    @(
+        foreach ($pattern in $patterns) {
+            if ($pattern.Text.StartsWith($CurrentWord, [System.StringComparison]::Ordinal)) {
+                New-CsplitCompletionResult -CompletionText $pattern.Text -ListItemText $pattern.Text -ResultType 'ParameterValue' -ToolTip $pattern.Tip
+            }
+        }
+    )
+}
+
 function Get-CsplitOptionDescription {
     param([string]$Option)
 
@@ -290,11 +352,17 @@ function Complete-Csplit {
         return $optionValues
     }
 
+    $operandIndex = Get-CsplitOperandIndex -commandAst $commandAst -cursorPosition $cursorPosition
+
     if ([string]::IsNullOrEmpty($currentWord)) {
+        if ($operandIndex -ge 1) {
+            return Complete-CsplitPattern -CurrentWord ''
+        }
+
         return @()
     }
 
-    if ($currentWord.StartsWith('-')) {
+    if ($currentWord.StartsWith('-') -and $currentWord.Length -gt 1) {
         return @(
             foreach ($option in Get-CsplitCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -302,6 +370,14 @@ function Complete-Csplit {
                 }
             }
         )
+    }
+
+    if ($operandIndex -ge 1) {
+        return Complete-CsplitPattern -CurrentWord $currentWord
+    }
+
+    if ($currentWord -ceq '-') {
+        return @(New-CsplitCompletionResult -CompletionText '-' -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'Read standard input instead of a FILE.')
     }
 
     Get-CsplitPathCompletions -InputPath $currentWord

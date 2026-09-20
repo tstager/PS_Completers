@@ -4,12 +4,13 @@
 
 csplit_completer.ps1 registers a standalone native PowerShell completer for csplit and csplit.exe.
 
-It is a help-driven completer with a static fallback for the csplit file-splitting workflow. The script exposes a compact option catalog for common csplit flags and falls back to filesystem path completion for operand slots.
+It is a help-driven completer with a static fallback for the csplit file-splitting workflow. The script exposes a compact option catalog for common csplit flags, completes the FILE operand with filesystem paths and every later PATTERN operand with csplit's pattern grammar.
 
 The completer covers:
 
 - option-name suggestions for common short and long flags
-- operand completion for file or path-like arguments
+- FILE operand completion (filesystem paths, plus `-` for standard input)
+- PATTERN placeholders for every operand after FILE: `<INTEGER>`, `/REGEXP/`, `%REGEXP%`, `{INTEGER}` and `{*}`, filtered by the typed prefix
 - a simple import-safe registration shape that can be loaded directly in PowerShell
 
 Representative options include (parsed from the installed build's `--help`):
@@ -64,7 +65,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
-- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- The operand index is counted from the command elements before the cursor (options and the separate-form value of `-b`/`-f`/`-n` are skipped). Index 0 is FILE and uses filesystem path completion, with wildcard characters in the typed text escaped; index 1 and later are PATTERN slots and offer the pattern placeholders, so typing `/` narrows to `/REGEXP/` instead of listing the drive root. A bare `{` is a PowerShell parse error, so the engine never invokes the completer for `csplit FILE {`.
+- The help-parse lookahead accepts an option name terminated by `]` or `)`, so uutils' `[aliases: -s, --silent]` fragment contributes `--silent`.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
@@ -87,7 +89,7 @@ Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--suffix-format` shows its documented values in both the separate and the attached form
-- operand slots offer filesystem completion
+- the FILE slot offers filesystem completion; `csplit FILE ` and `csplit FILE /` offer the pattern placeholders
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes
