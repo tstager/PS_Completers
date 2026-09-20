@@ -59,7 +59,10 @@ The script:
 - Safe local value discovery:
   - `--targets` uses `rustc --print target-list` when available and completes comma-separated target triples
 - Placeholder-only slots:
-  - free-form values such as `--version`, `--git`, `--registry`, `--github-token`, and the positional `crate[@version]` operand use placeholders instead of filesystem fallback
+  - free-form values such as `--version`, `--git`, `--registry`, `--github-token`, and the positional `crate[@version]` operand use placeholders instead of filesystem fallback; the placeholder is offered only while the slot is empty (or matches the typed prefix), never echoing typed text back
+- Attached `--opt=value` form: the value completes with the `--opt=` prefix kept (`--pkg-fmt=t`, `--install-path=C:\Win`)
+- After `--` every token is a crate operand and option names are no longer offered
+- Path values containing spaces keep the single quotes `CompleteFilename` applies and are not wrapped a second time
 
 ## Usage / loading example
 

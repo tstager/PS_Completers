@@ -255,7 +255,13 @@ function Get-CargoBinstallPathCompletions {
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            $completionText = ConvertTo-CargoBinstallQuotedValue -Value $_.CompletionText -AlwaysQuote $alwaysQuote
+            # CompleteFilename already quotes a path containing spaces; wrapping
+            # that again would produce a path with literal quotes inside it.
+            $completionText = if ($_.CompletionText -match '^[''"]') {
+                $_.CompletionText
+            } else {
+                ConvertTo-CargoBinstallQuotedValue -Value $_.CompletionText -AlwaysQuote $alwaysQuote
+            }
             New-CargoBinstallCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 }
@@ -267,8 +273,14 @@ function Get-CargoBinstallPlaceholderCompletion {
         [string]$ToolTip
     )
 
-    $completionText = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { $Placeholder } else { $CurrentWord }
-    New-CargoBinstallCompletionResult -CompletionText $completionText -ListItemText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip
+    # The placeholder names an empty slot; once text is typed there is nothing
+    # to add, and echoing it back would only hide the engine's own fallback.
+    if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and
+        -not $Placeholder.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    New-CargoBinstallCompletionResult -CompletionText $Placeholder -ListItemText $Placeholder -ResultType 'ParameterValue' -ToolTip $ToolTip
 }
 
 function Get-CargoBinstallNamedValueCompletions {
@@ -446,7 +458,27 @@ function Complete-CargoBinstall {
         return @(Get-CargoBinstallOptionValueCompletions -OptionName $state.PendingOption -CurrentWord $currentWord)
     }
 
+    if ($state.AfterDoubleDash) {
+        # Everything after '--' is a crate operand.
+        return @(Get-CargoBinstallPositionalCompletions -CurrentWord $currentWord)
+    }
+
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
+        $attached = [regex]::Match((Remove-CargoBinstallOuterQuotes -Value $currentWord), '^(?<name>--[^=]+)=(?<value>.*)$')
+        if ($attached.Success) {
+            # Attached --opt=value form: complete the value, keeping the prefix.
+            $definition = Get-CargoBinstallHelpDefinition
+            $attachedName = $attached.Groups['name'].Value
+            if (-not $definition.OptionMap.ContainsKey($attachedName) -or -not $definition.OptionMap[$attachedName].TakesValue) {
+                return @()
+            }
+
+            $attachedPrefix = $attachedName + '='
+            return @(Get-CargoBinstallOptionValueCompletions -OptionName $definition.OptionMap[$attachedName].PrimaryName -CurrentWord $attached.Groups['value'].Value | ForEach-Object {
+                    New-CargoBinstallCompletionResult -CompletionText ($attachedPrefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
+                })
+        }
+
         return @(Get-CargoBinstallOptionCompletions -CurrentWord $currentWord)
     }
 
