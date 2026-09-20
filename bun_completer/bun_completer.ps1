@@ -13,8 +13,9 @@ if (-not (Get-Variable -Name BunCompletionCache -Scope Script -ErrorAction Ignor
             ''         = @(
                 'run', 'test', 'x', 'repl', 'exec', 'install', 'add', 'remove', 'update', 'audit', 'outdated',
                 'link', 'unlink', 'publish', 'patch', 'pm', 'info', 'why', 'list', 'build', 'init', 'create',
-                'upgrade', 'feedback'
+                'upgrade', 'dedupe', 'prune'
             )
+            'audit'    = @('fix')
             'pm'       = @(
                 'scan', 'pack', 'bin', 'ls', 'why', 'whoami', 'view', 'version', 'pkg', 'hash',
                 'hash-string', 'hash-print', 'cache', 'migrate', 'untrusted', 'trust', 'default-trusted'
@@ -47,7 +48,11 @@ if (-not (Get-Variable -Name BunCompletionCache -Scope Script -ErrorAction Ignor
                 'init'     = 'Initialize a Bun project'
                 'create'   = 'Create a project from a template'
                 'upgrade'  = 'Upgrade Bun itself'
-                'feedback' = 'Send feedback to the Bun team'
+                'dedupe'   = 'Remove duplicate versions from the lockfile'
+                'prune'    = 'Remove packages that are not in the lockfile from node_modules'
+            }
+            'audit'    = @{
+                'fix' = 'Upgrade vulnerable packages to the lowest safe version that satisfies every dependent''s range'
             }
             'pm'       = @{
                 'scan'            = 'Scan packages in the lockfile for security vulnerabilities'
@@ -205,7 +210,7 @@ function Get-BunExecutablePath {
     $script:BunCompletionCache.ExecutablePath = $null
 
     foreach ($commandName in @('bun.exe', 'bun')) {
-        $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $commandName -ErrorAction Ignore
         if ($command) {
             $script:BunCompletionCache.ExecutablePath = $command.Source
             break
@@ -237,7 +242,8 @@ function Get-BunOptionTokensFromLine {
         return @()
     }
 
-    $tokens = foreach ($match in [regex]::Matches($Line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9\-]*)')) {
+    # Version-style dots ('--tls-min-v1.0') are part of the token.
+    $tokens = foreach ($match in [regex]::Matches($Line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[0-9]+)*)')) {
         $match.Groups[1].Value
     }
 
@@ -284,12 +290,10 @@ function Add-BunPossibleValues {
         }
     }
 
+    # Only an explicit enumeration ('One of ...', 'Valid orders: ...') and quoted literals count;
+    # a bare parenthetical such as '(default, auto-installs when no node_modules)' is prose.
     $candidateFragments = New-Object System.Collections.Generic.List[string]
     if ($RawLine -match '(?i)(?:one of|possible values?:|supports either|available:|valid [^:]+:)\s*(.+)$') {
-        [void]$candidateFragments.Add($matches[1])
-    }
-
-    if ($RawLine -match '\(([^()]+)\)') {
         [void]$candidateFragments.Add($matches[1])
     }
 
@@ -300,7 +304,7 @@ function Add-BunPossibleValues {
             $candidate = $candidate -replace '^(?:default:|default is)\s*', ''
             $candidate = $candidate.Trim('''" .')
 
-            if ([string]::IsNullOrWhiteSpace($candidate)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate -match '^(?i)default\b') {
                 continue
             }
 
@@ -317,6 +321,19 @@ function Add-BunPossibleValues {
         }
 
         $ValueMap[$token] = @(Get-BunUniqueStrings -Items ($ValueMap[$token] + $uniqueValues))
+    }
+}
+
+function Split-BunHelpOptionRow {
+    param([string]$Line)
+
+    # A flag row is '<flags>  <description>': option tokens and value markers live only in the
+    # flag column, so prose such as 'Signal whose handlers run when --watch restarts' cannot
+    # register --watch as value-taking or attach SIGTERM to it.
+    $parts = @($Line.Trim() -split '\s{2,}', 2)
+    [pscustomobject]@{
+        Flags       = $parts[0]
+        Description = if ($parts.Count -gt 1) { $parts[1] } else { '' }
     }
 }
 
@@ -359,10 +376,12 @@ function Get-BunParsedHelpData {
     $section = ''
     $pathKey = (@($Path) -join ' ').ToLowerInvariant()
     $treeCommandPath = ''
+    $commandColumn = $null
 
     foreach ($line in @($HelpLines)) {
         if ($line -match '^\s*Commands:\s*$') {
             $section = 'commands'
+            $commandColumn = $null
             continue
         }
 
@@ -404,8 +423,8 @@ function Get-BunParsedHelpData {
                     continue
                 }
 
-                $treeOptionLine = $matches[1].Trim()
-                $treeOptionTokens = @(Get-BunOptionTokensFromLine -Line $treeOptionLine)
+                $treeOptionRow = Split-BunHelpOptionRow -Line $matches[1]
+                $treeOptionTokens = @(Get-BunOptionTokensFromLine -Line $treeOptionRow.Flags)
                 if ($treeOptionTokens.Count -eq 0) {
                     continue
                 }
@@ -414,17 +433,28 @@ function Get-BunParsedHelpData {
                     [void]$options.Add($token)
                 }
 
-                if (Test-BunOptionLineExpectsValue -Line $treeOptionLine -OptionTokens $treeOptionTokens) {
+                if (Test-BunOptionLineExpectsValue -Line $treeOptionRow.Flags -OptionTokens $treeOptionTokens) {
                     foreach ($token in $treeOptionTokens) {
                         [void]$optionsExpectingValue.Add($token)
                     }
                 }
 
-                Add-BunPossibleValues -ValueMap $valuesByOption -OptionTokens $treeOptionTokens -RawLine $treeOptionLine
+                Add-BunPossibleValues -ValueMap $valuesByOption -OptionTokens $treeOptionTokens -RawLine $treeOptionRow.Description
                 continue
             }
 
-            if ($line -match '^\s{2,}([A-Za-z][A-Za-z0-9-]*)\b(?:\s+.+?)?\s{2,}(.+)$') {
+            # Command rows share one column; a deeper-indented row is an example continuation
+            # ('            lint   Run a package.json script' under 'run'), not a command.
+            if ($line -match '^(?<indent>\s{2,})([A-Za-z][A-Za-z0-9-]*)\b(?:\s+.+?)?\s{2,}(.+)$') {
+                $indent = $matches['indent'].Length
+                if ($null -eq $commandColumn) {
+                    $commandColumn = $indent
+                }
+
+                if ($indent -ne $commandColumn) {
+                    continue
+                }
+
                 $commandName = $matches[1]
                 $description = $matches[2].Trim()
                 [void]$commands.Add($commandName)
@@ -439,11 +469,12 @@ function Get-BunParsedHelpData {
         }
 
         $trimmedLine = $line.Trim()
-        if ([string]::IsNullOrWhiteSpace($trimmedLine)) {
+        if ([string]::IsNullOrWhiteSpace($trimmedLine) -or -not $trimmedLine.StartsWith('-')) {
             continue
         }
 
-        $optionTokens = @(Get-BunOptionTokensFromLine -Line $trimmedLine)
+        $optionRow = Split-BunHelpOptionRow -Line $trimmedLine
+        $optionTokens = @(Get-BunOptionTokensFromLine -Line $optionRow.Flags)
         if ($optionTokens.Count -eq 0) {
             continue
         }
@@ -452,13 +483,13 @@ function Get-BunParsedHelpData {
             [void]$options.Add($token)
         }
 
-        if (Test-BunOptionLineExpectsValue -Line $trimmedLine -OptionTokens $optionTokens) {
+        if (Test-BunOptionLineExpectsValue -Line $optionRow.Flags -OptionTokens $optionTokens) {
             foreach ($token in $optionTokens) {
                 [void]$optionsExpectingValue.Add($token)
             }
         }
 
-        Add-BunPossibleValues -ValueMap $valuesByOption -OptionTokens $optionTokens -RawLine $trimmedLine
+        Add-BunPossibleValues -ValueMap $valuesByOption -OptionTokens $optionTokens -RawLine $optionRow.Description
     }
 
     New-BunPathData `
@@ -1074,7 +1105,7 @@ function Get-BunStaticOptionsExpectingValue {
         '--eval', '-e', '--print', '-p', '--port', '--conditions', '--fetch-preconnect',
         '--max-http-header-size', '--dns-result-order', '--title', '--unhandled-rejections',
         '--console-depth', '--user-agent', '--cron-title', '--cron-period', '--env-file',
-        '--cwd', '--config', '-c'
+        '--cwd', '--config', '-c', '--filter', '-F'
     )
 
     switch ($pathKey) {
@@ -1429,13 +1460,97 @@ function Get-BunCommandSuggestions {
     @($items.ToArray())
 }
 
+function Get-BunStaticOptionNameList {
+    param([string[]]$Path)
+
+    # Option-name floor from the bun 1.4.2 help, unioned with the parsed help so a broken or
+    # missing help capture never leaves a path without options.
+    $pathKey = Get-BunCacheKey -Path $Path
+    $rootOptions = @(
+        '--silent', '--elide-lines', '--filter', '-F', '-b', '--bun', '--no-orphans', '--shell', '--workspaces',
+        '--parallel', '--sequential', '--no-exit-on-error', '--watch', '--watch-kill-signal', '--hot',
+        '--no-clear-screen', '--smol', '--interactive', '-r', '--preload', '--require', '--import', '--inspect',
+        '--inspect-wait', '--inspect-brk', '--cpu-prof', '--cpu-prof-name', '--cpu-prof-dir', '--cpu-prof-md',
+        '--cpu-prof-interval', '--heap-prof', '--heap-prof-name', '--heap-prof-dir', '--heap-prof-md',
+        '--heap-prof-interval', '--if-present', '--no-install', '--install', '-i', '-e', '--eval', '-p', '--print',
+        '--prefer-offline', '--prefer-latest', '--port', '--conditions', '--fetch-preconnect',
+        '--experimental-http2-fetch', '--experimental-http3-fetch', '--max-http-header-size',
+        '--insecure-http-parser', '--dns-result-order', '--experimental-stream-iter', '--expose-gc',
+        '--no-deprecation', '--throw-deprecation', '--no-warnings', '--trace-warnings', '--trace-deprecation',
+        '--pending-deprecation', '--redirect-warnings', '--disable-warning', '--title', '--zero-fill-buffers',
+        '--use-system-ca', '--use-openssl-ca', '--use-bundled-ca', '--tls-min-v1.0', '--tls-min-v1.1',
+        '--tls-min-v1.2', '--tls-min-v1.3', '--tls-max-v1.2', '--tls-max-v1.3', '--redis-preconnect',
+        '--sql-preconnect', '--no-addons', '--no-ffi-cc', '--unhandled-rejections', '--console-depth',
+        '--user-agent', '--cron-title', '--cron-period', '--main-fields', '--preserve-symlinks',
+        '--preserve-symlinks-main', '--extension-order', '--tsconfig-override', '-d', '--define', '--drop',
+        '--feature', '-l', '--loader', '--no-macros', '--jsx-factory', '--jsx-fragment', '--jsx-import-source',
+        '--jsx-runtime', '--jsx-side-effects', '--ignore-dce-annotations', '--env-file', '--no-env-file', '--cwd',
+        '-c', '--config', '-h', '--help'
+    )
+    $installFamily = @(
+        '-c', '--config', '-y', '--yarn', '-p', '--production', '--no-save', '--save', '--ca', '--cafile', '--dry-run',
+        '--frozen-lockfile', '-f', '--force', '--cache-dir', '--no-cache', '--silent', '--quiet', '--verbose',
+        '--no-progress', '--no-summary', '--no-verify', '--offline', '--prefer-offline', '--ignore-scripts', '--trust',
+        '-g', '--global', '--cwd', '--backend', '--registry', '--concurrent-scripts', '--network-concurrency',
+        '--save-text-lockfile', '--omit', '--lockfile-only', '--linker', '--minimum-release-age', '--cpu', '--os',
+        '-h', '--help'
+    )
+
+    switch ($pathKey) {
+        '' { return $rootOptions }
+        'run' { return $rootOptions }
+        'test' {
+            return @(
+                '--no-orphans', '--timeout', '-u', '--update-snapshots', '--rerun-each', '--retry', '--todo', '--only',
+                '--pass-with-no-tests', '--concurrent', '--randomize', '--seed', '--coverage', '--coverage-reporter',
+                '--coverage-dir', '--bail', '-t', '--test-name-pattern', '--reporter', '--reporter-outfile', '--dots',
+                '--only-failures', '--max-concurrency', '--path-ignore-patterns', '--changed', '--isolate',
+                '--no-isolate', '--parallel', '--parallel-delay', '--test-worker', '--shard', '--timings',
+                '--update-timings'
+            )
+        }
+        'build' {
+            return @(
+                '--production', '--compile', '--compile-exec-argv', '--compile-autoload-dotenv',
+                '--no-compile-autoload-dotenv', '--compile-autoload-bunfig', '--no-compile-autoload-bunfig',
+                '--compile-autoload-tsconfig', '--no-compile-autoload-tsconfig', '--compile-autoload-package-json',
+                '--no-compile-autoload-package-json', '--compile-executable-path', '--asset', '--bytecode',
+                '--bytecode-depth', '--watch', '--no-clear-screen', '--target', '--outdir', '--outfile', '--metafile',
+                '--metafile-md', '--sourcemap', '--banner', '--footer', '--format', '--root', '--splitting',
+                '--no-split-require', '--no-module-preload', '--min-chunk-size', '--public-path', '-e', '--external',
+                '--allow-unresolved', '--reject-unresolved', '--packages', '--entry-naming', '--chunk-naming',
+                '--asset-naming', '--react-fast-refresh', '--react-compiler', '--no-bundle', '--emit-dce-annotations',
+                '--minify-whitespace', '--no-deprecated-namespace-object-setters', '--minify', '--minify-syntax',
+                '--minify-identifiers', '--keep-names', '--css-chunking', '--conditions', '--app',
+                '--server-components', '--env', '--windows-hide-console', '--windows-icon', '--windows-title',
+                '--windows-publisher', '--windows-version', '--windows-description', '--windows-copyright'
+            )
+        }
+        'install' { return $installFamily + @('-d', '--dev', '--optional', '--peer', '-E', '--exact', '--filter', '-a', '--analyze', '--only-missing', '--catalog') }
+        'add' { return $installFamily + @('-d', '--dev', '--optional', '--peer', '-E', '--exact', '--filter', '-a', '--analyze', '--only-missing', '--catalog') }
+        'remove' { return $installFamily + @('--filter') }
+        'update' { return $installFamily + @('--prod', '-L', '--latest', '-i', '--interactive', '--filter', '-r', '--recursive', '-d', '--dev', '--no-optional', '-E', '--exact') }
+        'outdated' { return $installFamily + @('--filter', '-r', '--recursive') }
+        'publish' { return $installFamily + @('--access', '--tag', '--otp', '--auth-type', '--gzip-level', '--tolerate-republish') }
+        'link' { return $installFamily }
+        'info' { return $installFamily + @('--json') }
+        'patch' { return $installFamily + @('--commit', '--patches-dir') }
+        'audit' { return @('--json', '--audit-level', '--ignore', '-L', '--latest') }
+        'audit fix' { return @('--dry-run', '-L', '--latest') }
+        'why' { return @('--top', '--depth') }
+        'init' { return @('--help', '-y', '--yes', '-m', '--minimal', '-r', '--react') }
+        'pm pack' { return @('--dry-run', '--destination', '--filename', '--ignore-scripts', '--gzip-level', '--quiet') }
+        default { return @() }
+    }
+}
+
 function Get-BunOptionSuggestions {
     param([string[]]$Path)
 
     $helpData = Get-BunHelpData -Path $Path
     $items = New-Object System.Collections.Generic.List[object]
 
-    foreach ($option in @($helpData.Options)) {
+    foreach ($option in @(Get-BunUniqueStrings -Items (@($helpData.Options) + @(Get-BunStaticOptionNameList -Path $Path)))) {
         $item = New-BunSuggestionItem -CompletionText $option -ToolTip $option -ResultType 'ParameterName'
         if ($item) {
             [void]$items.Add($item)
@@ -1525,7 +1640,8 @@ function Get-BunOptionValueSuggestions {
     }
 
     switch ($pathKey) {
-        'run' {
+        { $_ -in @('', 'run') } {
+            # -F/--filter is a root flag ('bun --filter <pattern> <script>') inherited by run.
             if ($normalizedOption -in @('--filter', '-f')) {
                 foreach ($workspace in @(Get-BunWorkspaceNames)) {
                     $item = New-BunSuggestionItem -CompletionText ($AssignmentPrefix + $workspace) -ToolTip 'workspace name'

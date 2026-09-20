@@ -81,9 +81,11 @@ Subcommands are matched with `Find-BunSubcommand`, which combines help-discovere
 `Get-BunParsedHelpData` reads Bun help sections and extracts:
 
 - subcommands from `Commands:` sections,
-- options from `Flags:` or `Options:` sections,
+- options from `Flags:` or `Options:` sections (only from the flag column left of the two-space gap, so prose such as `... when --watch restarts ...` cannot register `--watch` as value-taking),
 - which options appear to expect a value,
-- and simple possible-value hints from quoted values or phrases such as `possible values:`.
+- and simple possible-value hints from quoted values or explicit enumerations such as `One of ...` / `Valid orders: ...` in the description column; a bare parenthetical like `(default, auto-installs when no node_modules)` is treated as prose and candidates starting with `default` are discarded.
+
+Command rows in a `Commands:` section share one column; a deeper-indented row (the `lint` example under `run` in the root help) is a continuation, not a command.
 
 `Get-BunHelpData` merges that parsed help with the script's static command tree, so the completer can combine repository-defined fallbacks with the locally installed Bun CLI surface.
 
@@ -140,10 +142,14 @@ The script seeds these top-level Bun commands:
 - `init`
 - `create`
 - `upgrade`
-- `feedback`
+- `dedupe`
+- `prune`
+
+(`feedback` was dropped: bun 1.4.2 answers `error: Script not found "feedback"`.)
 
 It also seeds important nested paths:
 
+- `audit` → `fix`
 - `pm` → `scan`, `pack`, `bin`, `ls`, `why`, `whoami`, `view`, `version`, `pkg`, `hash`, `hash-string`, `hash-print`, `cache`, `migrate`, `untrusted`, `trust`, `default-trusted`
 - `pm cache` → `rm`
 - `pm pkg` → `get`, `set`, `delete`, `fix`
@@ -152,11 +158,11 @@ It also seeds important nested paths:
 
 ### Help-driven option completion
 
-Option names are primarily discovered from the local Bun help text for the active command path.
+Option names are primarily discovered from the local Bun help text for the active command path, unioned with a static option-name floor (`Get-BunStaticOptionNameList`, seeded from the bun 1.4.2 help for the root, `run`, `test`, `build`, the install family, `audit`, `audit fix`, `why`, `init` and `pm pack`) so a missing or unparsable help capture never leaves a path without options.
 
 The script also keeps a static list of options that are known to expect values for important paths, including:
 
-- root runtime options such as `--preload`, `--require`, `--import`, `--eval`, `--cwd`, `--env-file`, and `--config`
+- root runtime options such as `--preload`, `--require`, `--import`, `--eval`, `--cwd`, `--env-file`, `--config`, and `-F`/`--filter`
 - `run` options such as `--shell`, `--main-fields`, `--extension-order`, `--loader`, and `--jsx-runtime`
 - `build` options such as `--target`, `--outdir`, `--outfile`, `--sourcemap`, `--format`, `--packages`, and `--env`
 - `test` options such as `--timeout`, `--coverage-reporter`, `--reporter`, and `--reporter-outfile`
@@ -192,7 +198,7 @@ Those static hints are merged with any values discovered from Bun help output.
 
 The script adds several project-local value sources:
 
-- `bun run --filter <TAB>` and `bun run -f <TAB>` suggest workspace names
+- `bun --filter <TAB>`, `bun -F <TAB>`, `bun run --filter <TAB>` and `bun run -F <TAB>` suggest workspace names
 - `bun update --filter <TAB>` suggests workspace names
 - `bun outdated --filter <TAB>` and `bun outdated -F <TAB>` suggest workspace names
 - `bun remove <TAB>`, `bun update <TAB>`, `bun info <TAB>`, `bun why <TAB>`, `bun patch <TAB>`, `bun outdated <TAB>`, `bun x <TAB>`, `bun pm view <TAB>`, and `bun pm trust <TAB>` suggest package names from the local manifest and/or `node_modules`
