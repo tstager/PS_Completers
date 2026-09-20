@@ -99,11 +99,47 @@ function Get-FindStrCompletionCatalog {
         Switches            = $switches
         SwitchLookup        = $switchLookup
         AttachedValueLookup = $attachedValueLookup
-        ColorHints          = @('07', '0A', '0C', '0E', '1F', '2F', '4F', '70')
+        ColorNames          = [ordered]@{
+            '0' = 'Black';  '1' = 'Blue';         '2' = 'Green';        '3' = 'Aqua'
+            '4' = 'Red';    '5' = 'Purple';       '6' = 'Yellow';       '7' = 'White'
+            '8' = 'Gray';   '9' = 'Light Blue';   'A' = 'Light Green';  'B' = 'Light Aqua'
+            'C' = 'Light Red'; 'D' = 'Light Purple'; 'E' = 'Light Yellow'; 'F' = 'Bright White'
+        }
         QuietFlags          = @('u')
     }
 
     $script:FindStrCompletionCatalog
+}
+
+function Get-FindStrColorCompletion {
+    param(
+        [string]$Prefix,
+        [string]$CurrentValue
+    )
+
+    # /A: takes exactly two hex digits, background then foreground, using the
+    # digit table from color /?; every one of the 256 pairs is valid.
+    $names = (Get-FindStrCompletionCatalog).ColorNames
+    $typedValue = (Remove-FindStrOuterQuotes -Value $CurrentValue).ToUpperInvariant()
+    $results = New-Object System.Collections.Generic.List[object]
+
+    foreach ($background in $names.Keys) {
+        foreach ($foreground in $names.Keys) {
+            $pair = $background + $foreground
+            if (-not $pair.StartsWith($typedValue)) {
+                continue
+            }
+
+            [void]$results.Add((New-FindStrCompletionResult -CompletionText ($Prefix + $pair) -ResultType 'ParameterValue' -ToolTip ($names[$foreground] + ' on ' + $names[$background] + '.')))
+        }
+    }
+
+    if ($results.Count -eq 0) {
+        $fallback = if ([string]::IsNullOrWhiteSpace($CurrentValue)) { $Prefix + '<hh>' } else { $Prefix + $CurrentValue }
+        [void]$results.Add((New-FindStrCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip 'Color attribute: two hex digits, background then foreground.'))
+    }
+
+    @($results.ToArray())
 }
 
 function Remove-FindStrOuterQuotes {
@@ -512,6 +548,16 @@ function Get-FindStrDirectoryListCompletions {
 
     $valuePrefix = ''
     $currentSegment = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+
+    # A real multi-directory list must be quoted (an unquoted ';' ends the
+    # PowerShell statement), so a balanced closing quote is set aside here and
+    # reinstated on every completion instead of being swallowed or matched.
+    $closingQuote = ''
+    if ($currentSegment.Length -ge 2 -and $currentSegment.StartsWith('"') -and $currentSegment.EndsWith('"')) {
+        $closingQuote = '"'
+        $currentSegment = $currentSegment.Substring(0, $currentSegment.Length - 1)
+    }
+
     $lastSemicolonIndex = if ([string]::IsNullOrEmpty($currentSegment)) { -1 } else { $currentSegment.LastIndexOf(';') }
 
     if ($lastSemicolonIndex -ge 0) {
@@ -527,7 +573,14 @@ function Get-FindStrDirectoryListCompletions {
         '<dir>'
     }
 
-    @(Get-FindStrPathCompletions -CurrentValue $currentSegment -Prefix $combinedPrefix -Kind 'Directory' -ToolTip 'Directory list entry.' -Placeholder $placeholder -HasOpenQuotePrefix:$hasOpenQuotePrefix)
+    $results = @(Get-FindStrPathCompletions -CurrentValue $currentSegment -Prefix $combinedPrefix -Kind 'Directory' -ToolTip 'Directory list entry.' -Placeholder $placeholder -HasOpenQuotePrefix:$hasOpenQuotePrefix)
+    if (-not $closingQuote) {
+        return $results
+    }
+
+    @($results | ForEach-Object {
+            New-FindStrCompletionResult -CompletionText ($_.CompletionText + $closingQuote) -ResultType $_.ResultType -ToolTip $_.ToolTip -ListItemText $_.ListItemText
+        })
 }
 
 function Get-FindStrTerminalCompletions {
@@ -546,7 +599,7 @@ function Complete-FindStr {
         [int]$cursorPosition
     )
 
-    $tokenState = Get-FindStrTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    $tokenState = Get-FindStrTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-FindStrArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
@@ -569,7 +622,7 @@ function Complete-FindStr {
         if ($null -ne $attachedInfo) {
             switch ($attachedInfo.RootKey) {
                 '/a' {
-                    return @(Get-FindStrPrefixedValueCompletions -Prefix $attachedInfo.Prefix -CurrentValue $attachedInfo.Value -Suggestions $catalog.ColorHints -ToolTip $attachedInfo.Switch.Description -Placeholder '<hh>')
+                    return @(Get-FindStrColorCompletion -Prefix $attachedInfo.Prefix -CurrentValue $attachedInfo.Value)
                 }
                 '/q' {
                     return @(Get-FindStrPrefixedValueCompletions -Prefix $attachedInfo.Prefix -CurrentValue $attachedInfo.Value -Suggestions $catalog.QuietFlags -ToolTip $attachedInfo.Switch.Description -Placeholder '<qflags>')

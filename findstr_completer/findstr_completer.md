@@ -94,7 +94,7 @@ findstr /C:"hello there
 
 Behavior by switch:
 
-- `/A:` suggests common two-digit color values and a `<hh>` placeholder
+- `/A:` suggests all 256 two-digit color attributes (background then foreground, using the digit table from `color /?`) with colour names in the tooltip, narrowing as digits are typed, and a `<hh>` placeholder when nothing matches
 - `/Q:` suggests `/Q:u`
 - `/F:` and `/G:` offer:
   - file/path completion
