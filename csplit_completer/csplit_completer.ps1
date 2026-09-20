@@ -362,8 +362,12 @@ function Complete-Csplit {
         return @()
     }
 
-    if ($currentWord.StartsWith('-') -and $currentWord.Length -gt 1) {
+    if ($currentWord.StartsWith('-')) {
         return @(
+            # A bare '-' in the FILE slot is also the documented stdin operand.
+            if ($currentWord -ceq '-' -and $operandIndex -eq 0) {
+                New-CsplitCompletionResult -CompletionText '-' -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'Read standard input instead of a FILE.'
+            }
             foreach ($option in Get-CsplitCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-CsplitCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-CsplitOptionDescription -Option $option)
@@ -374,10 +378,6 @@ function Complete-Csplit {
 
     if ($operandIndex -ge 1) {
         return Complete-CsplitPattern -CurrentWord $currentWord
-    }
-
-    if ($currentWord -ceq '-') {
-        return @(New-CsplitCompletionResult -CompletionText '-' -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'Read standard input instead of a FILE.')
     }
 
     Get-CsplitPathCompletions -InputPath $currentWord
