@@ -159,17 +159,30 @@ function ConvertTo-JqQuotedValue {
 }
 
 function Get-JqCommandTokens {
-    param([System.Management.Automation.Language.CommandAst]$CommandAst)
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
 
     if ($null -eq $CommandAst) {
         return @()
     }
 
-    return @($CommandAst.CommandElements | ForEach-Object { $_.Extent.Text.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    # The element under the cursor is the word being completed, not a filled slot, so it is
+    # left out ('jq ke' must not count 'ke' as the filter operand).
+    return @(
+        $CommandAst.CommandElements |
+            Where-Object { $_.Extent.EndOffset -lt $CursorPosition } |
+            ForEach-Object { $_.Extent.Text.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
 }
 
 function Get-JqPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$DirectoriesOnly
+    )
 
     $cleanInput = Remove-JqOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
@@ -194,7 +207,7 @@ function Get-JqPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') -and (-not $DirectoriesOnly -or $_.PSIsContainer) } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -224,8 +237,10 @@ function Complete-Jq {
     )
 
     $currentToken = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
-    $tokens = @(Get-JqCommandTokens -CommandAst $commandAst)
+    $tokens = @(Get-JqCommandTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
 
+    # A slot is a placeholder, 'path', 'dir' (-L takes a module directory) or an array of the
+    # literal values it accepts (--indent n, max 7).
     $arity = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
     $arity['--arg'] = @('<name>', '<value>')
     $arity['--argjson'] = @('<name>', '<json>')
@@ -233,9 +248,9 @@ function Complete-Jq {
     $arity['--slurpfile'] = @('<name>', 'path')
     $arity['-f'] = @('path')
     $arity['--from-file'] = @('path')
-    $arity['-L'] = @('path')
-    $arity['--library-path'] = @('path')
-    $arity['--indent'] = @('<n>')
+    $arity['-L'] = @('dir')
+    $arity['--library-path'] = @('dir')
+    $arity['--indent'] = @(, @('0', '1', '2', '3', '4', '5', '6', '7'))
 
     $pending = @()
     $operands = 0
@@ -259,8 +274,22 @@ function Complete-Jq {
 
     if ($pending.Count -gt 0) {
         $kind = $pending[0]
+        if ($kind -is [array]) {
+            return @(
+                foreach ($value in $kind) {
+                    if ($value.StartsWith($currentToken, [System.StringComparison]::Ordinal)) {
+                        New-JqCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip 'Spaces of indentation (max 7).'
+                    }
+                }
+            )
+        }
+
         if ($kind -eq 'path') {
             return Get-JqPathCompletions -InputPath $currentToken
+        }
+
+        if ($kind -eq 'dir') {
+            return Get-JqPathCompletions -InputPath $currentToken -DirectoriesOnly
         }
 
         if ([string]::IsNullOrWhiteSpace($currentToken)) {
