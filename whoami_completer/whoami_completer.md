@@ -58,7 +58,11 @@ At the root, the completer suggests:
 `/FO` and `/NH` are not advertised on an empty command line, but they are still available when the user explicitly starts typing them, because runtime accepts those switches before `/USER` or `/ALL`.
 
 ### Identity mode
-After `/UPN`, `/FQDN`, or `/LOGONID`, the completer treats the command as terminal and suppresses unhelpful filesystem fallback.
+After `/UPN`, `/FQDN`, or `/LOGONID`, the completer treats the command as terminal: typed text is echoed back unchanged so accepting a completion never rewrites it, and an empty word returns no result rather than a literal space.
+
+### Which whoami binary
+
+`whoami` can resolve to GNU coreutils `whoami.exe` when Git for Windows' `usr\bin` precedes `System32` on `PATH`. That build takes only `--help` and `--version` and rejects every Windows slash switch, so the completer checks which application `Get-Command whoami` resolves first (once per session) and offers `--help` / `--version` instead of the Windows switch set when it is not `System32\whoami.exe`.
 
 ### Detail-report mode
 After any of `/USER`, `/GROUPS`, `/CLAIMS`, or `/PRIV`, the completer:

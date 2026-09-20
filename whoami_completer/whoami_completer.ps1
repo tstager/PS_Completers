@@ -64,7 +64,37 @@ function Initialize-WhoamiCompletionCatalog {
         $catalog.SwitchInfo[$entry.Key] = $entry.Value
     }
 
+    # 'whoami' can resolve to GNU coreutils whoami (Git for Windows puts it
+    # ahead of System32 on PATH); that build takes only --help and --version
+    # and rejects every Windows slash switch, so model the binary the shell
+    # will actually launch.
+    $resolved = Get-Command -Name 'whoami' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $windowsBuild = Join-Path -Path $env:SystemRoot -ChildPath 'System32\whoami.exe'
+    $catalog.GnuBuild = [bool]($resolved -and $resolved.Source -and
+        -not $resolved.Source.Equals($windowsBuild, [System.StringComparison]::OrdinalIgnoreCase))
+
     $catalog.Initialized = $true
+}
+
+function Get-WhoamiGnuCompletions {
+    param([string]$CurrentWord)
+
+    $options = [ordered]@{
+        '--help'    = 'Display GNU whoami help and exit.'
+        '--version' = 'Output version information and exit.'
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in $options.GetEnumerator()) {
+        if (-not [string]::IsNullOrWhiteSpace($CurrentWord) -and
+            -not $entry.Key.StartsWith($CurrentWord, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+
+        $results.Add((New-WhoamiCompletionResult -CompletionText $entry.Key -ResultType 'ParameterName' -ToolTip $entry.Value))
+    }
+
+    @($results.ToArray())
 }
 
 function Get-WhoamiCurrentToken {
@@ -204,17 +234,23 @@ function Get-WhoamiFormatCompletions {
     @($results.ToArray())
 }
 
- function Get-WhoamiTerminalCompletions {
-     param(
-         [string]$CurrentWord,
-         [string]$ToolTip
-     )
- 
-    $completionText = if ([string]::IsNullOrEmpty($CurrentWord) -or $CurrentWord.StartsWith('/')) { ' ' } else { $CurrentWord }
-     @(
-         New-WhoamiCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip
-     )
- }
+function Get-WhoamiTerminalCompletions {
+    param(
+        [string]$CurrentWord,
+        [string]$ToolTip
+    )
+
+    # Nothing further is valid here. Typed text is echoed back unchanged so an
+    # accepted completion never rewrites it, and an empty word gets no result
+    # rather than a literal space that would be inserted.
+    if ([string]::IsNullOrEmpty($CurrentWord)) {
+        return @()
+    }
+
+    @(
+        New-WhoamiCompletionResult -CompletionText $CurrentWord -ResultType 'ParameterValue' -ToolTip $ToolTip
+    )
+}
 
 function Get-WhoamiSwitchCompletions {
     param(
@@ -280,26 +316,24 @@ function Complete-Whoami {
 
     Initialize-WhoamiCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
+    # Tokens are split at the cursor rather than at the end of the line, so a
+    # cursor inside an earlier token completes that token and ignores the rest.
     $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-WhoamiCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
+    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
-    } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-WhoamiCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     } else {
-        $wordToComplete
+        Get-WhoamiCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
+    $tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
+
+    if ((Get-WhoamiCompletionCatalog).GnuBuild) {
+        return @(Get-WhoamiGnuCompletions -CurrentWord $currentWord)
     }
 
     $state = Get-WhoamiCommandState -TokensBeforeCurrent $tokensBeforeCurrent
