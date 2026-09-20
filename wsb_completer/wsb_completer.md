@@ -42,7 +42,8 @@ The file keeps its top level compatible with `CompleterActions`:
 ## Runtime quirks
 
 - `wsb.exe` is a modern command-style CLI that supports subcommands and `--help`.
-- Running sandbox IDs are discovered from `wsb list --raw` and cached briefly in script scope.
+- Running sandbox IDs are discovered from `wsb list --raw`, run through a child process with stdin closed and a 5-second bound, and cached for 30 seconds in script scope whether or not any were found.
+- `--version` is offered at the root only; every subcommand's `--help` lists just `--raw` and `-?`/`-h`/`--help`.
 - Sandbox-internal values such as `--working-directory` and `--sandbox-path` deliberately use placeholders instead of local filesystem probing.
 
 ## Validation examples

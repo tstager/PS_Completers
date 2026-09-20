@@ -80,9 +80,14 @@ function Get-WsbMetadata {
         return $script:WsbMetadata
     }
 
-    $globalOptions = @(
+    # Every subcommand's --help lists only --raw and -?/-h/--help; --version is
+    # accepted at the root only.
+    $sharedOptions = @(
         New-WsbOptionSpec -Tokens @('--raw') -Description 'Format output as JSON.'
         New-WsbOptionSpec -Tokens @('-?', '-h', '--help') -Description 'Show help.'
+    )
+    $globalOptions = @(
+        $sharedOptions
         New-WsbOptionSpec -Tokens @('--version') -Description 'Show version information.'
     )
 
@@ -90,36 +95,36 @@ function Get-WsbMetadata {
         New-WsbCommandSpec -Names @('StartSandbox', 'start') -Description 'Start an instance of Windows Sandbox.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
             New-WsbOptionSpec -Tokens @('-c', '--config') -Description 'Formatted config string used to create the Windows Sandbox environment.' -ValueKind 'ConfigString'
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('ListRunningSandboxes', 'list') -Description 'List the IDs of all running Windows Sandbox environments.' -Options @(
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('Execute', 'exec') -Description 'Execute a command in the running Windows Sandbox environment.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
             New-WsbOptionSpec -Tokens @('-c', '--command') -Description 'The command to execute within Windows Sandbox.' -ValueKind 'CommandString'
             New-WsbOptionSpec -Tokens @('-d', '--working-directory') -Description 'Directory inside Windows Sandbox to execute the command in.' -ValueKind 'SandboxPath'
             New-WsbOptionSpec -Tokens @('-r', '--run-as') -Description 'User context to run the command as.' -ValueKind 'RunAs'
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('ShareFolder', 'share') -Description 'Share a host folder into the Windows Sandbox session.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
             New-WsbOptionSpec -Tokens @('-f', '--host-path') -Description 'Host folder path to share.' -ValueKind 'HostDirectoryPath'
             New-WsbOptionSpec -Tokens @('-s', '--sandbox-path') -Description 'Destination path inside Windows Sandbox.' -ValueKind 'SandboxPath'
             New-WsbOptionSpec -Tokens @('-w', '--allow-write') -Description 'Allow writes from the sandbox to the shared host folder.'
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('StopSandbox', 'stop') -Description 'Terminate a running Windows Sandbox.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('ConnectToSandbox', 'connect') -Description 'Start a remote session for a Windows Sandbox environment.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
-            $globalOptions
+            $sharedOptions
         )
         New-WsbCommandSpec -Names @('GetIpAddress', 'ip') -Description 'Get the IP address of the Windows Sandbox environment.' -Options @(
             New-WsbOptionSpec -Tokens @('--id') -Description 'ID of the Windows Sandbox environment.' -ValueKind 'SandboxId'
-            $globalOptions
+            $sharedOptions
         )
     )
 
@@ -222,34 +227,70 @@ function Get-WsbArgumentsFromTokenState {
 }
 
 function Get-WsbRunningSandboxIds {
+    # Sandbox IDs are cached for 30 seconds whether or not the probe found any,
+    # so a slow or stopped Windows Sandbox service is asked at most twice a
+    # minute rather than on every keystroke.
     if (Get-Variable -Name WsbSandboxIdCache -Scope Script -ErrorAction Ignore) {
         $cache = $script:WsbSandboxIdCache
-        if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 10) {
-            return $cache.Values
+        if (((Get-Date) - $cache.UpdatedAt).TotalSeconds -lt 30) {
+            return @($cache.Values)
         }
+
+        $commandPath = $cache.CommandPath
+    } else {
+        $command = Get-Command -Name wsb.exe -ErrorAction SilentlyContinue
+        $commandPath = if ($command) { $command.Source } else { $null }
     }
 
     $values = @()
-    if (Get-Command -Name wsb.exe -ErrorAction SilentlyContinue) {
+    if ($commandPath) {
+        # The child process runs with stdin closed and a 5 s bound so a hung
+        # service cannot hang the completion thread with it.
         try {
-            $jsonText = (& wsb.exe list --raw 2>$null | Out-String)
-            if (-not [string]::IsNullOrWhiteSpace($jsonText)) {
-                $parsed = $jsonText | ConvertFrom-Json -ErrorAction Stop
-                if ($parsed.WindowsSandboxEnvironments) {
-                    foreach ($entry in @($parsed.WindowsSandboxEnvironments)) {
-                        if ($entry.Id) {
-                            $values += [string]$entry.Id
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $commandPath
+            $startInfo.ArgumentList.Add('list')
+            $startInfo.ArgumentList.Add('--raw')
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardInput = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            try {
+                $process.StandardInput.Close()
+                $outputTask = $process.StandardOutput.ReadToEndAsync()
+                $errorTask = $process.StandardError.ReadToEndAsync()
+                if ($process.WaitForExit(5000)) {
+                    [void]$errorTask.Result
+                    $jsonText = $outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+                    if (-not [string]::IsNullOrWhiteSpace($jsonText)) {
+                        $parsed = $jsonText | ConvertFrom-Json -ErrorAction Stop
+                        if ($parsed.WindowsSandboxEnvironments) {
+                            foreach ($entry in @($parsed.WindowsSandboxEnvironments)) {
+                                if ($entry.Id) {
+                                    $values += [string]$entry.Id
+                                }
+                            }
                         }
                     }
+                } else {
+                    $process.Kill()
                 }
+            } finally {
+                $process.Dispose()
             }
         } catch {
+            Write-Debug ('wsb completer: sandbox discovery failed: ' + $_.Exception.Message)
             $values = @()
         }
     }
 
     $values = @($values | Sort-Object -Unique)
-    $script:WsbSandboxIdCache = [pscustomobject]@{ UpdatedAt = Get-Date; Values = $values }
+    $script:WsbSandboxIdCache = [pscustomobject]@{ UpdatedAt = Get-Date; Values = $values; CommandPath = $commandPath }
     @($values)
 }
 
@@ -558,7 +599,7 @@ function Complete-Wsb {
     )
 
     $metadata = Get-WsbMetadata
-    $tokenState = Get-WsbTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    $tokenState = Get-WsbTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-WsbArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
