@@ -36,7 +36,7 @@ function Get-XargsOptionSpecs {
         [pscustomobject]@{ Token = '-E'; LongToken = ''; Description = 'Set logical EOF string'; ValueKind = 'EofString' },
         [pscustomobject]@{ Token = '-e'; LongToken = '--eof'; Description = 'Equivalent to -E END if END is specified'; ValueKind = 'EofString' },
         [pscustomobject]@{ Token = '-I'; LongToken = ''; Description = 'Same as --replace=R'; ValueKind = 'ReplaceText' },
-        [pscustomobject]@{ Token = '-i'; LongToken = '--replace'; Description = 'Replace R in INITIAL-ARGS with names read from standard input'; ValueKind = 'ReplaceText' },
+        [pscustomobject]@{ Token = '-i'; LongToken = '--replace'; Description = 'Replace R in INITIAL-ARGS with names read from standard input (R only in the attached form -iR / --replace=R; otherwise {})'; ValueKind = 'ReplaceTextAttached' },
         [pscustomobject]@{ Token = '-L'; LongToken = '--max-lines'; Description = 'Use at most MAX-LINES non-blank input lines per command line'; ValueKind = 'Integer' },
         [pscustomobject]@{ Token = '-l'; LongToken = ''; Description = 'Similar to -L but defaults to at most one non-blank input line'; ValueKind = 'OptionalInteger' },
         [pscustomobject]@{ Token = '-n'; LongToken = '--max-args'; Description = 'Use at most MAX-ARGS arguments per command line'; ValueKind = 'Integer' },
@@ -62,8 +62,9 @@ function Get-XargsOptionSpecByToken {
         return $null
     }
 
+    # Ordinal: -P/-p, -L/-l, -I/-i and -E/-e are distinct options.
     foreach ($option in Get-XargsOptionSpecs) {
-        if ($option.Token -eq $cleanToken -or $option.LongToken -eq $cleanToken) {
+        if ([string]::Equals($option.Token, $cleanToken, [System.StringComparison]::Ordinal) -or [string]::Equals($option.LongToken, $cleanToken, [System.StringComparison]::Ordinal)) {
             return $option
         }
     }
@@ -89,7 +90,7 @@ function Get-XargsOptionSuggestions {
             continue
         }
 
-        if ($matchingText -like ([System.Management.Automation.WildcardPattern]::Escape($typed) + '*')) {
+        if ($matchingText -clike ([System.Management.Automation.WildcardPattern]::Escape($typed) + '*')) {
             $completionText = if ($Prefix) { $Prefix + $matchingText } else { $matchingText }
             [void]$results.Add((New-XargsCompletionResult -CompletionText $completionText -ResultType 'ParameterName' -ToolTip $option.Description -ListItemText $matchingText))
         }
@@ -180,6 +181,7 @@ function Get-XargsValueSuggestions {
         'Integer' { '<max>' }
         'OptionalInteger' { '<max-lines>' }
         'ReplaceText' { '<R>' }
+        'ReplaceTextAttached' { '<R>' }
         'EofString' { '<eof-string>' }
         'VarName' { '<var>' }
         default { $null }
@@ -236,9 +238,10 @@ function Test-XargsCommandOperandSeen {
             continue
         }
 
+        # -i/--replace only take R attached, so the token after them is the COMMAND.
         if ($token -match '^--[A-Za-z0-9-]+$') {
             $spec = Get-XargsOptionSpecByToken -Token $token
-            if ($spec -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger')) {
+            if ($spec -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger', 'ReplaceTextAttached')) {
                 $skipNext = $true
             }
             continue
@@ -246,7 +249,7 @@ function Test-XargsCommandOperandSeen {
 
         if ($token -match '^-[A-Za-z0-9]') {
             $spec = Get-XargsOptionSpecByToken -Token $token.Substring(0, 2)
-            if ($spec -and $token.Length -eq 2 -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger')) {
+            if ($spec -and $token.Length -eq 2 -and $spec.ValueKind -notin @('NoValue', 'OptionalInteger', 'ReplaceTextAttached')) {
                 $skipNext = $true
             }
             continue
@@ -279,7 +282,7 @@ function Get-XargsCompletionContext {
     if ($TokensBeforeCurrent.Count -gt 0) {
         $lastToken = $TokensBeforeCurrent[-1]
         $optionSpec = Get-XargsOptionSpecByToken -Token $lastToken
-        if ($optionSpec -and $optionSpec.ValueKind -ne 'NoValue') {
+        if ($optionSpec -and $optionSpec.ValueKind -notin @('NoValue', 'ReplaceTextAttached')) {
             return [pscustomobject]@{
                 OptionSpec = $optionSpec
                 ValueText  = $currentValue

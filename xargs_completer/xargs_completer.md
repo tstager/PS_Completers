@@ -93,4 +93,5 @@ Expected behavior:
 ## Limitations / notes
 
 - PowerShell does not invoke native completers for an empty word directly after a `{}` script-block token, so `xargs -I {} ` followed by Tab shows nothing until a letter is typed.
-- `-l[N]` and `-e[=END]` take their optional value attached; the completer still offers a placeholder in the following slot.
+- Option lookup is ordinal, so `-P`/`-p`, `-L`/`-l`, `-I`/`-i` and `-E`/`-e` resolve to their own specs (`xargs -p ` offers the command, `xargs -P ` offers `<max>`), and typing `-p` lists only `-p`.
+- `-i`/`--replace` take R only attached (`-iR`, `--replace=R`; otherwise `{}`), so the token after `-i` is the command: `xargs -i ` offers command names and `xargs -i ls ` does not offer them again. The resolved uutils findutils 0.10.0 consumes the next token for `-e` and `-l` (GNU only accepts those attached), so the completer keeps offering a placeholder in the slot after them.
