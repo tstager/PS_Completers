@@ -66,7 +66,7 @@ Key mode-sensitive behaviors:
 
 For switches that take values, the completer returns semantic suggestions instead of filesystem fallback:
 
-- `-h` -> histogram hints such as `20`, `100`, `0.01,0.05,1,5,10`, and `<buckets|comma-separated thresholds>`
+- `-h` -> histogram hints such as `20`, `100`, `0.01,0.05,1,5,10`, and `<buckets|comma-separated thresholds>`; the argument is optional (`-h [buckets|val1,val2,...]`), so an empty slot also offers the destination and `psping -h localhost` completes the host
 - `-i` -> `0`, `0.1`, `1`, `<seconds>` in ping modes; `1`, `4`, `8`, `16`, `<outstanding I/Os>` in bandwidth mode
 - `-l` -> request sizes such as `64`, `1k`, `8k`, `64k`, `1m`, and `<requestsize[k|m]>`
 - `-n` -> counts such as `10`, `100`, `1000`, `10s`, and `<count[s]>`
@@ -99,7 +99,7 @@ The completer is designed around the documented PsPing surfaces:
 
 ### Shared/common switches
 
-The static grammar covers the documented shared/common switches:
+The static grammar covers the documented shared/common switches (plus `-nobanner` and the undocumented but universal Sysinternals `-accepteula`):
 
 - `-n`
 - `-i`

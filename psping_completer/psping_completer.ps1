@@ -117,12 +117,42 @@ function Get-PsPingRootHelpText {
         return $null
     }
 
+    # psping writes its help as UTF-16LE when redirected, so the capture decodes
+    # stdout/stderr as Unicode; stdin is closed and the call is bounded so a
+    # prompt (EULA) or a hang can never stall the completion thread.
+    $text = ''
     try {
-        $script:PsPingCompletionCatalog.RootHelpText = (($null | & $commandName -? 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' }) -join [Environment]::NewLine)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $commandName
+        $startInfo.ArgumentList.Add('-nobanner')
+        $startInfo.ArgumentList.Add('-?')
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::Unicode
+        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::Unicode
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if ($process.WaitForExit(5000)) {
+                $text = ($outputTask.Result + $errorTask.Result) -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+            } else {
+                $process.Kill()
+            }
+        } finally {
+            $process.Dispose()
+        }
     } catch {
-        $script:PsPingCompletionCatalog.RootHelpText = ''
+        Write-Debug ('psping completer: help capture failed: ' + $_.Exception.Message)
+        $text = ''
     }
 
+    $script:PsPingCompletionCatalog.RootHelpText = $text
     $script:PsPingCompletionCatalog.RootHelpText
 }
 
@@ -159,7 +189,8 @@ function Initialize-PsPingCompletionCatalog {
         '-w',
         '-4',
         '-6',
-        '-nobanner'
+        '-nobanner',
+        '-accepteula'
     )
 
     $script:PsPingCompletionCatalog.SwitchInfo = @{
@@ -179,6 +210,7 @@ function Initialize-PsPingCompletionCatalog {
         '-4'        = @{ Description = 'Force using IPv4.' }
         '-6'        = @{ Description = 'Force using IPv6.' }
         '-nobanner' = @{ Description = 'Do not display the startup banner and copyright message.' }
+        '-accepteula' = @{ Description = 'Accept the Sysinternals license agreement silently (undocumented in psping -?, accepted by every Sysinternals tool).' }
     }
 
     $rootHelpText = Get-PsPingRootHelpText
@@ -290,7 +322,10 @@ function Get-PsPingCommandState {
                 break
             }
             '-h' {
-                if ($null -ne $nextToken -and -not $nextToken.StartsWith('-')) {
+                # '-h [buckets|val1,val2,...]': the argument is optional, so only
+                # a bucket count or threshold list is consumed; 'psping -h host'
+                # keeps host as the destination.
+                if ($null -ne $nextToken -and $nextToken -match '^[\d.,]+$') {
                     $valuesBySwitch[$lookup] = $nextToken
                     $i++
                 }
@@ -332,7 +367,9 @@ function Get-PsPingCommandState {
                 $valueContext = '-?'
             }
             '-h' {
-                $valueContext = '-h'
+                if ($CurrentWord -match '^[\d.,]*$') {
+                    $valueContext = '-h'
+                }
             }
             '-u' {
                 if ($mode -eq 'bandwidth-client') {
@@ -397,19 +434,19 @@ function Get-PsPingModeSwitchTokens {
 
     switch ($Mode) {
         'server' {
-            @('-?', '-s', '-f', '-4', '-6', '-nobanner')
+            @('-?', '-s', '-f', '-4', '-6', '-nobanner', '-accepteula')
         }
         'bandwidth-client' {
-            @('-?', '-b', '-u', '-i', '-l', '-n', '-w', '-h', '-r', '-f', '-4', '-6', '-nobanner')
+            @('-?', '-b', '-u', '-i', '-l', '-n', '-w', '-h', '-r', '-f', '-4', '-6', '-nobanner', '-accepteula')
         }
         'latency-client' {
-            @('-?', '-u', '-l', '-n', '-w', '-h', '-r', '-f', '-4', '-6', '-nobanner')
+            @('-?', '-u', '-l', '-n', '-w', '-h', '-r', '-f', '-4', '-6', '-nobanner', '-accepteula')
         }
         'tcp-ping' {
-            @('-?', '-h', '-i', '-l', '-q', '-t', '-n', '-w', '-4', '-6', '-nobanner')
+            @('-?', '-h', '-i', '-l', '-q', '-t', '-n', '-w', '-4', '-6', '-nobanner', '-accepteula')
         }
         'icmp-ping' {
-            @('-?', '-h', '-i', '-l', '-q', '-t', '-n', '-w', '-4', '-6', '-nobanner')
+            @('-?', '-h', '-i', '-l', '-q', '-t', '-n', '-w', '-4', '-6', '-nobanner', '-accepteula')
         }
         default {
             @($script:PsPingCompletionCatalog.SwitchOrder)
@@ -727,6 +764,17 @@ function Complete-PsPing {
             if (-not $seenCompletions.ContainsKey($result.CompletionText)) {
                 $seenCompletions[$result.CompletionText] = $true
                 [void]$results.Add($result)
+            }
+        }
+
+        if ($state.ValueContext -eq '-h' -and [string]::IsNullOrWhiteSpace($currentWord)) {
+            # The histogram argument is optional, so the destination is just as
+            # valid in this slot.
+            foreach ($result in (Get-PsPingPositionalCompletions -CurrentWord $currentWord -Mode $state.Mode)) {
+                if (-not $seenCompletions.ContainsKey($result.CompletionText)) {
+                    $seenCompletions[$result.CompletionText] = $true
+                    [void]$results.Add($result)
+                }
             }
         }
 
