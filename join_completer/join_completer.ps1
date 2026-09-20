@@ -30,6 +30,12 @@ function Get-JoinCompletionOptions {
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            # Only option-table rows are harvested; the GNU trailer 'E.g., use "sort -k 1b,1" ...'
+            # otherwise injects a '-k' option join does not have.
+            if ($line -notmatch '^\s+-') {
+                continue
+            }
+
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
@@ -130,7 +136,8 @@ function Get-JoinCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    # An unterminated quote ('"my file') is one token, matching what PowerShell hands over.
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -188,12 +195,51 @@ function Get-JoinPathCompletions {
     }
 }
 
+function Get-JoinOptionValueTable {
+    $fields = @(
+        @{ Text = '1'; Tip = 'Field 1 (fields are counted from 1).' }
+        @{ Text = '2'; Tip = 'Field 2.' }
+        @{ Text = '3'; Tip = 'Field 3.' }
+        @{ Text = '<field>'; Tip = 'Field number, counted from 1.' }
+    )
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['-a'] = @(
+        @{ Text = '1'; Tip = 'Also print unpairable lines from FILE1.' }
+        @{ Text = '2'; Tip = 'Also print unpairable lines from FILE2.' }
+    )
+    $table['-v'] = @(
+        @{ Text = '1'; Tip = 'Print only the unpairable lines from FILE1.' }
+        @{ Text = '2'; Tip = 'Print only the unpairable lines from FILE2.' }
+    )
+    $table['-1'] = $fields
+    $table['-2'] = $fields
+    $table['-j'] = $fields
+    $table['-e'] = @(
+        @{ Text = '<empty>'; Tip = 'String that replaces missing input fields.' }
+    )
+    $table['-o'] = @(
+        @{ Text = 'auto'; Tip = 'The first line of each file determines the number of output fields.' }
+        @{ Text = '0'; Tip = 'The join field.' }
+        @{ Text = '<format>'; Tip = 'Comma or blank separated list of FILENUM.FIELD or 0.' }
+    )
+    $table['-t'] = @(
+        @{ Text = ','; Tip = 'Comma field separator.' }
+        @{ Text = ';'; Tip = 'Semicolon field separator.' }
+        @{ Text = ':'; Tip = 'Colon field separator.' }
+        @{ Text = '|'; Tip = 'Pipe field separator.' }
+        @{ Text = "`t"; Display = '<tab>'; Quoted = '"`t"'; Tip = 'Tab field separator (PowerShell "`t" escape).' }
+        @{ Text = '<char>'; Tip = 'Single character used as the input and output field separator.' }
+    )
+    $table
+}
+
 function Get-JoinOptionValueCompletions {
     param(
-        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [string[]]$TokensBeforeCurrent,
         [string]$CurrentWord
     )
 
+    $table = Get-JoinOptionValueTable
     $option = $null
     $prefix = $CurrentWord
     $attached = ''
@@ -201,68 +247,83 @@ function Get-JoinOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
-    } elseif (-not $CurrentWord.StartsWith('-')) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-        if ([string]::IsNullOrEmpty($CurrentWord)) {
-            if ($elements.Count -gt 1) {
-                $option = $elements[-1]
-            }
-        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
-            $option = $elements[-2]
+    } elseif ($CurrentWord -cmatch '^(?<option>-[A-Za-z0-9])(?<value>.+)$' -and $table.ContainsKey($Matches['option'])) {
+        # Attached short form ('-a1', '-t,').
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option
+    } elseif (-not $CurrentWord.StartsWith('-') -and $null -ne $TokensBeforeCurrent -and $TokensBeforeCurrent.Count -gt 0) {
+        # The option is the token before the cursor, so editing mid-line keeps its value slot.
+        $option = $TokensBeforeCurrent[-1]
+    }
+
+    if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
+        return @()
+    }
+
+    # A quoted or half-quoted value is matched on its bare text and re-quoted the same way.
+    $quote = ''
+    if ($prefix.Length -gt 0 -and ($prefix[0] -eq '"' -or $prefix[0] -eq "'")) {
+        $quote = [string]$prefix[0]
+        $prefix = $prefix.Substring(1)
+        if ($prefix.EndsWith($quote)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
         }
     }
 
-    if ([string]::IsNullOrEmpty($option)) {
-        return @()
-    }
-
-    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $table['-a'] = @(
-        @{ Text = '1'; Tip = 'File 1.' }
-        @{ Text = '2'; Tip = 'File 2.' }
-    )
-    $table['-v'] = @(
-        @{ Text = '1'; Tip = 'File 1.' }
-        @{ Text = '2'; Tip = 'File 2.' }
-    )
-    $table['-1'] = @(
-        @{ Text = '<field>'; Tip = 'Field number.' }
-    )
-    $table['-2'] = @(
-        @{ Text = '<field>'; Tip = 'Field number.' }
-    )
-    $table['-j'] = @(
-        @{ Text = '<field>'; Tip = 'Field number.' }
-    )
-    $table['-e'] = @(
-        @{ Text = '<empty>'; Tip = 'Replacement for missing fields.' }
-    )
-    $table['-o'] = @(
-        @{ Text = 'auto'; Tip = 'Output all fields of the first line.' }
-        @{ Text = '<format>'; Tip = 'FILENUM.FIELD list.' }
-    )
-    $table['-t'] = @(
-        @{ Text = '<char>'; Tip = 'Field separator character.' }
-    )
-    if (-not $table.ContainsKey($option)) {
-        return @()
-    }
-
-    $spec = $table[$option]
-    if ($spec -is [string] -and $spec -eq 'path') {
-        return @(
-            foreach ($result in Get-JoinPathCompletions -InputPath $prefix) {
-                New-JoinCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
-            }
-        )
-    }
-
-    $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
     @(
-        foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-JoinCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+        foreach ($entry in $table[$option]) {
+            # A '<placeholder>' describes the empty slot only; once the user types, the concrete
+            # candidates are what can match.
+            if ($entry.Text -match '^<.*>$') {
+                if (-not [string]::IsNullOrEmpty($prefix)) {
+                    continue
+                }
+            } elseif (-not $entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                continue
             }
+
+            $display = if ($entry.ContainsKey('Display')) { $entry.Display } else { $entry.Text }
+            $completion = if ($entry.ContainsKey('Quoted')) {
+                $entry.Quoted
+            } elseif ($quote) {
+                $quote + $entry.Text + $quote
+            } else {
+                $entry.Text
+            }
+
+            New-JoinCompletionResult -CompletionText ($attached + $completion) -ListItemText $display -ResultType 'ParameterValue' -ToolTip $entry.Tip
+        }
+    )
+}
+
+function Complete-JoinShortFlagCluster {
+    param([string]$CurrentWord)
+
+    # Boolean short flags cluster ('-iz'); extend a cluster of known value-less short flags with
+    # each remaining one.
+    if ($CurrentWord -notmatch '^-[A-Za-z]{2,}$') {
+        return @()
+    }
+
+    $valueOptions = Get-JoinOptionValueTable
+    $booleanFlags = @(Get-JoinCompletionOptions | Where-Object { $_ -cmatch '^-[A-Za-z]$' -and -not $valueOptions.ContainsKey($_) })
+    $usedLetters = @($CurrentWord.Substring(1).ToCharArray() | ForEach-Object { [string]$_ })
+    foreach ($letter in $usedLetters) {
+        if (('-' + $letter) -cnotin $booleanFlags) {
+            return @()
+        }
+    }
+
+    @(
+        foreach ($flag in $booleanFlags) {
+            $letter = $flag.Substring(1)
+            if ($letter -cin $usedLetters) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $letter
+            New-JoinCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $flag, (Get-JoinOptionDescription -Option $flag))
         }
     )
 }
@@ -291,7 +352,15 @@ function Complete-Join {
         Get-JoinCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-JoinOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $tokensBeforeCurrent = @(
+        foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+            if ($element.Extent.EndOffset -lt $cursorPosition) {
+                $element.Extent.Text
+            }
+        }
+    )
+
+    $optionValues = @(Get-JoinOptionValueCompletions -TokensBeforeCurrent $tokensBeforeCurrent -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }
@@ -301,13 +370,18 @@ function Complete-Join {
     }
 
     if ($currentWord.StartsWith('-')) {
-        return @(
+        $optionMatches = @(
             foreach ($option in Get-JoinCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-JoinCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-JoinOptionDescription -Option $option)
                 }
             }
         )
+        if ($optionMatches.Count -gt 0) {
+            return $optionMatches
+        }
+
+        return Complete-JoinShortFlagCluster -CurrentWord $currentWord
     }
 
     Get-JoinPathCompletions -InputPath $currentWord

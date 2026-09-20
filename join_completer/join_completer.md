@@ -65,7 +65,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
-- Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
+- Value-bearing options complete their documented values in the separate form (`-a 1`), the attached forms (`--opt=value` and the short `-a1`, `-t,`) and for a partially typed value; the option is the command element before the cursor, so editing mid-line keeps the value slot. A `<placeholder>` entry describes only the empty slot and disappears once a real character is typed, leaving the concrete candidates (`1`, `2`, `3` for fields; `,`, `;`, `:`, `|`, tab for `-t`; `auto`, `0` for `-o`). Quoted values are matched bare and re-quoted. See the table below.
+- Only option-table rows are harvested from the help, so the GNU trailer `E.g., use "sort -k 1b,1" ...` no longer injects a `-k` option.
+- A single-dash word made only of known value-less short flags (`-iz`) is treated as a getopt cluster and completed by appending each remaining boolean flag.
+- The current-token regex accepts an unterminated quote, so `join "my file` completes `"my file.txt"`.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
@@ -73,10 +76,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ## Option values
 
 - `-a`, `-v`: `1`, `2`
-- `-1`, `-2`, `-j`: `<field>`
+- `-1`, `-2`, `-j`: `1`, `2`, `3`, `<field>`
 - `-e`: `<empty>`
-- `-o`: `auto`, `<format>`
-- `-t`: `<char>`
+- `-o`: `auto`, `0`, `<format>`
+- `-t`: `,`, `;`, `:`, `|`, `` "`t" ``, `<char>`
 
 ## Representative validation scenarios
 
