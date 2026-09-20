@@ -106,10 +106,10 @@ Directory completions append a trailing `\`. Values are quoted when needed for s
 After the source and destination directories are present, the completer suggests:
 
 - wildcard file patterns: `*`, `*.*`
-- source-relative files and directories for general file-spec completion
+- source-relative files only for general file-spec completion and `/XF` (robocopy's file spec and `/XF` take file names; directories belong to `/XD`)
 - source-relative directories only for `/XD`
 
-If the source directory cannot be resolved, source-relative suggestions are effectively unavailable.
+Listings are capped at 300 entries so a source such as `System32` cannot stall the prompt. If the source directory cannot be resolved, source-relative suggestions are effectively unavailable; a UNC source is never resolved or enumerated from the completion thread (the typed path is kept as is).
 
 ### Inline flag and list values
 
@@ -126,7 +126,7 @@ Examples include:
 
 ### Job-file completion
 
-For `/JOB:` and `/SAVE:`, the completer looks for `*.rcj` files in the current directory and offers the file name without the `.rcj` extension.
+For `/JOB:` and `/SAVE:`, the completer looks for `*.rcj` files in the current directory and offers the file name without the `.rcj` extension. When nothing matches it offers a `<jobname>` placeholder (or keeps the typed name) instead of echoing `/JOB:` back as an option.
 
 ## Dependencies or external command expectations
 
@@ -153,5 +153,7 @@ robocopy C:\Source\ C:\Dest\ /XF <TAB>
 - The script only provides structured separate-value handling for `/XF` and `/XD`.
 - Optional inline-value options such as `/MT`, `/SPARSE`, and `/LFSM` are completed when you type the inline form, for example `/MT:`.
 - Source-relative completion depends on the first positional argument resolving to an existing directory.
-- The option catalog is initialized from the installed `robocopy.exe` help text plus the script's static metadata, so descriptions track the local tool reasonably closely.
+- The option catalog is initialized from the installed `robocopy.exe` help text plus the script's static metadata, so descriptions track the local tool reasonably closely. Only a canonical `<option> :: <text>` help line describes the option that starts it; options mentioned inside another option's text or in the Remarks section never inherit that text.
+- Every word after `/XF` or `/XD` up to the next switch is treated as another exclusion, which is how `robocopy.exe` itself parses the line (`robocopy /XD tmp C:\src C:\dst` reports "No Source Directory Specified"); put the source and destination first.
+- A source or destination operand slot with nothing to list offers a `<directory>` placeholder so the engine does not substitute file names.
 

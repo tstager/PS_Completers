@@ -8,6 +8,7 @@ if (-not (Get-Variable -Name RobocopyCompletionCatalog -Scope Script -ErrorActio
         Initialized     = $false
         Options         = @()
         OptionInfoByKey = @{}
+        MaxPathResults  = 300
     }
 }
 
@@ -393,11 +394,19 @@ function Initialize-RobocopyCompletion {
             continue
         }
 
+        # Only a canonical '<option> :: <text>' line describes an option, and only
+        # the option that starts the line. Cross-references inside another
+        # option's text and the Remarks prose may register a token they mention
+        # but never overwrite its description.
+        $describedKey = $null
         $description = ''
-        if ($line -match '::\s*(.+)$') {
-            $description = $matches[1].Trim()
-        } else {
-            $description = ([regex]::Replace($line, '(?<!\S)/[A-Za-z0-9?][^\s]*', '') -replace '\s{2,}', ' ').Trim(' ', ':')
+        $canonical = [regex]::Match($line, '^\s*(?<token>/[A-Za-z0-9?][^\s]*)[^:]*::\s*(?<description>.+)$')
+        if ($canonical.Success) {
+            $describedToken = ConvertFrom-RobocopyHelpToken -Token $canonical.Groups['token'].Value
+            if ($null -ne $describedToken) {
+                $describedKey = $describedToken.Key
+                $description = $canonical.Groups['description'].Value.Trim()
+            }
         }
 
         foreach ($match in [regex]::Matches($line, '(?<!\S)/[A-Za-z0-9?][^\s]*')) {
@@ -407,8 +416,9 @@ function Initialize-RobocopyCompletion {
             }
 
             $key = $parsed.Key
+            $isDescribed = ($key -eq $describedKey) -and -not [string]::IsNullOrWhiteSpace($description)
             if ($catalog.ContainsKey($key)) {
-                if (-not [string]::IsNullOrWhiteSpace($description)) {
+                if ($isDescribed) {
                     $catalog[$key]['Description'] = $description
                 }
 
@@ -424,7 +434,7 @@ function Initialize-RobocopyCompletion {
             }
 
             $catalog[$key] = @{} + $parsed
-            if (-not [string]::IsNullOrWhiteSpace($description)) {
+            if ($isDescribed) {
                 $catalog[$key]['Description'] = $description
             }
         }
@@ -464,14 +474,20 @@ function Resolve-RobocopySourcePath {
     param([string]$PathText)
 
     $cleanPath = Remove-RobocopyOuterQuotes $PathText
-    if ([string]::IsNullOrWhiteSpace($cleanPath)) {
+    if ([string]::IsNullOrWhiteSpace($cleanPath) -or $cleanPath.StartsWith('\\')) {
+        # A UNC source is never resolved from the completion thread.
         return $null
     }
 
+    $errorCountBefore = $Error.Count
     try {
         (Resolve-Path -LiteralPath $cleanPath -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Path)
     } catch {
         $null
+    } finally {
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
+        }
     }
 }
 
@@ -546,7 +562,7 @@ function Get-RobocopyUniqueCompletions {
     param([System.Management.Automation.CompletionResult[]]$Results)
 
     $seen = @{}
-    $unique = @()
+    $unique = New-Object System.Collections.Generic.List[object]
 
     foreach ($result in $Results) {
         if ($null -eq $result) {
@@ -558,10 +574,10 @@ function Get-RobocopyUniqueCompletions {
         }
 
         $seen[$result.CompletionText] = $true
-        $unique += $result
+        [void]$unique.Add($result)
     }
 
-    $unique
+    @($unique.ToArray())
 }
 
 function Get-RobocopyPathCompletions {
@@ -573,6 +589,14 @@ function Get-RobocopyPathCompletions {
 
     $cleanInput = Remove-RobocopyOuterQuotes $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+
+    if ($cleanInput.StartsWith('\\')) {
+        # robocopy's dominant use is UNC, but a share is never enumerated from
+        # the completion thread: keep the typed path and say so.
+        return @(
+            New-RobocopyCompletionResult -CompletionText $InputPath -ListItemText '<\\server\share\path>' -ResultType 'ParameterValue' -ToolTip 'UNC path; network shares are not enumerated during completion.'
+        )
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -599,7 +623,8 @@ function Get-RobocopyPathCompletions {
         $items = $items | Where-Object { -not $_.PSIsContainer }
     }
 
-    foreach ($item in $items | Sort-Object -Property Name) {
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $items | Sort-Object -Property Name | Select-Object -First $script:RobocopyCompletionCatalog.MaxPathResults) {
         if ($inputIsRooted) {
             $pathText = Join-Path -Path $parent -ChildPath $item.Name
         } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -618,12 +643,21 @@ function Get-RobocopyPathCompletions {
             $CompletionPrefix + $pathText
         }
 
-        New-RobocopyCompletionResult `
+        [void]$results.Add((New-RobocopyCompletionResult `
             -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText -AlwaysQuote $alwaysQuote) `
             -ListItemText $tokenText `
             -ResultType 'ParameterValue' `
-            -ToolTip $item.FullName
+            -ToolTip $item.FullName))
     }
+
+    if ($results.Count -eq 0 -and $Kind -eq 'Directory' -and [string]::IsNullOrEmpty($CompletionPrefix)) {
+        # The source and destination operands must be directories; without a
+        # placeholder the engine would substitute file names here.
+        $placeholder = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '<directory>' } else { $InputPath }
+        [void]$results.Add((New-RobocopyCompletionResult -CompletionText $placeholder -ListItemText '<directory>' -ResultType 'ParameterValue' -ToolTip 'Directory path (drive:\path or \\server\share\path).'))
+    }
+
+    @($results.ToArray())
 }
 
 function Get-RobocopySourceRelativeCompletions {
@@ -670,7 +704,9 @@ function Get-RobocopySourceRelativeCompletions {
         $items = $items | Where-Object { -not $_.PSIsContainer }
     }
 
-    foreach ($item in $items | Sort-Object -Property Name) {
+    # A source such as System32 holds thousands of entries; cap what is emitted
+    # so the completion thread never builds the whole listing.
+    foreach ($item in $items | Sort-Object -Property Name | Select-Object -First $script:RobocopyCompletionCatalog.MaxPathResults) {
         $pathText = if ([string]::IsNullOrWhiteSpace($relativeParent)) {
             $item.Name
         } else {
@@ -709,10 +745,16 @@ function Get-RobocopyFileSpecCompletions {
         [string]$SourcePath
     )
 
-    $results = @()
-    $results += @(Get-RobocopyWildcardSuggestions -WordToComplete $WordToComplete -Candidates @('*', '*.*'))
-    $results += @(Get-RobocopySourceRelativeCompletions -InputPath $WordToComplete -SourcePath $SourcePath -Kind 'Any')
-    Get-RobocopyUniqueCompletions -Results $results
+    # 'file :: File(s) to copy (names/wildcards)' and '/XF file' take file names;
+    # directories belong to /XD.
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($result in @(Get-RobocopyWildcardSuggestions -WordToComplete $WordToComplete -Candidates @('*', '*.*'))) {
+        [void]$results.Add($result)
+    }
+    foreach ($result in @(Get-RobocopySourceRelativeCompletions -InputPath $WordToComplete -SourcePath $SourcePath -Kind 'File')) {
+        [void]$results.Add($result)
+    }
+    Get-RobocopyUniqueCompletions -Results $results.ToArray()
 }
 
 function Get-RobocopyDirectorySpecCompletions {
@@ -781,13 +823,23 @@ function Get-RobocopyJobCompletions {
     $cleanCurrentValue = Remove-RobocopyOuterQuotes $CurrentValue
     $jobFiles = @(Get-ChildItem -LiteralPath . -Filter '*.rcj' -File -ErrorAction SilentlyContinue)
 
+    $results = New-Object System.Collections.Generic.List[object]
     foreach ($jobFile in $jobFiles | Sort-Object -Property Name) {
         $jobName = [System.IO.Path]::GetFileNameWithoutExtension($jobFile.Name)
         if ($jobName -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrentValue) + '*')) {
             $tokenText = $Prefix + $jobName
-            New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $jobFile.FullName
+            [void]$results.Add((New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $jobFile.FullName))
         }
     }
+
+    if ($results.Count -eq 0) {
+        # No matching .rcj in the cwd: name the slot instead of letting the option
+        # list echo the '/JOB:' the user already typed.
+        $tokenText = if ([string]::IsNullOrWhiteSpace($cleanCurrentValue)) { $Prefix + '<jobname>' } else { $Prefix + $CurrentValue }
+        [void]$results.Add((New-RobocopyCompletionResult -CompletionText $tokenText -ListItemText ($Prefix + '<jobname>') -ResultType 'ParameterValue' -ToolTip $ToolTip))
+    }
+
+    @($results.ToArray())
 }
 
 function Get-RobocopyInlineValueCompletions {
