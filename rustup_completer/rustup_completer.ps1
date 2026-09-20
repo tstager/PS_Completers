@@ -62,6 +62,22 @@ function Get-RustupHelpDefinition {
         return $cache.HelpByKey[$key]
     }
 
+    if ($normalizedPath.Count -gt 0 -and $normalizedPath[0] -eq 'help') {
+        # 'rustup help <path>' takes the same subcommand names as '<path>' itself
+        # and no options; 'rustup help --help' only prints a clap error.
+        $target = Get-RustupHelpDefinition -CommandPath @($normalizedPath | Select-Object -Skip 1)
+        $definition = @{
+            Key          = $key
+            CommandPath  = $normalizedPath
+            Commands     = @($target.Commands)
+            CommandMap   = $target.CommandMap
+            Options      = @()
+            OptionMap    = @{}
+        }
+        $cache.HelpByKey[$key] = $definition
+        return $definition
+    }
+
     $arguments = @()
     if ($normalizedPath.Count -gt 0) {
         $arguments += $normalizedPath
@@ -332,9 +348,9 @@ function Get-RustupHostTriples {
     $values = New-Object System.Collections.Generic.List[string]
     foreach ($toolchain in (Get-RustupKnownToolchains)) {
         if ($toolchain -match '-([A-Za-z0-9_\.-]+)$') {
-            $host = $matches[1]
-            if (-not $values.Contains($host)) {
-                $values.Add($host)
+            $hostTriple = $matches[1]
+            if (-not $values.Contains($hostTriple)) {
+                $values.Add($hostTriple)
             }
         }
     }
@@ -421,6 +437,7 @@ function Get-RustupValueCatalog {
             }
         }
         'toolchain uninstall' { if ($IsPositional) { return @(Get-RustupKnownToolchains) } }
+        'uninstall' { if ($IsPositional) { return @(Get-RustupKnownToolchains) } }
         'default' { if ($IsPositional) { return @('none') + @(Get-RustupKnownToolchains) } }
         'update' { if ($IsPositional) { return @(Get-RustupKnownToolchains) } }
         'target add' {
@@ -519,6 +536,7 @@ function Get-RustupCommandState {
     $pendingOption = $null
     $pendingOptionPath = @()
     $optionValues = @{}
+    $toolchainOverride = $null
 
     foreach ($rawToken in $TokensBeforeCurrent) {
         $token = Remove-RustupOuterQuotes -Value $rawToken
@@ -535,7 +553,11 @@ function Get-RustupCommandState {
 
         $definition = Get-RustupHelpDefinition -CommandPath @($path.ToArray())
         if ($token.StartsWith('-') -or $token -eq '/?') {
-            if ($definition.OptionMap.ContainsKey($token)) {
+            $attached = [regex]::Match($token, '^(?<name>--[^=]+)=(?<value>.*)$')
+            if ($attached.Success) {
+                # --opt=value carries its value, so nothing is pending afterwards.
+                $optionValues[$attached.Groups['name'].Value] = $attached.Groups['value'].Value
+            } elseif ($definition.OptionMap.ContainsKey($token)) {
                 $entry = $definition.OptionMap[$token]
                 if ($entry.TakesValue) {
                     $pendingOption = $entry.PrimaryName
@@ -545,8 +567,10 @@ function Get-RustupCommandState {
             continue
         }
 
-        if ($token.StartsWith('+') -and $path.Count -eq 0 -and $positionals.Count -eq 0) {
-            $positionals.Add($token)
+        if ($token.StartsWith('+') -and $path.Count -eq 0 -and $positionals.Count -eq 0 -and -not $toolchainOverride) {
+            # '+toolchain' selects the toolchain for the rest of the line; it is
+            # not an operand and must not hide the subcommands.
+            $toolchainOverride = $token
             continue
         }
 
@@ -564,6 +588,7 @@ function Get-RustupCommandState {
         PendingOption      = $pendingOption
         PendingOptionPath  = $pendingOptionPath
         OptionValues       = $optionValues
+        ToolchainOverride  = $toolchainOverride
     }
 }
 
@@ -644,8 +669,42 @@ function Complete-Rustup {
         return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $state.PendingOption -IsPositional $false -PositionalIndex -1 -CurrentWord $currentWord)
     }
 
+    if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('+') -and
+        $state.ContextPath.Count -eq 0 -and $state.Positionals.Count -eq 0 -and -not $state.ToolchainOverride) {
+        $typedToolchain = $currentWord.Substring(1)
+        $overrideResults = New-Object System.Collections.Generic.List[object]
+        foreach ($toolchain in (Get-RustupKnownToolchains)) {
+            if ($toolchain.StartsWith($typedToolchain, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $overrideResults.Add((New-RustupCompletionResult -CompletionText ('+' + $toolchain) -ListItemText ('+' + $toolchain) -ResultType 'ParameterValue' -ToolTip 'Release channel or custom toolchain to use for this invocation.'))
+            }
+        }
+        return @($overrideResults.ToArray())
+    }
+
     if (-not [string]::IsNullOrEmpty($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord -eq '/')) {
         $cleanCurrent = Remove-RustupOuterQuotes -Value $currentWord
+        $attached = [regex]::Match($cleanCurrent, '^(?<name>--[^=]+)=(?<value>.*)$')
+        if ($attached.Success) {
+            # Attached form: complete the value while keeping the '--opt=' prefix.
+            $attachedName = $attached.Groups['name'].Value
+            $attachedValue = $attached.Groups['value'].Value
+            $attachedPrefix = $attachedName + '='
+            if (-not $definition.OptionMap.ContainsKey($attachedName) -or -not $definition.OptionMap[$attachedName].TakesValue) {
+                return @()
+            }
+
+            $primaryName = $definition.OptionMap[$attachedName].PrimaryName
+            if ($primaryName -eq '--path') {
+                return @(Get-RustupPathCompletions -InputPath $attachedValue | ForEach-Object {
+                        New-RustupCompletionResult -CompletionText ($attachedPrefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
+                    })
+            }
+
+            return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $primaryName -IsPositional $false -PositionalIndex -1 -CurrentWord $attachedValue | ForEach-Object {
+                    New-RustupCompletionResult -CompletionText ($attachedPrefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
+                })
+        }
+
         $optionResults = New-Object System.Collections.Generic.List[object]
         foreach ($option in $definition.Options) {
             foreach ($name in $option.Names) {
