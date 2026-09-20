@@ -61,19 +61,20 @@ This keeps the completion list tied to the installed command rather than a fully
 `Get-IpconfigAdapterNames` caches adapter names for 30 seconds.
 
 Discovery order:
-1. `Get-NetAdapter`
+1. `Get-NetAdapter -IncludeHidden` (ipconfig addresses adapters by connection name, and it prints and accepts the hidden tunnel and pseudo-interface names too)
 2. fallback parsing of `ipconfig.exe` output headings
+
+A typed `*` or `?` is treated as the wildcard ipconfig documents (`/renew EL*`): the pattern itself is offered as a value, followed by the adapter names it matches.
 
 The cache keeps completion responsive while avoiding repeated discovery on every keystroke.
 
 ### Command-line context detection
 The registered completer scriptblock:
-- collects tokens from `$commandAst.CommandElements`
-- reconstructs the current token from the command line when needed
-- determines whether the cursor is after a trailing space
+- collects the tokens from `$commandAst.CommandElements` that end before the cursor, so a cursor inside an earlier token completes that token
+- reconstructs the current token from the command line up to the cursor (including an unterminated quoted adapter name)
 - identifies the most recent switch before the current token
 - switches into adapter-value completion for the adapter-taking forms
-- returns no completion for the free-form class ID position after an adapter has been supplied
+- offers a `<class-id>` placeholder for the free-form class ID position after an adapter has been supplied
 
 ## Key completion behaviors / supported values
 ### Switch completion

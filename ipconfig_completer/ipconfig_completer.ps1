@@ -96,6 +96,11 @@ function Get-IpconfigCurrentToken {
 
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
+    if (([regex]::Matches($prefix, '"').Count % 2) -eq 1) {
+        # Inside an unterminated quote: the token runs from that quote to the cursor.
+        return $prefix.Substring($prefix.LastIndexOf('"'))
+    }
+
     if ($prefix -match '\s$') {
         return ''
     }
@@ -198,7 +203,9 @@ function Get-IpconfigAdapterNames {
 
     if (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue) {
         try {
-            foreach ($name in (Get-NetAdapter -ErrorAction Stop | Select-Object -ExpandProperty Name)) {
+            # ipconfig addresses adapters by connection name, and it prints and
+            # accepts the hidden tunnel and pseudo-interface names too.
+            foreach ($name in (Get-NetAdapter -IncludeHidden -ErrorAction Stop | Select-Object -ExpandProperty Name)) {
                 if (-not [string]::IsNullOrWhiteSpace($name)) {
                     $adapterNames.Add($name)
                 }
@@ -285,6 +292,31 @@ function Get-IpconfigAdapterCompletions {
     $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
     $suggestions = New-Object System.Collections.Generic.List[object]
 
+    # ipconfig accepts * and ? in the adapter operand ('/renew EL*'), so a typed
+    # wildcard matches adapter names as a pattern and is itself a valid value.
+    $hasWildcard = $typedValue.IndexOfAny([char[]]@('*', '?')) -ge 0
+    if ($hasWildcard) {
+        $matched = New-Object System.Collections.Generic.List[string]
+        foreach ($name in $adapterNames) {
+            if ($name -like $typedValue) {
+                $matched.Add($name)
+            }
+        }
+
+        $suggestions.Add((New-IpconfigCompletionResult `
+                -CompletionText (ConvertTo-IpconfigQuotedValue -Value $typedValue -AlwaysQuote:$alwaysQuote) `
+                -ResultType 'ParameterValue' `
+                -ToolTip ('Wildcard adapter selector matching ' + $matched.Count + ' adapter(s).')))
+        foreach ($name in $matched) {
+            $suggestions.Add((New-IpconfigCompletionResult `
+                    -CompletionText (ConvertTo-IpconfigQuotedValue -Value $name -AlwaysQuote:$alwaysQuote) `
+                    -ResultType 'ParameterValue' `
+                    -ToolTip 'Adapter name.'))
+        }
+
+        return @($suggestions.ToArray())
+    }
+
     $candidates = @('*') + $adapterNames
     foreach ($candidate in ($candidates | Sort-Object -Unique)) {
         if (-not [string]::IsNullOrWhiteSpace($typedValue) -and
@@ -338,27 +370,21 @@ function Complete-Ipconfig {
 
     Initialize-IpconfigCompletionCatalog
 
-    $allTokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    $tokens = @($allTokens | Select-Object -Skip 1)
+    # Tokens are split at the cursor rather than at the end of the line, so a
+    # cursor inside an earlier token completes that token and ignores the rest.
     $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-IpconfigCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
+    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
-    } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
+    } else {
         Get-IpconfigCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    } else {
-        $wordToComplete
     }
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
-    if ($hasTrailingSpace) {
-        $tokensBeforeCurrent = @($tokens)
-    } elseif ($tokens.Count -gt 1) {
-        $tokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-    } else {
-        $tokensBeforeCurrent = @()
-    }
+    $tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     $valueContext = Get-IpconfigValueContext -TokensBeforeCurrent $tokensBeforeCurrent
     if ($valueContext -eq 'adapter') {
@@ -367,7 +393,7 @@ function Complete-Ipconfig {
 
     if ($valueContext -eq 'classid') {
         if ([string]::IsNullOrEmpty($currentWord)) {
-            return @(New-IpconfigCompletionResult -CompletionText ' ' -ResultType 'ParameterValue' -ToolTip 'Class ID value.')
+            return @(New-IpconfigCompletionResult -CompletionText '<class-id>' -ResultType 'ParameterValue' -ToolTip 'DHCP class ID value; omit it to clear the class ID.')
         }
 
         return @(New-IpconfigCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'Class ID value.')
