@@ -48,7 +48,9 @@ The script is self-contained and follows the repository's help-driven completer 
 - Treats subcommands and slash options case-insensitively for matching, while emitting the canonical help-style completion text.
 - Accepts both short root aliases such as `HKLM\...` and long local root forms such as `HKEY_LOCAL_MACHINE\...`.
 - Completes remote-machine key prefixes at the root-hive level such as `\\SERVER\HKLM\`, but does not attempt remote registry enumeration beyond the remote hive choice.
-- Uses provider-backed local registry enumeration for subkeys and value names where the path is resolvable through `Registry::`.
+- Enumerates local subkeys through the native `Microsoft.Win32.Registry` API, cached per key for the session and capped at 300 results per slot, and reads value names through the `Registry::` provider where the path is resolvable.
+- A remote key path typed deeper than the hive root (`\\SERVER\HKLM\SOFT...`) is kept as typed with a `<remote subkey>` placeholder; remote hives are never enumerated.
+- Hive-file slots (`SAVE`, `RESTORE`, `LOAD`) complete any file name and only suggest the `.hiv` extension.
 - Returns no-op placeholder completions for free-form slots like `/d` and `/f` so PowerShell does not fall back to filesystem completion in those positions.
 - `reg flags` offers `QUERY`, `SET`, the documented set tokens, and `/s` because the local help example shows `/s` even though the formal syntax/parameter section does not list it.
 

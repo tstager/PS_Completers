@@ -35,6 +35,8 @@ if (-not (Get-Variable -Name RegCompletionCatalog -Scope Script -ErrorAction Ign
             'HKU'  = 'Registry::HKEY_USERS'
             'HKCC' = 'Registry::HKEY_CURRENT_CONFIG'
         }
+        ChildCache       = @{}
+        MaxChildResults  = 300
         RootKeyToolTips  = @{
             'HKLM' = 'HKEY_LOCAL_MACHINE'
             'HKCU' = 'HKEY_CURRENT_USER'
@@ -775,6 +777,62 @@ function Get-RegProviderPathFromKeyPath {
     $script:RegCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $rest
 }
 
+function Get-RegChildName {
+    param(
+        [string]$CanonicalRoot,
+        [string]$SubKeyPath
+    )
+
+    $cacheKey = $CanonicalRoot + '\' + $SubKeyPath
+    if ($script:RegCompletionCatalog.ChildCache.ContainsKey($cacheKey)) {
+        return @($script:RegCompletionCatalog.ChildCache[$cacheKey])
+    }
+
+    # RegistryKey.GetSubKeyNames lists the names held by the parent without opening
+    # each child, so it is ~40x faster than the Registry provider on HKCR and still
+    # lists keys the session cannot open (SECURITY, BCD00000000).
+    $baseKey = switch ($CanonicalRoot) {
+        'HKLM' { [Microsoft.Win32.Registry]::LocalMachine }
+        'HKCU' { [Microsoft.Win32.Registry]::CurrentUser }
+        'HKCR' { [Microsoft.Win32.Registry]::ClassesRoot }
+        'HKU' { [Microsoft.Win32.Registry]::Users }
+        'HKCC' { [Microsoft.Win32.Registry]::CurrentConfig }
+        default { $null }
+    }
+
+    $names = @()
+    $subKey = $null
+    $errorCountBefore = $Error.Count
+    try {
+        if ($null -ne $baseKey) {
+            if ([string]::IsNullOrEmpty($SubKeyPath)) {
+                $names = @($baseKey.GetSubKeyNames())
+            } else {
+                $subKey = $baseKey.OpenSubKey($SubKeyPath, $false)
+                if ($null -ne $subKey) {
+                    $names = @($subKey.GetSubKeyNames())
+                }
+            }
+        }
+    } catch {
+        Write-Debug ('reg completer: cannot enumerate ' + $cacheKey + ': ' + $_.Exception.Message)
+        $names = @()
+    } finally {
+        if ($null -ne $subKey) {
+            $subKey.Dispose()
+        }
+
+        # An unreadable key is an expected outcome while completing, not a fault to
+        # leave behind in $Error.
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
+        }
+    }
+
+    $script:RegCompletionCatalog.ChildCache[$cacheKey] = $names
+    @($names)
+}
+
 function Get-RegRegistryKeyCompletions {
     param(
         [string]$CurrentValue,
@@ -815,9 +873,17 @@ function Get-RegRegistryKeyCompletions {
             return
         }
 
+        if ($rest -match '\\') {
+            # Remote hives are never enumerated from the completion thread, so a
+            # path deeper than the root is kept exactly as typed instead of being
+            # collapsed back to '\\machine\ROOT\'.
+            return @(
+                New-RegCompletionResult -CompletionText $CurrentValue -ListItemText '<remote subkey>' -ResultType 'ParameterValue' -ToolTip 'Remote registry keys are not enumerated during completion; type the rest of the key path.'
+            )
+        }
+
         $remoteRoots = @($script:RegCompletionCatalog.RemoteRootKeys | Where-Object {
-                ($_.StartsWith($rest, [System.StringComparison]::OrdinalIgnoreCase)) -or
-                (($rest + '\').StartsWith($_ + '\', [System.StringComparison]::OrdinalIgnoreCase))
+                $_.StartsWith($rest, [System.StringComparison]::OrdinalIgnoreCase)
             })
         foreach ($root in $remoteRoots) {
             $candidate = '\\' + $machine + '\' + $root + '\'
@@ -852,33 +918,32 @@ function Get-RegRegistryKeyCompletions {
 
     $remainder = if ($segments.Count -gt 1) { $segments[1] } else { '' }
     if ([string]::IsNullOrWhiteSpace($remainder)) {
-        $providerPath = $script:RegCompletionCatalog.RootProviderPaths[$canonicalRoot]
         $leaf = ''
         $prefixPath = ''
     } elseif ($remainder.EndsWith('\')) {
-        $providerPath = $script:RegCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $remainder.TrimEnd('\')
         $leaf = ''
         $prefixPath = $remainder.TrimEnd('\')
     } else {
         $lastSeparator = $remainder.LastIndexOf('\')
         if ($lastSeparator -lt 0) {
-            $providerPath = $script:RegCompletionCatalog.RootProviderPaths[$canonicalRoot]
             $leaf = $remainder
             $prefixPath = ''
         } else {
             $prefixPath = $remainder.Substring(0, $lastSeparator)
             $leaf = $remainder.Substring($lastSeparator + 1)
-            $providerPath = $script:RegCompletionCatalog.RootProviderPaths[$canonicalRoot] + '\' + $prefixPath
         }
     }
 
-    $children = @(Get-ChildItem -LiteralPath $providerPath -ErrorAction SilentlyContinue)
-    foreach ($child in ($children | Sort-Object -Property PSChildName)) {
-        $childName = [string]$child.PSChildName
-        if (-not $childName.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
+    # Filter on the typed leaf before sorting, and cap the emitted count so a hive
+    # the size of HKCR cannot stall the completion thread.
+    $matchedNames = @(
+        Get-RegChildName -CanonicalRoot $canonicalRoot -SubKeyPath $prefixPath |
+            Where-Object { $_.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object |
+            Select-Object -First $script:RegCompletionCatalog.MaxChildResults
+    )
 
+    foreach ($childName in $matchedNames) {
         $candidate = if ([string]::IsNullOrWhiteSpace($prefixPath)) {
             $displayRoot + '\' + $childName + '\'
         } else {
@@ -1011,7 +1076,9 @@ function Invoke-RegValueCompletion {
             return @(Get-RegFileCompletions -InputPath $CurrentValue -AllowedExtensions @('.reg') -SuggestedExtension '.reg')
         }
         'HiveFilePath' {
-            return @(Get-RegFileCompletions -InputPath $CurrentValue -AllowedExtensions @('.hiv') -SuggestedExtension '.hiv')
+            # REG SAVE / RESTORE / LOAD accept any file name; .hiv is only the
+            # conventional extension, so it is suggested but never required.
+            return @(Get-RegFileCompletions -InputPath $CurrentValue -SuggestedExtension '.hiv')
         }
         'ValueName' {
             return @(Get-RegValueNameCompletions -KeyPath $State.PrimaryKeyPath -CurrentValue $CurrentValue)
@@ -1094,7 +1161,14 @@ function Complete-Reg {
     }
 
     if ($state.PendingValueKind) {
-        return @(Invoke-RegValueCompletion -ValueKind $state.PendingValueKind -CurrentValue $currentWord -State $state)
+        # QUERY /v takes an optional argument when /f is present, so a '/' typed in
+        # that slot is the next option rather than a value.
+        $optionalValueSlot = $state.SubcommandKey -eq 'query' -and
+            $state.PendingOptionKey -eq '/v' -and
+            $state.SeenOptionKeys -contains '/f'
+        if (-not ($optionalValueSlot -and $currentWord.StartsWith('/'))) {
+            return @(Invoke-RegValueCompletion -ValueKind $state.PendingValueKind -CurrentValue $currentWord -State $state)
+        }
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('/')) {
