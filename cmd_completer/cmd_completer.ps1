@@ -114,18 +114,53 @@ function Get-CmdArgumentTokens {
     }
 }
 
-function Get-CmdColorValues {
-    @(
-        '07', '0A', '0B', '0C', '0E', '0F',
-        '70', '1F', '2F', '4F', '5F', 'F0'
-    )
+function Get-CmdColorTable {
+    # The digit table printed by COLOR /?; /T:fg takes either one digit (foreground)
+    # or two (background then foreground).
+    [ordered]@{
+        '0' = 'Black';  '1' = 'Blue';         '2' = 'Green';        '3' = 'Aqua'
+        '4' = 'Red';    '5' = 'Purple';       '6' = 'Yellow';       '7' = 'White'
+        '8' = 'Gray';   '9' = 'Light Blue';   'A' = 'Light Green';  'B' = 'Light Aqua'
+        'C' = 'Light Red'; 'D' = 'Light Purple'; 'E' = 'Light Yellow'; 'F' = 'Bright White'
+    }
+}
+
+function Get-CmdColorCompletion {
+    param([string]$TypedValue)
+
+    $names = Get-CmdColorTable
+    if ([string]::IsNullOrEmpty($TypedValue)) {
+        foreach ($digit in $names.Keys) {
+            New-CmdCompletionResult -CompletionText ('/T:' + $digit) -ToolTip ('Foreground ' + $names[$digit] + ' (add a second digit for background/foreground).') -ResultType 'ParameterName'
+        }
+
+        return
+    }
+
+    $first = $TypedValue.Substring(0, 1).ToUpperInvariant()
+    if (-not $names.Contains($first)) {
+        return
+    }
+
+    if ($TypedValue.Length -eq 1) {
+        New-CmdCompletionResult -CompletionText ('/T:' + $first) -ToolTip ('Foreground ' + $names[$first] + '.') -ResultType 'ParameterName'
+    }
+
+    $second = if ($TypedValue.Length -ge 2) { $TypedValue.Substring(1, 1).ToUpperInvariant() } else { '' }
+    foreach ($digit in $names.Keys) {
+        if ($second -and -not $digit.StartsWith($second)) {
+            continue
+        }
+
+        New-CmdCompletionResult -CompletionText ('/T:' + $first + $digit) -ToolTip ($names[$digit] + ' on ' + $names[$first] + '.') -ResultType 'ParameterName'
+    }
 }
 
 function Get-CmdInternalCommands {
     @(
-        'ASSOC', 'BREAK', 'CALL', 'CD', 'CHDIR', 'CLS', 'COLOR', 'COPY', 'DATE',
-        'DEL', 'DIR', 'ECHO', 'ENDLOCAL', 'ERASE', 'EXIT', 'FOR', 'FTYPE', 'GOTO',
-        'IF', 'MD', 'MKDIR', 'MOVE', 'PATH', 'PAUSE', 'POPD', 'PROMPT', 'PUSHD',
+        'ASSOC', 'BREAK', 'CALL', 'CD', 'CHCP', 'CHDIR', 'CLS', 'COLOR', 'COPY', 'DATE',
+        'DEL', 'DIR', 'DPATH', 'ECHO', 'ENDLOCAL', 'ERASE', 'EXIT', 'FOR', 'FTYPE', 'GOTO',
+        'IF', 'KEYS', 'MD', 'MKDIR', 'MKLINK', 'MOVE', 'PATH', 'PAUSE', 'POPD', 'PROMPT', 'PUSHD',
         'RD', 'REM', 'REN', 'RENAME', 'RMDIR', 'SET', 'SETLOCAL', 'SHIFT',
         'START', 'TIME', 'TITLE', 'TYPE', 'VER', 'VERIFY', 'VOL'
     )
@@ -134,9 +169,14 @@ function Get-CmdInternalCommands {
 function Get-CmdCommandCompletions {
     param([string]$CurrentWord)
 
+    # A quoted tail word ('cmd /c "dir') is matched without its quotes and the
+    # quote is reinstated on the completion so the command line stays balanced.
+    $quotePrefix = if (-not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')) { '"' } else { '' }
+    $cleanWord = Remove-CmdOuterQuotes -Value $CurrentWord
+
     foreach ($command in Get-CmdInternalCommands) {
-        if (Test-CmdStartsWith -Candidate $command -Prefix $CurrentWord) {
-            New-CmdCompletionResult -CompletionText $command -ToolTip 'cmd.exe internal command.'
+        if (Test-CmdStartsWith -Candidate $command -Prefix $cleanWord) {
+            New-CmdCompletionResult -CompletionText ($quotePrefix + $command + $quotePrefix) -ListItemText $command -ToolTip 'cmd.exe internal command.'
         }
     }
 
@@ -146,8 +186,8 @@ function Get-CmdCommandCompletions {
         }
     }
 
-    foreach ($command in @(Get-Command -Name "$CurrentWord*" -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 30)) {
-        New-CmdCompletionResult -CompletionText $command.Name -ToolTip $command.Source
+    foreach ($command in @(Get-Command -Name ([System.Management.Automation.WildcardPattern]::Escape($cleanWord) + '*') -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 30)) {
+        New-CmdCompletionResult -CompletionText ($quotePrefix + $command.Name + $quotePrefix) -ListItemText $command.Name -ToolTip $command.Source
     }
 
     if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
@@ -155,18 +195,51 @@ function Get-CmdCommandCompletions {
     }
 }
 
-function Test-CmdCommandTailActive {
+function Get-CmdCommandTailState {
     param([string[]]$TokensBeforeCurrent)
 
+    # Everything after /C, /K or /R is the command string: its first word is the
+    # command, the rest are that command's own arguments.
+    $active = $false
+    $tailWordCount = 0
     foreach ($token in $TokensBeforeCurrent) {
+        if ($active) {
+            $tailWordCount++
+            continue
+        }
+
         if ($token.Equals('/C', [System.StringComparison]::OrdinalIgnoreCase) -or
             $token.Equals('/K', [System.StringComparison]::OrdinalIgnoreCase) -or
             $token.Equals('/R', [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $true
+            $active = $true
         }
     }
 
-    $false
+    [pscustomobject]@{
+        Active        = $active
+        TailWordCount = $tailWordCount
+    }
+}
+
+function Get-CmdCommandArgumentCompletion {
+    param([string]$CurrentWord)
+
+    if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
+        return @(New-CmdCompletionResult -CompletionText '<argument>' -ToolTip 'Argument for the command run by cmd.exe.')
+    }
+
+    if ($CurrentWord.StartsWith('/')) {
+        # A slash here belongs to the inner command's switches, which this
+        # completer does not model; keep the typed text rather than offering
+        # filesystem roots for it.
+        return @(New-CmdCompletionResult -CompletionText $CurrentWord -ListItemText '<switch>' -ToolTip 'Switch of the command run by cmd.exe; see that command''s /? help.')
+    }
+
+    if (Test-CmdPathLike -Value $CurrentWord) {
+        return @(Get-CmdPathCompletions -InputPath $CurrentWord -Placeholder '')
+    }
+
+    @()
 }
 
 function Get-CmdSwitchCompletions {
@@ -184,14 +257,8 @@ function Get-CmdSwitchCompletions {
         return
     }
 
-    if ($CurrentWord -match '^/T:(?<value>.*)$') {
-        foreach ($value in Get-CmdColorValues) {
-            $completionText = "/T:$value"
-            if (Test-CmdStartsWith -Candidate $completionText -Prefix $CurrentWord) {
-                New-CmdCompletionResult -CompletionText $completionText -ToolTip 'Initial foreground/background color pair.' -ResultType 'ParameterName'
-            }
-        }
-
+    if ($CurrentWord -match '^(?i)/T:(?<value>.*)$') {
+        Get-CmdColorCompletion -TypedValue $Matches.value
         return
     }
 
@@ -212,8 +279,13 @@ function Complete-Cmd {
     $currentWord = if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
     $tokensBeforeCurrent = @(Get-CmdArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
 
-    if (Test-CmdCommandTailActive -TokensBeforeCurrent $tokensBeforeCurrent) {
-        return @(Get-CmdCommandCompletions -CurrentWord $currentWord)
+    $tailState = Get-CmdCommandTailState -TokensBeforeCurrent $tokensBeforeCurrent
+    if ($tailState.Active) {
+        if ($tailState.TailWordCount -eq 0) {
+            return @(Get-CmdCommandCompletions -CurrentWord $currentWord)
+        }
+
+        return @(Get-CmdCommandArgumentCompletion -CurrentWord $currentWord)
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('/')) {
