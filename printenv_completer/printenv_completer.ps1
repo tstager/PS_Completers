@@ -10,10 +10,15 @@ function Get-PrintenvCompletionOptions {
     }
 
     $fallbackOptions = @('-0', '--null', '--help', '--version')
-    $commandCandidates = @('printenv.exe', 'printenv')
-    foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
-        if ($null -eq $command) {
+    $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+
+    # Every distinct printenv on PATH contributes its options (Git for Windows GNU 8.32 and uutils
+    # both ship one), so -h/-V from the second build are reachable even when the first resolves.
+    $sources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $commands = @(Get-Command -Name 'printenv.exe', 'printenv' -CommandType Application -All -ErrorAction Ignore)
+    foreach ($command in $commands) {
+        if ([string]::IsNullOrWhiteSpace($command.Source) -or -not $sources.Add($command.Source)) {
             continue
         }
 
@@ -27,8 +32,6 @@ function Get-PrintenvCompletionOptions {
             continue
         }
 
-        $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
@@ -48,12 +51,12 @@ function Get-PrintenvCompletionOptions {
                 }
             }
         }
+    }
 
-        if ($options.Count -gt 0) {
-            Set-Variable -Name 'PrintenvCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
-            Set-Variable -Name 'PrintenvCompletionDescriptions' -Value $descriptions -Scope Script
-            return (Get-Variable -Name 'PrintenvCompletionOptions' -Scope Script).Value
-        }
+    if ($options.Count -gt 0) {
+        Set-Variable -Name 'PrintenvCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
+        Set-Variable -Name 'PrintenvCompletionDescriptions' -Value $descriptions -Scope Script
+        return (Get-Variable -Name 'PrintenvCompletionOptions' -Scope Script).Value
     }
 
     Set-Variable -Name 'PrintenvCompletionOptions' -Value $fallbackOptions -Scope Script
@@ -101,7 +104,7 @@ function Get-PrintenvCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -110,13 +113,28 @@ function Get-PrintenvCurrentToken {
 }
 
 function Get-PrintenvValueCompletions {
-    $envVars = @(Get-ChildItem Env: | Sort-Object -Property Name)
-    $values = @()
-    foreach ($entry in $envVars) {
-        $values += New-PrintenvCompletionResult -CompletionText $entry.Name -ListItemText $entry.Name -ResultType 'ParameterValue' -ToolTip $entry.Value
+    param([string]$Prefix = '')
+
+    # A quoted or half-quoted token ('"PA') is matched on its bare text and the completion is
+    # re-quoted the same way so the replacement stays valid.
+    $quote = ''
+    $bare = $Prefix
+    if ($bare.Length -gt 0 -and ($bare[0] -eq '"' -or $bare[0] -eq "'")) {
+        $quote = [string]$bare[0]
+        $bare = $bare.Substring(1)
+        if ($bare.EndsWith($quote)) {
+            $bare = $bare.Substring(0, $bare.Length - 1)
+        }
     }
 
-    $values
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($bare) + '*'
+    @(
+        foreach ($entry in @(Get-ChildItem Env: | Sort-Object -Property Name)) {
+            if ($entry.Name -like $pattern) {
+                New-PrintenvCompletionResult -CompletionText ($quote + $entry.Name + $quote) -ListItemText $entry.Name -ResultType 'ParameterValue' -ToolTip $entry.Value
+            }
+        }
+    )
 }
 
 function Get-PrintenvOptionDescription {
@@ -143,11 +161,7 @@ function Complete-Printenv {
         Get-PrintenvCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
-    }
-
-    if ($currentWord.StartsWith('-')) {
+    if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-PrintenvCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -157,13 +171,8 @@ function Complete-Printenv {
         )
     }
 
-    $prefix = $currentWord
-    $matches = @(Get-PrintenvValueCompletions | Where-Object { $_.CompletionText -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*') -or $_.ListItemText -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*') })
-    if ($matches.Count -gt 0) {
-        return $matches
-    }
-
-    @()
+    # printenv's only operand is an environment-variable name; the empty slot lists them all.
+    Get-PrintenvValueCompletions -Prefix $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'printenv', 'printenv.exe' -ScriptBlock {
