@@ -139,7 +139,10 @@ function Get-MktempCurrentToken {
 }
 
 function Get-MktempPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$DirectoriesOnly
+    )
 
     $cleanInput = Remove-MktempOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
@@ -164,7 +167,7 @@ function Get-MktempPathCompletions {
     }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
+    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') -and (-not $DirectoriesOnly -or $_.PSIsContainer) } | Sort-Object -Property Name
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -188,6 +191,50 @@ function Get-MktempPathCompletions {
     }
 }
 
+function Complete-MktempTemplate {
+    param([string]$Prefix)
+
+    # TEMPLATE names a file that does not exist yet and must end in at least three X's, so the
+    # operand slot offers template shapes (and extends a typed prefix) rather than existing files.
+    $templates = @(
+        @{ Text = 'tmp.XXXXXXXXXX'; Tip = 'The default template used when none is given.' }
+        @{ Text = 'XXXXXXXXXX'; Tip = 'Ten random characters in the current directory.' }
+        @{ Text = '<prefix>XXXXXX'; Tip = 'TEMPLATE must contain at least 3 consecutive X''s in its last component.' }
+    )
+
+    # A quoted or half-quoted prefix is extended on its bare text and re-quoted the same way.
+    $quote = ''
+    $bare = $Prefix
+    if ($bare.Length -gt 0 -and ($bare[0] -eq '"' -or $bare[0] -eq "'")) {
+        $quote = [string]$bare[0]
+        $bare = $bare.Substring(1)
+        if ($bare.EndsWith($quote)) {
+            $bare = $bare.Substring(0, $bare.Length - 1)
+        }
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    if (-not [string]::IsNullOrEmpty($bare) -and $bare -notmatch 'X$') {
+        $extended = $bare + 'XXXXXX'
+        $results.Add((New-MktempCompletionResult -CompletionText ($quote + $extended + $quote) -ListItemText $extended -ResultType 'ParameterValue' -ToolTip 'Typed prefix extended with the six X''s mktemp replaces.'))
+    }
+
+    foreach ($template in $templates) {
+        if ($template.Text.StartsWith($bare, [System.StringComparison]::Ordinal)) {
+            $results.Add((New-MktempCompletionResult -CompletionText ($quote + $template.Text + $quote) -ListItemText $template.Text -ResultType 'ParameterValue' -ToolTip $template.Tip))
+        }
+    }
+
+    # A template may carry a directory part ('--tmpdir' allows slashes), so complete that part.
+    if ($Prefix -match '[\\/]') {
+        foreach ($result in Get-MktempPathCompletions -InputPath $Prefix -DirectoriesOnly) {
+            $results.Add($result)
+        }
+    }
+
+    @($results.ToArray())
+}
+
 function Get-MktempOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -201,6 +248,11 @@ function Get-MktempOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
+    } elseif ($CurrentWord -cmatch '^(?<option>-p)(?<value>.+)$') {
+        # getopt accepts the DIR directly appended to -p ('-pC:\Temp').
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option
     } elseif (-not $CurrentWord.StartsWith('-')) {
         $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
         if ([string]::IsNullOrEmpty($CurrentWord)) {
@@ -224,9 +276,11 @@ function Get-MktempOptionValueCompletions {
 
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
+        # -p DIR / --tmpdir[=DIR] take a directory, so files are filtered out and the container
+        # result type is kept.
         return @(
-            foreach ($result in Get-MktempPathCompletions -InputPath $prefix) {
-                New-MktempCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            foreach ($result in Get-MktempPathCompletions -InputPath $prefix -DirectoriesOnly) {
+                New-MktempCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
             }
         )
     }
@@ -267,14 +321,24 @@ function Complete-Mktemp {
 
     $optionValues = @(Get-MktempOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
+        # PowerShell splits '-pC:\Temp' at the colon and only replaces the text after '-pC:', so
+        # when its word is a suffix of the token this completer derived, the part it will not
+        # replace is trimmed from every result.
+        if (-not [string]::IsNullOrEmpty($wordToComplete) -and $currentWord.Length -gt $wordToComplete.Length -and $currentWord.EndsWith($wordToComplete, [System.StringComparison]::Ordinal)) {
+            $head = $currentWord.Substring(0, $currentWord.Length - $wordToComplete.Length)
+            $optionValues = @(
+                foreach ($result in $optionValues) {
+                    if ($result.CompletionText.StartsWith($head, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        New-MktempCompletionResult -CompletionText $result.CompletionText.Substring($head.Length) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
+                    }
+                }
+            )
+        }
+
         return $optionValues
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
-    }
-
-    if ($currentWord.StartsWith('-')) {
+    if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-MktempCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -284,7 +348,7 @@ function Complete-Mktemp {
         )
     }
 
-    Get-MktempPathCompletions -InputPath $currentWord
+    Complete-MktempTemplate -Prefix $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'mktemp', 'mktemp.exe' -ScriptBlock {
