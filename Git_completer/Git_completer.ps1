@@ -46,12 +46,20 @@ function Complete-GitNative {
         [System.Management.Automation.CompletionResult]::new($value, $value, 'ParameterValue', $value)
     }
 
+    # git's short flags are case-distinct (-b/-B, -d/-D, -n/-N), so a typed single-dash word is
+    # matched case-sensitively; everything else keeps the case-insensitive prefix match.
+    $matchesWord = {
+        param([string]$value)
+        $pattern = [System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*'
+        if ($wordToComplete -cmatch '^-[^-]') { $value -clike $pattern } else { $value -like $pattern }
+    }
+
     $completeList = {
         param([string[]]$values)
         $values |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Sort-Object -Unique |
-            Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($wordToComplete) + '*') } |
+            Sort-Object -Unique -CaseSensitive |
+            Where-Object { & $matchesWord $_ } |
             ForEach-Object { & $newResult $_ }
     }
 
@@ -411,7 +419,7 @@ function Complete-GitNative {
             }
         }
 
-        @($collected | Sort-Object -Unique)
+        @($collected | Sort-Object -Unique -CaseSensitive)
     }
 
     # git deliberately prints an abbreviated '-h' for the revision-walking commands, so their real
@@ -690,8 +698,8 @@ function Complete-GitNative {
         }
 
         $metadata = [pscustomobject]@{
-            Flags              = @($flags | Sort-Object -Unique)
-            Subcommands        = @($subcommands | Sort-Object -Unique)
+            Flags              = @($flags | Sort-Object -Unique -CaseSensitive)
+            Subcommands        = @($subcommands | Sort-Object -Unique -CaseSensitive)
             OptionSpecs        = $optionSpecs
             OptionDescriptions = $optionDescriptions
         }
