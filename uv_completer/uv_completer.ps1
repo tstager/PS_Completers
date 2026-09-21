@@ -109,8 +109,8 @@ function New-UvPathData {
         [string[]]$Commands = @(),
         [hashtable]$CommandDescriptions = @{},
         [string[]]$Options = @(),
-        [hashtable]$ValuesByOption = @{},
-        [hashtable]$MetavarByOption = @{},
+        [System.Collections.IDictionary]$ValuesByOption = @{},
+        [System.Collections.IDictionary]$MetavarByOption = @{},
         [string[]]$PositionalValues = @()
     )
 
@@ -139,9 +139,14 @@ function Get-UvTokenText {
 }
 
 function Get-UvUniqueStrings {
-    param([string[]]$Items)
+    param(
+        [string[]]$Items,
+        [switch]$CaseSensitive
+    )
 
-    $seen = @{}
+    # Option tokens stay case-distinct (uv has -V/-v, -C/-c and -P/-p); commands and values fold.
+    $comparer = if ($CaseSensitive) { [System.StringComparer]::Ordinal } else { [System.StringComparer]::OrdinalIgnoreCase }
+    $seen = [System.Collections.Generic.HashSet[string]]::new($comparer)
     $result = New-Object System.Collections.Generic.List[string]
 
     foreach ($item in @($Items)) {
@@ -149,12 +154,10 @@ function Get-UvUniqueStrings {
             continue
         }
 
-        $key = $item.ToLowerInvariant()
-        if ($seen.ContainsKey($key)) {
+        if (-not $seen.Add($item)) {
             continue
         }
 
-        $seen[$key] = $true
         [void]$result.Add($item)
     }
 
@@ -172,7 +175,7 @@ function Get-UvOptionTokensFromLine {
         $match.Groups[1].Value
     }
 
-    Get-UvUniqueStrings -Items $tokens
+    Get-UvUniqueStrings -Items $tokens -CaseSensitive
 }
 
 function Get-UvCanonicalOption {
@@ -180,12 +183,12 @@ function Get-UvCanonicalOption {
 
     foreach ($token in @($Tokens)) {
         if ($token.StartsWith('--')) {
-            return $token.ToLowerInvariant()
+            return $token
         }
     }
 
     if ($Tokens.Count -gt 0) {
-        return $Tokens[0].ToLowerInvariant()
+        return $Tokens[0]
     }
 
     $null
@@ -193,7 +196,7 @@ function Get-UvCanonicalOption {
 
 function Add-UvPossibleValues {
     param(
-        [hashtable]$ValueMap,
+        [System.Collections.IDictionary]$ValueMap,
         [string]$OptionKey,
         [string]$RawValueText
     )
@@ -225,8 +228,9 @@ function Get-UvParsedHelpData {
     $commands = New-Object System.Collections.Generic.List[string]
     $commandDescriptions = @{}
     $options = New-Object System.Collections.Generic.List[string]
-    $valuesByOption = @{}
-    $metavarByOption = @{}
+    # Ordinal tables: a hashtable would fold -c onto -C and -p onto -P.
+    $valuesByOption = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    $metavarByOption = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
     $positionalValues = New-Object System.Collections.Generic.List[string]
     $positionalKey = $null
     $section = ''
@@ -323,7 +327,7 @@ function Get-UvParsedHelpData {
                 # option; its absence marks a switch.
                 $metavar = if ($line -match '^\s*-[^\s]+(?:,\s*-[^\s]+)*(?:\.\.\.)?\s+(?:\[=)?<([A-Z][A-Z0-9_]*)>') { $matches[1] } else { '' }
                 foreach ($token in $tokens) {
-                    $metavarByOption[$token.ToLowerInvariant()] = $metavar
+                    $metavarByOption[$token] = $metavar
                 }
             }
 
@@ -358,7 +362,7 @@ function Get-UvParsedHelpData {
     @{
         Commands            = Get-UvUniqueStrings -Items $commands.ToArray()
         CommandDescriptions = $commandDescriptions
-        Options             = Get-UvUniqueStrings -Items $options.ToArray()
+        Options             = Get-UvUniqueStrings -Items $options.ToArray() -CaseSensitive
         ValuesByOption      = $valuesByOption
         MetavarByOption     = $metavarByOption
         PositionalValues    = Get-UvUniqueStrings -Items $positionalValues.ToArray()
@@ -633,7 +637,7 @@ function Get-UvOptionValues {
         return @()
     }
 
-    $optionKey = $Option.ToLowerInvariant()
+    $optionKey = $Option
     $values = @()
 
     $pathData = Get-UvPathData -SourceName $SourceName -Path $Path
@@ -658,7 +662,7 @@ function Get-UvOptionMetavar {
         [string]$Option
     )
 
-    $optionKey = $Option.ToLowerInvariant()
+    $optionKey = $Option
     foreach ($data in @((Get-UvPathData -SourceName $SourceName -Path $Path), (Get-UvPathData -SourceName $SourceName -Path @()))) {
         if ($data.MetavarByOption.ContainsKey($optionKey)) {
             return [string]$data.MetavarByOption[$optionKey]
@@ -739,7 +743,11 @@ function New-UvCompletionResults {
     )
 
     foreach ($item in @($Items | Where-Object { -not [string]::IsNullOrEmpty($_) })) {
-        if ($item -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+        # A typed short flag must keep its case so -C never completes to -c; long options and
+        # values keep the usual case-insensitive prefix match.
+        $pattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
+        $matched = if ($WordToComplete -cmatch '^-[^-]') { $item -clike $pattern } else { $item -like $pattern }
+        if (-not $matched) {
             continue
         }
 
