@@ -231,6 +231,31 @@ function Complete-GitNative {
         $aliases
     }
 
+    # A non-shell alias whose body names a real git command completes as that command. Shell
+    # aliases ('!cmd') and alias chains resolve to nothing.
+    $resolveGitAliasTarget = {
+        param([string]$name)
+
+        $aliasTable = & $getGitAliases
+        if (-not $aliasTable.ContainsKey($name)) {
+            return $null
+        }
+
+        $aliasBody = [string]$aliasTable[$name]
+        if ($aliasBody.StartsWith('!')) {
+            return $null
+        }
+
+        $aliasTarget = @($aliasBody -split '\s+' | Where-Object { $_ }) | Select-Object -First 1
+        if ($aliasTarget -and
+            $aliasTarget -match '^[A-Za-z0-9][A-Za-z0-9-]*$' -and
+            -not $aliasTable.ContainsKey($aliasTarget)) {
+            return $aliasTarget
+        }
+
+        $null
+    }
+
     # The root usage block of 'git --help' lists every global option in bracket groups
     # ('[-v | --version] [-C <path>] [--no-advice] ...'), so the list follows the installed git.
     $getGlobalFlags = {
@@ -522,16 +547,10 @@ function Complete-GitNative {
         if ($commandPath.Count -ge 1) {
             $aliasTable = & $getGitAliases
             if ($aliasTable.ContainsKey($commandPath[0])) {
-                $aliasBody = [string]$aliasTable[$commandPath[0]]
                 $aliasMetadata = $null
-
-                if (-not $aliasBody.StartsWith('!')) {
-                    $aliasTarget = @($aliasBody -split '\s+' | Where-Object { $_ }) | Select-Object -First 1
-                    if ($aliasTarget -and
-                        $aliasTarget -match '^[A-Za-z0-9][A-Za-z0-9-]*$' -and
-                        -not $aliasTable.ContainsKey($aliasTarget)) {
-                        $aliasMetadata = & $getCommandMetadata (@($aliasTarget) + @($commandPath | Select-Object -Skip 1))
-                    }
+                $aliasTarget = & $resolveGitAliasTarget $commandPath[0]
+                if ($aliasTarget) {
+                    $aliasMetadata = & $getCommandMetadata (@($aliasTarget) + @($commandPath | Select-Object -Skip 1))
                 }
 
                 if (-not $aliasMetadata) {
@@ -1227,11 +1246,20 @@ function Complete-GitNative {
     }
 
     $commandContext = & $getCommandContext $argsBeforeCursor
-    $commandPath = @($commandContext.CommandPath)
+    # The typed path strips the user's tokens; the effective path, with a non-shell alias
+    # replaced by its target, drives every command-specific value slot below.
+    $typedCommandPath = @($commandContext.CommandPath)
+    $commandPath = $typedCommandPath
+    if ($commandPath.Count -gt 0) {
+        $aliasTarget = & $resolveGitAliasTarget $commandPath[0]
+        if ($aliasTarget) {
+            $commandPath = @($aliasTarget) + @($commandPath | Select-Object -Skip 1)
+        }
+    }
     $commandText = $commandPath -join ' '
     $subcommand = if ($commandPath.Count -gt 0) { $commandPath[0] } else { $null }
-    $argsAfterPath = @(& $getArgumentsAfterPath $argsBeforeCursor $commandPath)
-    $positionalsAfterPath = @(& $getPositionalArgumentsAfterPath $argsBeforeCursor $commandPath)
+    $argsAfterPath = @(& $getArgumentsAfterPath $argsBeforeCursor $typedCommandPath)
+    $positionalsAfterPath = @(& $getPositionalArgumentsAfterPath $argsBeforeCursor $typedCommandPath)
 
     if ($commandContext.PendingGlobalValueOption) {
         if ($globalGitDirectoryFlags -contains $commandContext.PendingGlobalValueOption) {
@@ -1389,7 +1417,7 @@ function Complete-GitNative {
     if ($commandContext.Metadata.Subcommands.Count -gt 0) {
         $isAtSubcommandBoundary = [string]::IsNullOrWhiteSpace($commandContext.LastNonFlagArgument)
         if (-not $isAtSubcommandBoundary -and $commandPath.Count -gt 0) {
-            $isAtSubcommandBoundary = $commandContext.LastNonFlagArgument -eq $commandPath[-1]
+            $isAtSubcommandBoundary = $commandContext.LastNonFlagArgument -eq $typedCommandPath[-1]
         }
 
         if ($commandPath.Count -eq 0) {
