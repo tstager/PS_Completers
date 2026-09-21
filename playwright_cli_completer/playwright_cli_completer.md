@@ -8,7 +8,7 @@
 - `playwright-cli.cmd`
 - `playwright-cli.ps1`
 
-The implementation is **static-first** because the installed `playwright-cli` help surface is explicit and stable enough to encode directly without completion-time help parsing.
+The implementation is **static-first with a catalog overlay**: the command table is encoded in the script, and when `@playwright/cli` is installed its shipped `help.json` catalog is read once (no process spawn) to add commands and flags the table does not know and to drop entries the tool no longer has.
 
 It covers:
 
@@ -41,15 +41,17 @@ There are no top-level assignments, loops, external command calls, or registrati
 
 ## How completion works
 
-### 1. Static command and option metadata
+### 1. Command and option metadata
 
 `Get-PlaywrightCliMetadata` lazily creates the command catalog the first time completion runs. It stores:
 
-- all 90 top-level commands of `@playwright/cli` 0.1.19 and their descriptions (the same set the package's `help.json` catalog enumerates; the tool has no `help` verb, only the global `--help [command]`)
+- all 102 top-level commands of `@playwright/cli` 0.1.21 and their descriptions (the tool has no `help` verb, only the global `--help [command]`)
 - positional value kinds for each command
 - option tables for each command
 - global options `--help`, `--json`, `--raw`, `--version`, and `-s=`
-- small enum tables for browsers, install channels, SameSite values, network state, video sizes, screenshot image formats, and the `video-show-actions` position/cursor values
+- small enum tables for browsers, install channels, SameSite values, network state, video sizes, screenshot image formats, the `video-show-actions` position/cursor values, and the `set-color-scheme`, `set-reduced-motion`, `set-forced-colors`, `set-contrast` and `set-media` emulation values
+
+`Get-PlaywrightCliHelpCatalog` resolves `playwright-cli` with `Get-Command`, walks from the launcher to `node_modules/@playwright/cli/node_modules/playwright-core/lib/tools/cli-client/help.json` (or the hoisted `node_modules/playwright-core/...` location), and parses it with `ConvertFrom-Json`. `Merge-PlaywrightCliHelpCatalog` then takes the catalog's command list and per-command flag map as the surface, keeps the static value kinds and wording for entries it knows, types unknown string flags as generic values and unknown boolean flags as switches, and omits static commands the catalog no longer lists. When the tool or the file is absent the static table serves on its own.
 
 ### 2. Command-context parsing
 

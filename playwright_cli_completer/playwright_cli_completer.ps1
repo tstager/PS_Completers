@@ -78,6 +78,113 @@ function New-PlaywrightCliCommandSpec {
     }
 }
 
+function Get-PlaywrightCliHelpCatalog {
+    # @playwright/cli ships a machine-readable catalog next to the launcher; one cached read, no
+    # process spawn. Returns $null when the tool or the file is absent so the static table serves.
+    $command = Get-Command -Name playwright-cli.ps1, playwright-cli.cmd, playwright-cli -ErrorAction Ignore | Select-Object -First 1
+    if (-not $command -or [string]::IsNullOrWhiteSpace($command.Source)) {
+        return $null
+    }
+
+    $root = Split-Path -Path $command.Source -Parent
+    $candidates = @(
+        (Join-Path -Path $root -ChildPath 'node_modules\@playwright\cli\node_modules\playwright-core\lib\tools\cli-client\help.json')
+        (Join-Path -Path $root -ChildPath 'node_modules\playwright-core\lib\tools\cli-client\help.json')
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+
+        try {
+            $catalog = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+            if ($catalog -is [System.Collections.IDictionary] -and $catalog.Contains('commands')) {
+                return $catalog
+            }
+        } catch {
+            Write-Debug -Message $_.Exception.Message
+        }
+    }
+
+    $null
+}
+
+function Merge-PlaywrightCliHelpCatalog {
+    param(
+        [object[]]$StaticCommands,
+        [System.Collections.IDictionary]$Catalog
+    )
+
+    # The catalog decides which commands exist and which flags each one takes; the static table
+    # contributes value kinds and wording for the entries it knows. Static-only commands are stale.
+    $staticLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($command in @($StaticCommands)) {
+        $staticLookup[$command.Name] = $command
+    }
+
+    foreach ($name in @($Catalog['commands'].Keys)) {
+        $entry = $Catalog['commands'][$name]
+        $helpLines = @([string]$entry['help'] -split "`r?`n")
+        $description = ''
+        foreach ($line in @($helpLines | Select-Object -Skip 1)) {
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                if ($description) { break }
+                continue
+            }
+            if ($line -match '^(Arguments|Options):') {
+                break
+            }
+            $description = ($description + ' ' + $line.Trim()).Trim()
+        }
+        if ($description -and -not $description.EndsWith('.')) {
+            $description += '.'
+        }
+
+        $flagDescriptions = @{}
+        foreach ($line in $helpLines) {
+            if ($line -match '^\s+--(?<flag>[A-Za-z0-9-]+)\s+(?<text>\S.*)$') {
+                $flagDescriptions[$matches.flag] = $matches.text.Trim()
+            }
+        }
+
+        $static = if ($staticLookup.ContainsKey($name)) { $staticLookup[$name] } else { $null }
+        $options = [System.Collections.Generic.List[object]]::new()
+        if ($static) {
+            foreach ($option in @($static.Options)) {
+                [void]$options.Add($option)
+            }
+        }
+
+        $flags = $entry['flags']
+        if ($flags -is [System.Collections.IDictionary]) {
+            foreach ($flag in @($flags.Keys)) {
+                $token = "--$flag"
+                if (Find-PlaywrightCliOptionSpec -Token $token -Options $options.ToArray()) {
+                    continue
+                }
+
+                $flagDescription = if ($flagDescriptions.ContainsKey($flag)) { $flagDescriptions[$flag] } else { "Option $token." }
+                $flagDescription = $flagDescription.Substring(0, 1).ToUpperInvariant() + $flagDescription.Substring(1)
+                if ([string]$flags[$flag] -eq 'boolean') {
+                    [void]$options.Add((New-PlaywrightCliOptionSpec -Tokens @($token) -Description $flagDescription))
+                } else {
+                    [void]$options.Add((New-PlaywrightCliOptionSpec -Tokens @($token) -Description $flagDescription -ValueKind 'Value'))
+                }
+            }
+        }
+
+        $positionals = if ($static) {
+            @($static.Positionals)
+        } else {
+            @(@($entry['args']) | ForEach-Object { 'Value' })
+        }
+
+        $commandDescription = if ($static -and $static.Description) { $static.Description } elseif ($description) { $description } else { "playwright-cli $name." }
+        New-PlaywrightCliCommandSpec -Name $name -Description $commandDescription -Positionals $positionals -Options $options.ToArray()
+    }
+}
+
 function Get-PlaywrightCliMetadata {
     if (Get-Variable -Name PlaywrightCliMetadata -Scope Script -ErrorAction Ignore) {
         return $script:PlaywrightCliMetadata
@@ -190,6 +297,16 @@ function Get-PlaywrightCliMetadata {
         New-PlaywrightCliCommandSpec -Name 'sessionstorage-set' -Description 'Set a sessionStorage item.' -Positionals @('StorageKey', 'StorageValue') -Options @()
         New-PlaywrightCliCommandSpec -Name 'sessionstorage-delete' -Description 'Delete a sessionStorage item.' -Positionals @('StorageKey') -Options @()
         New-PlaywrightCliCommandSpec -Name 'sessionstorage-clear' -Description 'Clear all sessionStorage.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'set-color-scheme' -Description 'Emulate the light or dark color scheme.' -Positionals @('ColorScheme') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'set-reduced-motion' -Description 'Emulate the reduced motion preference.' -Positionals @('ReducedMotion') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'set-forced-colors' -Description 'Emulate forced colors mode.' -Positionals @('ForcedColors') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'set-contrast' -Description 'Emulate the preferred contrast.' -Positionals @('Contrast') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'set-media' -Description 'Emulate the CSS media type.' -Positionals @('MediaType') -Options @()
+        New-PlaywrightCliCommandSpec -Name 'clear-color-scheme' -Description 'Clear color scheme emulation.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'clear-reduced-motion' -Description 'Clear reduced motion emulation.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'clear-forced-colors' -Description 'Clear forced colors emulation.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'clear-contrast' -Description 'Clear contrast emulation.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'clear-media' -Description 'Clear CSS media type emulation.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'route' -Description 'Mock network requests matching a URL pattern.' -Positionals @('RoutePattern') -Options @(
             New-PlaywrightCliOptionSpec -Tokens @('--status') -Description 'HTTP status code.' -ValueKind 'Number'
             New-PlaywrightCliOptionSpec -Tokens @('--body') -Description 'Response body text or JSON string.' -ValueKind 'ResponseBody'
@@ -276,8 +393,18 @@ function Get-PlaywrightCliMetadata {
         )
         New-PlaywrightCliCommandSpec -Name 'close-all' -Description 'Close all browser sessions.' -Positionals @() -Options @()
         New-PlaywrightCliCommandSpec -Name 'kill-all' -Description 'Forcefully kill all browser sessions.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'webmcp-list' -Description 'List the WebMCP tools registered by the page.' -Positionals @() -Options @()
+        New-PlaywrightCliCommandSpec -Name 'webmcp-call' -Description 'Call a WebMCP tool registered by the page.' -Positionals @('WebMcpToolName') -Options @(
+            New-PlaywrightCliOptionSpec -Tokens @('--params') -Description 'Tool input parameters as a JSON object.' -ValueKind 'JsonObject'
+            New-PlaywrightCliOptionSpec -Tokens @('--frame') -Description 'Frame that registered the tool, as reported by webmcp-list.' -ValueKind 'FrameName'
+        )
         New-PlaywrightCliCommandSpec -Name 'tray' -Description 'Run the Playwright tray application.' -Positionals @() -Options @()
     )
+
+    $catalog = Get-PlaywrightCliHelpCatalog
+    if ($catalog) {
+        $commands = @(Merge-PlaywrightCliHelpCatalog -StaticCommands $commands -Catalog $catalog)
+    }
 
     $commandLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($command in $commands) {
@@ -317,6 +444,11 @@ function Get-PlaywrightCliMetadata {
         VideoSizes           = @('800x600', '1024x768', '1280x720', '1600x900', '1920x1080')
         ConsoleLevels        = @('debug', 'info', 'warning', 'warn', 'error')
         ContentTypes         = @('application/json', 'text/plain', 'text/html')
+        ColorSchemes         = @('light', 'dark', 'no-preference')
+        ReducedMotionValues  = @('reduce', 'no-preference')
+        ForcedColorsValues   = @('active', 'none')
+        ContrastValues       = @('more', 'no-preference')
+        MediaTypes           = @('screen', 'print')
     }
 
     $script:PlaywrightCliMetadata
@@ -677,6 +809,40 @@ function Get-PlaywrightCliValueCompletions {
         }
         'ChapterDescription' {
             & $addResult '<description>' 'Chapter description'
+        }
+        'ColorScheme' {
+            foreach ($value in $metadata.ColorSchemes) {
+                & $addResult $value 'Color scheme to emulate'
+            }
+        }
+        'ReducedMotion' {
+            foreach ($value in $metadata.ReducedMotionValues) {
+                & $addResult $value 'Reduced motion preference to emulate'
+            }
+        }
+        'ForcedColors' {
+            foreach ($value in $metadata.ForcedColorsValues) {
+                & $addResult $value 'Forced colors mode to emulate'
+            }
+        }
+        'Contrast' {
+            foreach ($value in $metadata.ContrastValues) {
+                & $addResult $value 'Contrast preference to emulate'
+            }
+        }
+        'MediaType' {
+            foreach ($value in $metadata.MediaTypes) {
+                & $addResult $value 'CSS media type to emulate'
+            }
+        }
+        'WebMcpToolName' {
+            & $addResult '<name>' 'Name of the WebMCP tool to call'
+        }
+        'JsonObject' {
+            & $addResult '<json>' "JSON object for $ContextToken"
+        }
+        'FrameName' {
+            & $addResult '<frame>' 'Frame that registered the tool'
         }
         'SourceLocation' {
             & $addResult '<file>:<line>' 'Source location such as example.spec.ts:42'
