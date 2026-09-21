@@ -23,7 +23,7 @@ The completer script block:
 2. Lazily resolves the installed `just` executable with `Get-Command -Name just.exe, just -CommandType Application, ExternalScript` and reuses that resolved command name for later completions.
 3. Projects `$commandAst.CommandElements` up to the cursor to literal argument text: string constants contribute their unquoted value, every other element contributes its raw extent text, and the element under the cursor is cut at the cursor. Nothing the user typed is evaluated.
 4. If the current word is empty, appends an empty argument so the upstream completer still sees an empty trailing argument position.
-5. Starts the resolved `just` executable directly through `System.Diagnostics.ProcessStartInfo` with `--` followed by those arguments, `JUST_COMPLETE=powershell` set on the child process only, stdin closed, and a 5-second timeout after which the child is killed and no results are returned.
+5. Starts the resolved `just` executable directly through `System.Diagnostics.ProcessStartInfo` with `--` followed by those arguments, `JUST_COMPLETE=powershell` set on the child process only, the child's working directory set to the session's current filesystem location (a child would otherwise inherit the process start directory, which `Set-Location` never updates, and search for the wrong justfile), stdin closed, and a 5-second timeout after which the child is killed and no results are returned.
 6. Strips ANSI escape sequences from the captured output and splits it into lines.
 7. Splits each returned line on a tab character:
    - column 1 becomes the completion text

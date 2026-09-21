@@ -71,6 +71,13 @@ function Invoke-JustCompletion {
         $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
         $startInfo.Environment['JUST_COMPLETE'] = 'powershell'
 
+        # A child inherits the process start directory, which Set-Location never updates;
+        # hand it the session's filesystem location so just finds the right justfile.
+        $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+        if ($location) {
+            $startInfo.WorkingDirectory = $location.ProviderPath
+        }
+
         $process = [System.Diagnostics.Process]::Start($startInfo)
         try {
             $process.StandardInput.Close()
