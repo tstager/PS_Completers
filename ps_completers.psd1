@@ -633,6 +633,16 @@
             )
         }
         @{
+            Path    = 'pip_completer/pip_completer.ps1'
+            Trusted = $false
+            Targets = @(
+                @{ CommandName = 'pip'; Native = $true }
+                @{ CommandName = 'pip.exe'; Native = $true }
+                @{ CommandName = 'pip3'; Native = $true }
+                @{ CommandName = 'pip3.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'playwright_cli_completer/playwright_cli_completer.ps1'
             Trusted = $false
             Targets = @(
