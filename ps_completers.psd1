@@ -147,6 +147,14 @@
             )
         }
         @{
+            Path    = 'comfy_cli_completer/comfy_cli_completer.ps1'
+            Trusted = $false
+            Targets = @(
+                @{ CommandName = 'comfy-cli'; Native = $true }
+                @{ CommandName = 'comfy-cli.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'comm_completer/comm_completer.ps1'
             Trusted = $false
             Targets = @(
