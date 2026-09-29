@@ -6,10 +6,11 @@ Conformance gate for the completer scripts in this repository.
 
 .DESCRIPTION
 Runs Test-CompleterScript over every *_completer.ps1 script and fails on any
-Error finding, then imports ps_completers.psd1 lazily and checks it lists
-exactly the scripts in the repository. Nothing is executed; both checks are
-static. Needs CompleterActions 2.0.0-preview1 or later. Run it in its own
-profile-free process:
+Error finding, then runs Test-CompleterSet over ps_completers.psd1 and fails on
+any drift between the set and the scripts on disk (missing or unlisted
+scripts, stale hashes, target mismatches). Nothing is executed and nothing is
+registered; both checks are static. Needs CompleterActions 2.1.0-preview1 or
+later. Run it in its own profile-free process:
 
     pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
 #>
@@ -44,22 +45,9 @@ Describe 'Completer scripts conform to the CompleterActions strict import gramma
 
 Describe 'ps_completers.psd1 matches the repository' {
     BeforeAll {
-        Import-Module -Name CompleterActions -MinimumVersion 2.0.0 -ErrorAction Stop
+        Import-Module -Name CompleterActions -MinimumVersion 2.1.0 -ErrorAction Stop
 
-        $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-        $script:SetPath = Join-Path -Path $repoRoot -ChildPath 'ps_completers.psd1'
-        $script:ScriptPaths = @(
-            Get-ChildItem -Path $repoRoot -Directory -Filter '*_completer' |
-                Get-ChildItem -Filter '*_completer.ps1' -File |
-                ForEach-Object { $_.FullName } |
-                Sort-Object
-        )
-    }
-
-    AfterAll {
-        Get-CompleterRegistration -ManagedOnly |
-            Where-Object { $_.ScriptPath -and $_.ScriptPath -in $script:ScriptPaths } |
-            Unregister-CompleterRegistration -Confirm:$false
+        $script:SetPath = Join-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -ChildPath 'ps_completers.psd1'
     }
 
     It 'keeps every entry on the strict tier' {
@@ -68,12 +56,9 @@ Describe 'ps_completers.psd1 matches the repository' {
         @($set.Entries | Where-Object { $_.Trusted }) | Should -BeNullOrEmpty -Because 'every script passes the strict grammar, so no entry needs to be trusted'
     }
 
-    It 'imports lazily and lists exactly the completer scripts in the repository' {
-        $records = @(Import-CompleterSet -LiteralPath $script:SetPath -Force -Confirm:$false)
+    It 'has no drift' {
+        $findings = @(Test-CompleterSet -LiteralPath $script:SetPath)
 
-        @($records | Where-Object State -NE 'Pending') | Should -BeNullOrEmpty -Because 'a lazy import must not load any script'
-
-        $listed = @($records.ScriptPath | Sort-Object -Unique)
-        $listed | Should -Be $script:ScriptPaths -Because 'run tools/Export-CompleterSetFile.ps1 after adding, renaming, or removing a completer'
+        $findings | Should -BeNullOrEmpty -Because (($findings | ForEach-Object { "$($_.Construct): $($_.Message) $($_.Hint)" }) -join '; ')
     }
 }
