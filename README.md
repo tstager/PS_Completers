@@ -8,18 +8,37 @@ Recent additions include standalone completers for the coreutils tools `comm`, `
 
 ## Quick start
 
-With [CompleterActions](https://www.powershellgallery.com/packages/CompleterActions)
-2.0.0-preview1 or later, one line registers every completer in this repository
-lazily. Nothing runs until the first tab press on a command:
+### Install from the PowerShell Gallery
+
+The completers ship as the
+[PS_Completers](https://www.powershellgallery.com/packages/PS_Completers)
+package, a [CompleterActions](https://www.powershellgallery.com/packages/CompleterActions)
+completer set. Installing it installs CompleterActions 2.2.0 or later, and one
+line in your profile registers every completer lazily. Nothing runs until the
+first tab press on a command:
 
 ```powershell
-Install-PSResource CompleterActions -Prerelease
+Install-PSResource PS_Completers
+Import-CompleterSet -Name PS_Completers
+```
+
+The package contains nothing that runs on import: a manifest, the set file, and
+the completer scripts. Each script loads on its first tab press, under the strict
+import grammar, so profile start pays for one small file read instead of parsing
+173 scripts. Update with `Update-PSResource PS_Completers`.
+
+### Use the repository directly
+
+From a clone, with CompleterActions 2.0.0 or later installed, the same line
+takes the path to the set file instead of the package name:
+
+```powershell
+Install-PSResource CompleterActions
 Import-CompleterSet -Path .\ps_completers.psd1
 ```
 
 Put the same `Import-CompleterSet` line in your profile with the full path to
-the set file. Each script loads on its first tab press, so profile start pays
-for one small file read instead of parsing 169 scripts.
+the set file.
 
 Without the module, dot-source one or more completer scripts into the current session:
 
