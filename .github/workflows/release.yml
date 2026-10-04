@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish and release
+    runs-on: ubuntu-latest
+
+    steps:
+      # Full history including the tag object: the version check below compares
+      # the pushed tag with the package manifest, and the release is created
+      # with --verify-tag.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The stable CompleterActions, not a prerelease: the package manifest's
+      # RequiredModules names a stable minimum, and Publish-PSResource validates
+      # that dependency against what is installed here, so the release runner
+      # should see what a clean Install-PSResource PS_Completers would see.
+      - name: Install modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-PSResource -Name CompleterActions -Repository PSGallery -TrustRepository -Scope CurrentUser
+          Install-PSResource -Name Pester -Version '6.1.0' -Repository PSGallery -TrustRepository -Scope CurrentUser
+          Get-InstalledPSResource -Name CompleterActions, Pester | Format-Table Name, Version | Out-String | Write-Host
+
+      - name: Verify tag matches ModuleVersion
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Import-PowerShellDataFile -Path ./package/PS_Completers.psd1
+          $expectedTag = "v$($manifest.ModuleVersion)"
+
+          if ($env:GITHUB_REF_NAME -ne $expectedTag)
+          {
+              throw "The tag '$env:GITHUB_REF_NAME' does not match package/PS_Completers.psd1 ModuleVersion '$($manifest.ModuleVersion)' (expected tag '$expectedTag')."
+          }
+
+          Write-Host "Tag '$env:GITHUB_REF_NAME' matches ModuleVersion '$($manifest.ModuleVersion)'."
+
+      # The same gate the Conformance workflow runs: every script passes the strict
+      # grammar, the set matches the repository, and the staged package passes
+      # Test-CompleterSet.
+      - name: Test
+        shell: pwsh
+        run: Invoke-Pester -Path ./tests -CI
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: testResults.xml
+          if-no-files-found: ignore
+
+      # Stage with the repository's own tool, then check the staged set once more
+      # under the installed CompleterActions and pack the .nupkg that becomes the
+      # release asset. Publish-PSResource packs the folder itself; the asset is a
+      # record of what was published.
+      - name: Stage the package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'stage'
+          $package = & ./tools/Build-Package.ps1 -DestinationPath $stage
+          $set = Join-Path -Path $package.FullName -ChildPath 'completers/completers.psd1'
+
+          $findings = @(Test-CompleterSet -LiteralPath $set)
+          if ($findings.Count -gt 0)
+          {
+              $findings | Format-Table -AutoSize | Out-String | Write-Host
+              throw "Test-CompleterSet reported $($findings.Count) finding(s) on the staged set."
+          }
+
+          Compress-PSResource -Path $package.FullName -DestinationPath $env:RUNNER_TEMP
+          Get-ChildItem -Path $env:RUNNER_TEMP -Filter '*.nupkg' | Format-Table Name, Length | Out-String | Write-Host
+          "PACKAGE_PATH=$($package.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Environment variable names are case-sensitive on Linux, so this name must
+      # keep its exact casing in both places.
+      - name: Publish to the PowerShell Gallery
+        shell: pwsh
+        env:
+          GalleryAPI: ${{ secrets.GALLERY_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:GalleryAPI))
+          {
+              throw 'The GALLERY_API_KEY secret is not set on this repository.'
+          }
+
+          Publish-PSResource -Path $env:PACKAGE_PATH -Repository PSGallery -ApiKey $env:GalleryAPI
+
+      - name: Create the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = (Get-ChildItem -Path $env:RUNNER_TEMP -Filter '*.nupkg' | Select-Object -First 1).FullName
+          $arguments = @($env:GITHUB_REF_NAME, '--title', $env:GITHUB_REF_NAME, '--verify-tag', '--generate-notes')
+
+          # A hyphen in the tag means a prerelease label, so the GitHub release must not become "latest".
+          if ($env:GITHUB_REF_NAME -match '-')
+          {
+              $arguments += '--prerelease'
+          }
+
+          gh release create @arguments $asset
