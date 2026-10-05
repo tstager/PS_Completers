@@ -6,7 +6,7 @@ Use these patterns to validate new or changed native completers in this reposito
 
 ```powershell
 pwsh -NoProfile -Command '
-Import-Module CompleterActions -MinimumVersion 2.0.0
+Import-Module CompleterActions -MinimumVersion 2.2.0
 $findings = @(Test-CompleterScript -LiteralPath ".\<name>_completer\<name>_completer.ps1")
 "FINDINGS=$($findings.Count)"
 $findings | Format-List Line, Column, Construct, Message, Hint
@@ -34,15 +34,15 @@ Expect `ERRORS_AFTER_LOAD=0`. A `Get-Variable` probe with `-ErrorAction Silently
 ## 3. Run the repository gate
 
 ```powershell
-pwsh -NoProfile -File ./tools/Export-CompleterSetFile.ps1   # only when a script was added, renamed, or removed
+pwsh -NoProfile -File ./tools/Export-CompleterSetFile.ps1   # after ANY change to a completer script: the set stores a content hash per entry
 pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
 ```
 
-The gate runs `Test-CompleterScript` over every script, then imports `ps_completers.psd1` lazily and checks it lists exactly the scripts in the repository. A whole-set strict import is a useful second check:
+The gate needs CompleterActions 2.2.0 or later. It runs `Test-CompleterScript` over every script, then checks that `ps_completers.psd1` has no `Trusted` entries and no `Test-CompleterSet` drift (a stale hash counts as drift). Finally it stages the package with `tools/Build-Package.ps1` and checks that the staged set passes `Test-CompleterSet` and imports by name with the same records. A whole-set strict import is a useful second check:
 
 ```powershell
 pwsh -NoProfile -Command '
-Import-Module CompleterActions -MinimumVersion 2.0.0
+Import-Module CompleterActions -MinimumVersion 2.2.0
 $r = Get-ChildItem -Recurse -Filter *_completer.ps1 | Import-CompleterScript -ErrorAction Continue 2>&1
 "IMPORTED=$(@($r | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }).Count) ERRORS=$(@($r | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }).Count)"
 '

@@ -125,15 +125,30 @@ Everything else is rejected at script scope and must live inside a function body
 Check a script with:
 
 ```powershell
-Import-Module CompleterActions -MinimumVersion 2.0.0
+Import-Module CompleterActions -MinimumVersion 2.2.0
 Test-CompleterScript -LiteralPath .\<name>_completer\<name>_completer.ps1
 ```
 
-A conforming script returns nothing. Each finding carries `Line`, `Column`, `Construct`, `Message` and `Hint`; every strict-grammar finding has severity `Error`, and a script that does not parse yields one finding per parse error. The repository gate `tests/Completers.Tests.ps1` runs this over every script and then imports `ps_completers.psd1` lazily, so regenerate the set file after adding, renaming, or removing a completer:
+A conforming script returns nothing. Each finding carries `Line`, `Column`, `Construct`, `Message` and `Hint`; every strict-grammar finding has severity `Error`, and a script that does not parse yields one finding per parse error.
+
+The repository gate `tests/Completers.Tests.ps1` needs CompleterActions 2.2.0 or later. CI installs the latest release including prereleases (3.0.0-rc1 at the time of writing), so a CompleterActions release that tightens the grammar or set schema fails there first. The gate checks three things:
+
+1. `Test-CompleterScript` reports no `Error` finding for any script.
+2. `ps_completers.psd1` keeps every entry on the strict tier (none `Trusted`), and `Test-CompleterSet` reports no drift between the set and the scripts.
+3. The package staged by `tools/Build-Package.ps1` passes `Test-CompleterSet` and imports by name with the same records as the repository set.
+
+The set file stores a content hash per entry, so **regenerate it after any change to a completer script**, not only after adding, renaming, or removing one. A stale hash is drift and fails the gate:
 
 ```powershell
 pwsh -NoProfile -File ./tools/Export-CompleterSetFile.ps1
 pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
+```
+
+To check the publishable package by hand (the release workflow does the same before `Publish-PSResource`), stage it and test the staged set. A ready package prints nothing:
+
+```powershell
+pwsh -NoProfile -File ./tools/Build-Package.ps1 -DestinationPath ./out
+Test-CompleterSet -LiteralPath ./out/PS_Completers/completers/completers.psd1
 ```
 
 ## Shared idioms and the defects they prevent
