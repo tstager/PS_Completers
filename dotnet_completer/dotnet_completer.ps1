@@ -22,7 +22,7 @@ function Get-DotnetExecutablePath {
     }
 
     $cache.ExecutableProbed = $true
-    $command = @(Get-Command -Name dotnet -CommandType Application -ErrorAction SilentlyContinue) |
+    $command = @(Get-Command -Name dotnet -CommandType Application -ErrorAction Ignore) |
         Select-Object -First 1
     if ($null -ne $command) {
         $cache.ExecutablePath = $command.Source
@@ -37,8 +37,17 @@ function Get-DotnetLiveCompletion {
         [int]$Position
     )
 
+    # A child inherits the process start directory, which Set-Location never
+    # updates; run it in the session's filesystem location, and key the cache by
+    # that directory, because project-aware answers (--framework, ...) depend on it.
+    $directory = ''
+    $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+    if ($location) {
+        $directory = $location.ProviderPath
+    }
+
     $cache = Get-DotnetCompletionCache
-    $key = "$Position|$Text"
+    $key = "$directory|$Position|$Text"
     if ($cache.Results.ContainsKey($key)) {
         return $cache.Results[$key]
     }
@@ -62,6 +71,9 @@ function Get-DotnetLiveCompletion {
         $process.StartInfo.RedirectStandardInput = $true
         $process.StartInfo.RedirectStandardOutput = $true
         $process.StartInfo.RedirectStandardError = $true
+        if ($directory) {
+            $process.StartInfo.WorkingDirectory = $directory
+        }
         foreach ($argument in @('complete', '--position', $Position.ToString(), $Text)) {
             [void]$process.StartInfo.ArgumentList.Add($argument)
         }

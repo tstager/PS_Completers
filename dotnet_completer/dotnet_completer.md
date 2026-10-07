@@ -141,6 +141,10 @@ once a partial path has been typed, the directories to walk into.
   SDK cannot stall the prompt and no prefix is paid for twice. The previous
   revision spawned `dotnet complete` synchronously from five command arms with no
   cache, no timeout and no error handling.
+- The child runs in the session's filesystem location (`Get-Location -PSProvider
+  FileSystem`), not the directory pwsh was started in, which `Set-Location` never
+  updates, and the cache is keyed by that directory. Project-aware answers such as
+  `dotnet build --framework <TAB>` therefore come from the project you are in.
 - With no `dotnet` on `PATH` the completer still works from the vendored table
   alone.
 
