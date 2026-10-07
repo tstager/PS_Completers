@@ -1,35 +1,37 @@
-# Help-driven completion for the installed comfy-cli executable.
+# Completion for comfy-cli, driven by the CLI's machine-readable `--help-json` command tree.
 Set-StrictMode -Version 2.0
 
-function Get-ComfyCliHelpText {
-    param([string[]]$Segments)
+if (-not (Get-Variable -Name ComfyCliCompletionCache -Scope Script -ErrorAction Ignore)) {
+    $script:ComfyCliCompletionCache = @{ Tree = $null; Missing = $false; RetryAt = 0 }
+}
 
-    $exe = Get-Command comfy-cli.exe -CommandType Application -ErrorAction Ignore | Select-Object -First 1
-    if ($null -eq $exe) { return '' }
+function Invoke-ComfyCliHelpJson {
+    param([string]$Path)
 
     $process = [System.Diagnostics.Process]::new()
     try {
-        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($exe.Source)
-        $process.StartInfo.UseShellExecute = $false
-        $process.StartInfo.CreateNoWindow = $true
-        $process.StartInfo.RedirectStandardInput = $true
-        $process.StartInfo.RedirectStandardOutput = $true
-        $process.StartInfo.RedirectStandardError = $true
-        $process.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-        $process.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-        $process.StartInfo.Environment['PYTHONIOENCODING'] = 'utf-8'
-        $process.StartInfo.Environment['NO_COLOR'] = '1'
-        foreach ($segment in @($Segments)) { [void]$process.StartInfo.ArgumentList.Add($segment) }
-        [void]$process.StartInfo.ArgumentList.Add('--help')
+        $info = [System.Diagnostics.ProcessStartInfo]::new($Path)
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $info.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $info.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $info.Environment['PYTHONIOENCODING'] = 'utf-8'
+        $info.Environment['NO_COLOR'] = '1'
+        [void]$info.Environment.Remove('FORCE_COLOR')
+        [void]$info.ArgumentList.Add('--help-json')
+        $process.StartInfo = $info
         [void]$process.Start()
         $process.StandardInput.Close()
         $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(5000)) {
+        [void]$process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(8000)) {
             $process.Kill($true)
             return ''
         }
-        return ($stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()) -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+        return $stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
     } catch {
         return ''
     } finally {
@@ -37,75 +39,145 @@ function Get-ComfyCliHelpText {
     }
 }
 
-function ConvertFrom-ComfyCliHelp {
-    param([string]$HelpText)
+function Get-ComfyCliHelpString {
+    param([object]$Text)
 
-    $commands = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $options = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $usage = ''
-    $section = ''
-    $current = $null
-    foreach ($line in ($HelpText -split '\r?\n')) {
-        if ($line -match '^\s*Usage:\s*comfy-cli(?:\.exe)?\s*(.*)$') { $usage = $Matches[1].Trim(); continue }
-        if ($line -match '^\s*┌─\s*(Options|Commands)\b') { $section = $Matches[1]; $current = $null; continue }
-        if ($line -match '^\s*└') { $section = ''; $current = $null; continue }
-        if ($section -eq '' -or $line -notmatch '^\s*│(?<content>.*?)│\s*$') { continue }
-        $raw = $Matches.content
-        $content = $raw.Trim()
-        if (-not $content) { continue }
-
-        if ($section -eq 'Commands') {
-            if ($content -match '^(?<name>[A-Za-z0-9][A-Za-z0-9-]*)\s{2,}(?<description>\S.*)$') {
-                $commands[$Matches.name] = $Matches.description.Trim()
-                $current = $Matches.name
-            } elseif ($null -ne $current) {
-                $commands[$current] = ($commands[$current] + ' ' + $content).Trim()
-            }
-            continue
-        }
-
-        $match = if ($raw -match '^\s{0,3}--?') {
-            [regex]::Match($content, '^(?:(?<name>--?[A-Za-z][A-Za-z0-9-]*)(?:\s+|,\s*)?)+')
-        } else { [System.Text.RegularExpressions.Match]::Empty }
-        if ($match.Success) {
-            $names = @($match.Groups['name'].Captures | ForEach-Object { $_.Value })
-            $remainder = $content.Substring($match.Length).Trim()
-            $meta = ''
-            if ($remainder -match '^<(?<meta>[^>]+)>\s*(?<description>.*)$') {
-                $meta = $Matches.meta
-                $remainder = $Matches.description.Trim()
-            } elseif ($remainder -match '^(?<meta>[A-Z][A-Z0-9_]*(?:=[A-Z][A-Z0-9_]*)?)\s{2,}(?<description>.+)$') {
-                $meta = $Matches.meta
-                $remainder = $Matches.description.Trim()
-            }
-            $entry = [pscustomobject]@{ Names = $names; Meta = $meta; Description = $remainder }
-            foreach ($name in $names) {
-                if ($name -in @('--install-completion', '--show-completion')) { continue }
-                $options[$name] = $entry
-            }
-            $current = $entry
-        } elseif ($null -ne $current) {
-            $current.Description = ($current.Description + ' ' + $content).Trim()
-        }
-    }
-
-    [pscustomobject]@{ Commands = $commands; Options = $options; Usage = $usage }
+    # Help strings carry Rich markup escapes such as '\[all|comfy|cli]'.
+    ([string]$Text -replace '\\\[', '[' -replace '\s+', ' ').Trim()
 }
 
-function Get-ComfyCliCatalog {
-    param([string[]]$Segments)
+function ConvertTo-ComfyCliParamEntry {
+    param([System.Collections.IDictionary]$Param)
 
-    if (-not (Get-Variable -Name ComfyCliCatalogs -Scope Script -ErrorAction Ignore)) {
-        $script:ComfyCliCatalogs = @{}
+    # Python-side names carry suffixes such as data_dir_opt and type_; drop them for matching and display.
+    $name = [string]$Param['name'] -replace '_opt$|_+$', ''
+    $type = [string]$Param['type']
+    $help = Get-ComfyCliHelpString $Param['help']
+    $takesValue = -not $Param['is_flag']
+    $choices = @()
+    if ($takesValue) {
+        if ($Param.Contains('choices') -and $Param['choices']) {
+            $choices = @($Param['choices'])
+        } elseif ($type -eq 'boolean') {
+            $choices = @('true', 'false')
+        } elseif ($name -eq 'where') {
+            $choices = @('local', 'cloud' | Where-Object { -not $help -or $help -match "\b$_\b" })
+        } elseif ($type -eq 'str') {
+            if ($help -match '^\[(?<list>[A-Za-z][\w-]*(?:\|[A-Za-z][\w-]*)+)\]') {
+                $choices = @($Matches.list -split '\|')
+            } elseif ($help -match '\bone of:?\s*(?<list>[A-Za-z][\w-]*(?:\s*,\s*[A-Za-z][\w-]*)+)') {
+                $choices = @($Matches.list -split '\s*,\s*')
+            } elseif ($help -match '(?<![\w-])(?<list>[A-Za-z][\w-]*(?:\s*\|\s*[A-Za-z][\w-]*)+)\s*(?:[.)\]]|$)') {
+                $choices = @($Matches.list -split '\s*\|\s*')
+            } elseif ($help -match "'(?<first>[\w.-]+)'(?:\s*\([^)]*\))?\s+or\s+'(?<second>[\w.-]+)'") {
+                $choices = @($Matches.first, $Matches.second)
+            } elseif ($help -match "(?:^|:)\s*'(?<first>[\w.-]+)'(?:\s*\([^)]*\))?[^;']*;\s*'(?<second>[\w.-]+)'") {
+                # "'full' (default) echoes ...; 'summary' returns ..."
+                $choices = @($Matches.first, $Matches.second)
+            } elseif ($help -match ':\s*(?<list>[A-Za-z0-9][\w-]*(?:,\s*[A-Za-z0-9][\w-]*)+)\.?$') {
+                # A closed comma list that ends the help, e.g. "Output kind: image, video, audio, 3d."
+                $choices = @($Matches.list -split ',\s*')
+            }
+        }
     }
-    $key = @($Segments) -join ' '
-    if ($script:ComfyCliCatalogs.ContainsKey($key)) { return $script:ComfyCliCatalogs[$key] }
 
-    $catalog = ConvertFrom-ComfyCliHelp (Get-ComfyCliHelpText $Segments)
-    if ($catalog.Options.Count -gt 0 -or $catalog.Commands.Count -gt 0) {
-        $script:ComfyCliCatalogs[$key] = $catalog
+    $flags = if ($Param.Contains('flags')) { @($Param['flags']) } else { @() }
+    # Path slots are mostly typed 'str', so the parameter and long-flag names decide; *_id and model-folder names stay free text.
+    $longFlag = @($flags | Where-Object { $_ -like '--*' } | Select-Object -First 1)
+    $slotNames = @($name) + @($longFlag | ForEach-Object { $_.TrimStart('-') -replace '-', '_' })
+    $kind = if ($choices.Count -gt 0) { 'Choice' }
+    elseif (-not $takesValue) { 'Flag' }
+    elseif ($slotNames -match '^(?:workspace|workspace_path|lib)$|(?:^|_)(?:dir|root)$') { 'Directory' }
+    elseif ($type -eq 'path' -or $slotNames -match '(?:^|_)(?:file|files|path|workflow|output|input|out|blueprint|gallery|deps|ops|template|fragment|python|snapshot)$') { 'Path' }
+    else { 'Value' }
+
+    $description = if ($help) { $help } else { $name -replace '_', ' ' }
+    if ($Param['required']) { $description = 'Required. ' + $description }
+    [pscustomobject]@{
+        Name        = $name -replace '_', '-'
+        Flags       = $flags
+        TakesValue  = $takesValue
+        Kind        = $kind
+        Choices     = $choices
+        Open        = $help -match '\bor one of\b'
+        Hidden      = [bool]$Param['hidden']
+        Description = $description
     }
-    return $catalog
+}
+
+function Add-ComfyCliNode {
+    param([System.Collections.IDictionary]$Command, [string]$Path, [System.Collections.IDictionary]$Tree)
+
+    $node = [pscustomobject]@{
+        Commands  = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        Options   = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        Arguments = [System.Collections.Generic.List[object]]::new()
+    }
+    foreach ($param in @($Command['params'])) {
+        $entry = ConvertTo-ComfyCliParamEntry $param
+        if ($param['param_kind'] -eq 'argument') { $node.Arguments.Add($entry); continue }
+        foreach ($flag in $entry.Flags) {
+            # Typer's shell-integration installers are not useful completions.
+            if ($flag -in @('--install-completion', '--show-completion')) { continue }
+            $node.Options[$flag] = $entry
+        }
+    }
+    $node.Options['--help'] = [pscustomobject]@{
+        Name = 'help'; Flags = @('--help'); TakesValue = $false; Kind = 'Flag'; Choices = @(); Open = $false
+        Hidden = $false; Description = 'Show this message and exit.'
+    }
+    $Tree[$Path] = $node
+
+    if ($Command.Contains('subcommands') -and $Command['subcommands']) {
+        foreach ($name in $Command['subcommands'].Keys) {
+            $sub = $Command['subcommands'][$name]
+            $summary = Get-ComfyCliHelpString $(if ($sub['short_help']) { $sub['short_help'] } else { $sub['help'] })
+            $node.Commands[$name] = [pscustomobject]@{ Description = $summary; Hidden = [bool]$sub['hidden'] }
+            Add-ComfyCliNode -Command $sub -Path ($Path + ' ' + $name).Trim() -Tree $Tree
+        }
+    }
+}
+
+function Get-ComfyCliTree {
+    $cache = $script:ComfyCliCompletionCache
+    if ($null -ne $cache.Tree) { return $cache.Tree }
+    if ($cache.Missing -or [Environment]::TickCount64 -lt $cache.RetryAt) { return $null }
+    $exe = Get-Command comfy-cli.exe -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    if ($null -eq $exe) { $cache.Missing = $true; return $null }
+    # A timeout or unreadable output is retried on a later Tab, at most once a minute.
+    $cache.RetryAt = [Environment]::TickCount64 + 60000
+
+    $json = Invoke-ComfyCliHelpJson -Path $exe.Source
+    # Test-Json first: a caught ConvertFrom-Json failure would still land in the caller's $Error.
+    if (-not $json -or -not (Test-Json -Json $json -ErrorAction Ignore)) { return $null }
+    try { $envelope = $json | ConvertFrom-Json -AsHashtable -ErrorAction Stop } catch { return $null }
+    if (-not ($envelope -is [System.Collections.IDictionary] -and $envelope['ok'] -and $envelope['data'])) { return $null }
+
+    $data = $envelope['data']
+    $tree = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    Add-ComfyCliNode -Command @{ params = $data['root']['params']; subcommands = $data['commands'] } -Path '' -Tree $tree
+
+    # `comfy generate` parses its own flags, so --help-json lists only its target; these come from `comfy generate --help`.
+    if ($tree.ContainsKey('generate')) {
+        $generate = $tree['generate']
+        foreach ($spec in @(
+                @('--download', 'Path', 'Download the generated output to this path.'),
+                @('--async', 'Flag', 'Submit without waiting; resume later with `comfy generate resume <model> <job>`.'),
+                @('--yes', 'Flag', 'Skip the credit-spend confirmation (required for --json and non-TTY runs).'),
+                @('--api-key', 'Value', 'Comfy API key (otherwise the cloud login session or COMFY_API_KEY).'),
+                @('--emit-workflow', 'Path', 'Write a runnable workflow to this path instead of calling the proxy.'),
+                @('--emit-ops', 'Flag', 'With --emit-workflow, also return a stamped op batch in the envelope.'),
+                @('--actor', 'Value', 'Op author id for --emit-ops.'),
+                @('--base-version', 'Value', 'Draft version the emitted ops are stamped against.'))) {
+            $generate.Options[$spec[0]] = [pscustomobject]@{
+                Name = $spec[0].TrimStart('-'); Flags = @($spec[0]); TakesValue = $spec[1] -ne 'Flag'; Kind = $spec[1]
+                Choices = @(); Open = $false; Hidden = $false; Description = $spec[2]
+            }
+        }
+    }
+
+    $cache.Tree = $tree
+    return $tree
 }
 
 function New-ComfyCliCompletion {
@@ -153,56 +225,45 @@ function Get-ComfyCliPathCompletion {
 }
 
 function Get-ComfyCliValueCompletion {
-    param([string]$Option, [object]$Entry, [string]$Word, [string]$Prefix = '')
+    param([string]$Slot, [object]$Entry, [string]$Word, [string]$Prefix = '')
 
     $value = $Word.Trim("'", '"')
-    $name = $Option.TrimStart('-')
-    if ($name -match '(?i)(file|folder|directory|path|workspace|workflow|output|input|config|image)$' -or $Entry.Meta -match '(?i)^(file|path|dir|directory)$') {
-        Get-ComfyCliPathCompletion $value $Prefix ($name -match '(?i)(folder|directory|workspace)$')
-        return
-    }
-
-    $description = $Entry.Description
-    if ($Option -ceq '--where') {
-        $root = Get-ComfyCliCatalog -Segments @()
-        if ($root.Options.ContainsKey('--where')) { $description = $root.Options['--where'].Description }
-    }
-    $choices = @()
-    if ($description -match '(?i)\b(?:choices?|one of):?\s*\[?([A-Za-z][A-Za-z0-9_-]*(?:\s*[,|]\s*[A-Za-z][A-Za-z0-9_-]*)+)') {
-        $choices = @($Matches[1] -split '\s*[,|]\s*')
-    } elseif ($description -match "'([A-Za-z][A-Za-z0-9_-]*)'\s+or\s+'([A-Za-z][A-Za-z0-9_-]*)'") {
-        $choices = @($Matches[1], $Matches[2])
-    }
-    if ($choices.Count -gt 0) {
-        foreach ($choice in $choices) {
-            if ($choice.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
-                New-ComfyCliCompletion ($Prefix + $choice) $Entry.Description
+    switch ($Entry.Kind) {
+        'Directory' { Get-ComfyCliPathCompletion -Word $value -Prefix $Prefix -DirectoryOnly $true; return }
+        'Path' { Get-ComfyCliPathCompletion $value $Prefix; return }
+        'Choice' {
+            $found = $false
+            foreach ($choice in $Entry.Choices) {
+                if ($choice.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    New-ComfyCliCompletion ($Prefix + $choice) $Entry.Description
+                    $found = $true
+                }
             }
+            # An open list (e.g. "a model alias or one of: ...") also accepts free text.
+            if (-not $Entry.Open -or ($found -and $value)) { return }
         }
-        return
     }
-    $hint = if ($Entry.Meta) { '<' + $Entry.Meta + '>' } else { '<value>' }
-    New-ComfyCliCompletion ($Prefix + $(if ($value) { $value } else { $hint })) "Enter $hint for $Option"
+    $hint = '<' + $Entry.Name + '>'
+    New-ComfyCliCompletion ($Prefix + $(if ($value) { $value } else { $hint })) "Enter $hint for $Slot. $($Entry.Description)"
 }
 
 function Get-ComfyCliOperandCompletion {
-    param([object]$Catalog, [int]$Index, [string]$Word)
+    param([object]$Node, [int]$Index, [string]$Word)
 
-    $usage = $Catalog.Usage -replace '^\s*(?:\S+\s+)*?\[OPTIONS\]\s*', ''
-    $parts = @($usage -split '\s+' | Where-Object { $_ -and $_ -notin @('COMMAND', '[ARGS]...', '[OPTIONS]') })
-    if ($parts.Count -eq 0) { return }
-    $operand = if ($Index -lt $parts.Count) { $parts[$Index] } elseif ($parts.Count -gt 0 -and $parts[-1] -match '\.\.\.$') { $parts[-1] } else { '<argument>' }
-    $operand = $operand.Trim('[', ']', '{', '}', '.', '<', '>')
-    if (-not $operand) { $operand = 'argument' }
-    if ($operand -match '(?i)(file|files|path|workflow|image|folder|directory|filenames)') {
-        Get-ComfyCliPathCompletion $Word
-    } else {
-        New-ComfyCliCompletion $(if ($Word) { $Word } else { '<' + $operand + '>' }) "Enter $operand"
-    }
+    $arguments = $Node.Arguments
+    if ($arguments.Count -eq 0) { return }
+    $last = $arguments[$arguments.Count - 1]
+    # --help-json does not mark variadic arguments; their names are plural (nodes, files, prompt_ids).
+    $argument = if ($Index -lt $arguments.Count) { $arguments[$Index] } elseif ($last.Name -match 's$') { $last } else { $null }
+    if ($null -eq $argument) { return }
+    Get-ComfyCliValueCompletion -Slot $argument.Name -Entry $argument -Word $Word
 }
 
 function Complete-ComfyCli {
     param([string]$Word, [System.Management.Automation.Language.CommandAst]$Ast, [int]$Cursor)
+
+    $tree = Get-ComfyCliTree
+    if ($null -eq $tree) { return }
 
     $tokens = @()
     foreach ($element in @($Ast.CommandElements | Select-Object -Skip 1)) {
@@ -213,8 +274,8 @@ function Complete-ComfyCli {
         $tokens += $text
     }
 
-    $segments = @()
-    $catalog = Get-ComfyCliCatalog $segments
+    $path = ''
+    $node = $tree[$path]
     $operands = @()
     $pending = $null
     $endOptions = $false
@@ -223,52 +284,54 @@ function Complete-ComfyCli {
         if ($token -ceq '--') { $endOptions = $true; continue }
         if (-not $endOptions -and $token.StartsWith('-')) {
             $optionName = ($token -split '=', 2)[0]
-            if ($token -notmatch '=' -and $catalog.Options.ContainsKey($optionName) -and $catalog.Options[$optionName].Meta) {
+            if ($token -notmatch '=' -and $node.Options.ContainsKey($optionName) -and $node.Options[$optionName].TakesValue) {
                 $pending = $optionName
             }
             continue
         }
-        if (-not $endOptions -and $operands.Count -eq 0 -and $catalog.Commands.ContainsKey($token)) {
-            $segments += $token
-            $catalog = Get-ComfyCliCatalog $segments
+        if (-not $endOptions -and $operands.Count -eq 0 -and $node.Commands.ContainsKey($token)) {
+            $path = ($path + ' ' + $token).Trim()
+            $node = $tree[$path]
             continue
         }
         $operands += $token
     }
 
     if ($null -ne $pending) {
-        Get-ComfyCliValueCompletion $pending $catalog.Options[$pending] $Word
+        Get-ComfyCliValueCompletion -Slot $pending -Entry $node.Options[$pending] -Word $Word
         return
     }
     if (-not $endOptions -and $Word -match '^(?<option>--?[A-Za-z][A-Za-z0-9-]*)=(?<value>.*)$') {
         $option = $Matches.option
         $value = $Matches.value
-        if ($catalog.Options.ContainsKey($option) -and $catalog.Options[$option].Meta) {
-            Get-ComfyCliValueCompletion $option $catalog.Options[$option] $value ($option + '=')
+        if ($node.Options.ContainsKey($option) -and $node.Options[$option].TakesValue) {
+            Get-ComfyCliValueCompletion -Slot $option -Entry $node.Options[$option] -Word $value -Prefix ($option + '=')
             return
         }
     }
 
     $found = $false
     if (-not $endOptions -and ($Word.StartsWith('-') -or -not $Word)) {
-        foreach ($option in @($catalog.Options.Keys | Sort-Object -CaseSensitive)) {
-            if ($option.StartsWith($Word, [System.StringComparison]::Ordinal)) {
-                New-ComfyCliCompletion $option $catalog.Options[$option].Description 'ParameterName'
+        foreach ($option in @($node.Options.Keys | Sort-Object -CaseSensitive)) {
+            $entry = $node.Options[$option]
+            if (-not $entry.Hidden -and $option.StartsWith($Word, [System.StringComparison]::Ordinal)) {
+                New-ComfyCliCompletion -Text $option -Description $entry.Description -Type 'ParameterName'
                 $found = $true
             }
         }
     }
     if (-not $endOptions -and $operands.Count -eq 0 -and -not $Word.StartsWith('-')) {
-        foreach ($command in @($catalog.Commands.Keys | Sort-Object)) {
-            if ($command.StartsWith($Word, [System.StringComparison]::OrdinalIgnoreCase)) {
-                New-ComfyCliCompletion $command $catalog.Commands[$command]
+        foreach ($command in @($node.Commands.Keys | Sort-Object)) {
+            $entry = $node.Commands[$command]
+            if (-not $entry.Hidden -and $command.StartsWith($Word, [System.StringComparison]::OrdinalIgnoreCase)) {
+                New-ComfyCliCompletion $command $entry.Description
                 $found = $true
             }
         }
     }
-    if ($found -and ($Word.StartsWith('-') -or $catalog.Commands.Count -gt 0)) { return }
+    if ($found -and ($Word.StartsWith('-') -or $node.Commands.Count -gt 0)) { return }
     if ($Word.StartsWith('-') -and -not $endOptions) { return }
-    Get-ComfyCliOperandCompletion $catalog $operands.Count $Word
+    Get-ComfyCliOperandCompletion -Node $node -Index $operands.Count -Word $Word
 }
 
 Register-ArgumentCompleter -Native -CommandName @('comfy-cli', 'comfy-cli.exe') -ScriptBlock {
