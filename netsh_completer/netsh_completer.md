@@ -8,6 +8,7 @@ The script covers:
 - nested context and multiword command phrases such as `show interfaces`, `set address`, and `add rule`
 - leaf-page tags such as `name=`, `source=`, `store=`, and similar `tag=` parameters parsed from `Usage:` and `Parameters:` blocks
 - `tag=value` enums parsed from the `Usage:` block and attached to their tag (`dir=in|out`, `action=allow|block|bypass`, `[profile=public|private|domain|any[,...]]`, `[[capture=]yes|no]`), so `netsh advfirewall firewall add rule dir=<TAB>` offers `dir=in` and `dir=out`
+- machine-state and path values for attached tags (see [Live tag values](#live-tag-values)): interface names, WLAN profile names, trace scenarios, service names, and file paths for `program=` and `traceFile=`
 - bare literal alternations that are not attached to a tag (true positional operands)
 - root global options `-a`, `-c`, `-r`, `-u`, `-p`, and `-f`
 
@@ -77,6 +78,28 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
         $activeNode = Get-NetshNode -PathTokens $resolved.PathTokens -Create
     }
 
+    # Machine-state and path values for tags such as name=, scenario=, program=.
+    $tagValueSource = $null
+    $tagValue = Get-NetshCursorTagValue -CommandAst $commandAst -CursorPosition $cursorPosition
+    if ($tagValue) {
+        $commandWords = @($resolved.PathTokens) + @($resolved.Remaining | Where-Object { $_ -notmatch '=' })
+        $tagValueSource = Get-NetshTagValueSource -CommandWords $commandWords -Tag $tagValue.Tag
+    }
+
+    # After an unquoted comma PowerShell replaces only the segment past it, so tag values
+    # stand alone there; with nothing to offer the command's tags follow, as without a source.
+    if ($tagValueSource -and $tagValue.SegmentOnly) {
+        $segmentItems = @(Get-NetshTagValueSuggestion -Source $tagValueSource -TagValue $tagValue)
+        if ($segmentItems.Count -gt 0) {
+            foreach ($item in $segmentItems) {
+                New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
+            }
+            return
+        }
+
+        $tagValueSource = $null
+    }
+
     $resultMap = [ordered]@{}
     $candidateItems = New-Object System.Collections.Generic.List[object]
 
@@ -98,6 +121,12 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
 
         foreach ($item in (Get-NetshInlineTagValueSuggestions -ValueHintsByTag $activeNode.ValueHintsByTag -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
+        }
+
+        if ($tagValueSource) {
+            foreach ($item in (Get-NetshTagValueSuggestion -Source $tagValueSource -TagValue $tagValue)) {
+                $candidateItems.Add($item)
+            }
         }
     }
 
@@ -165,6 +194,26 @@ The registered completer:
 
 This lets the completer keep command phrases and argument tags separate from free-form values.
 
+## Live tag values
+When the word under the cursor is an attached `tag=value`, `Get-NetshTagValueSource` maps the command path and tag to a local source. The word is read from the parser (`Get-NetshCursorTagValue`), so an open quote such as `name="Ethernet 2` stays one word.
+
+| Command path | Tag | Source |
+| --- | --- | --- |
+| `interface ...` (not `set relay`, `set router`, `add v6v4tunnel`) | `name=`, `interface=` | `netsh interface show interface` |
+| `dnsclient ...` | `name=` | `netsh interface show interface` |
+| `wlan ...` | `name=` | `netsh wlan show profiles` (names only) |
+| `trace ...` | `scenario=`, and `name=` under `show scenario` | registry `HKLM\SYSTEM\CurrentControlSet\Control\NetTrace\Scenarios` (the keys `netsh trace show scenarios` lists) |
+| `advfirewall firewall ...` | `service=` | `ServiceController.GetServices()` service names, alongside the help's `any` |
+| `advfirewall firewall ...` | `program=` | file paths via `CompletionCompleters.CompleteFilename` |
+| `trace ...` | `traceFile=` | file paths via `CompletionCompleters.CompleteFilename` |
+
+- The two `netsh` listings run through the same bounded spawn as the help pages (`Invoke-NetshProcess`: stdin closed, asynchronous reads, 5 s timeout, ANSI strip). The listings are cached for 60 s, including an empty answer when `netsh` or the WLAN service is missing.
+- Values keep the typed tag casing and the typed quote character. With no quote typed, a value with whitespace or an argument-mode metacharacter is single-quoted: `name='Ethernet 2'`, `name='vEthernet (Default Switch)'`.
+- `scenario=` takes a comma list. In an unquoted list (`scenario=InternetClient,Net`) PowerShell replaces only the segment after the last comma. In a quoted list the earlier segments are kept as a prefix. Scenarios already in the list are not offered again.
+- Any other unquoted tag value keeps a comma as part of the value (`name=Ethernet,`). PowerShell still replaces only the text after the comma, so a live name matching the full value is offered as its remainder, an unmatched remainder is echoed back, and an empty remainder offers the command's tags. None of these cases fall through to the filesystem.
+- `program=` and `traceFile=` complete paths once part of the path is typed. An empty value (or a lone quote) returns the bare tag, so the current directory is not listed.
+- Firewall rule names (`show|set|delete rule name=`) are not completed: `Get-NetFirewallRule` takes seconds on a typical machine.
+
 ## Global option handling
 The completer includes special handling for root options:
 - `-a`: file path completion
@@ -190,6 +239,12 @@ For `-c`, discovered context paths are cached from parsed help pages. Single-tok
 # netsh interface ipv4 set address <TAB>
 # netsh advfirewall firewall add rule <TAB>
 
+# Live tag values
+# netsh interface ipv4 set address name=<TAB>
+# netsh wlan show profiles name=<TAB>
+# netsh trace start scenario=InternetClient,<TAB>
+# netsh advfirewall firewall add rule program=C:\Prog<TAB>
+
 # Global option values
 # netsh -c <TAB>
 # netsh -f <TAB>
@@ -205,5 +260,5 @@ Because the catalog is derived from built-in help, the exact command surface dep
 ## Limitations / notes
 - The parser is intentionally format-driven, so changes in `netsh` help text could affect discovery.
 - The script focuses first on command and subcommand coverage. Value completion is intentionally lightweight and best for literal keywords and enum-like `tag=value` forms.
-- Free-form values such as interface names, IP addresses, SDDL strings, and many file or service names are not exhaustively completed.
+- Free-form values such as IP addresses, SDDL strings and firewall rule names are not completed. Values in the positional form (`[name=]<string>` written without the tag) are not completed either.
 - Context discovery is lazy. A deep context path is only offered for `-c` after its parent help page has been loaded in the current session.

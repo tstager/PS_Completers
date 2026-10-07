@@ -11,6 +11,7 @@ if (-not (Get-Variable -Name NetshCompletionCatalog -Scope Script -ErrorAction I
         ContextPathsByKey = @{}
         GlobalOptions    = @()
         GlobalOptionMap  = @{}
+        DynamicValues    = @{}
     }
 }
 
@@ -34,7 +35,7 @@ function New-NetshCompletionResult {
 }
 
 function Test-NetshCommandAvailable {
-    [bool](Get-Command -Name netsh.exe -ErrorAction SilentlyContinue)
+    [bool](Get-Command -Name netsh.exe -ErrorAction Ignore)
 }
 
 function Get-NetshPathKey {
@@ -145,19 +146,24 @@ function Add-NetshContextPath {
 function Invoke-NetshHelpText {
     param([string[]]$PathTokens)
 
+    Invoke-NetshProcess -Arguments @(@($PathTokens) + '/?')
+}
+
+function Invoke-NetshProcess {
+    param([string[]]$Arguments)
+
     if (-not (Test-NetshCommandAvailable)) {
         return @()
     }
 
-    # netsh help never needs stdin, but some contexts are slow or may prompt, so the
-    # spawn keeps stdin closed, reads asynchronously and is bounded by a timeout.
+    # netsh help and listings never need stdin, but some contexts are slow or may prompt,
+    # so the spawn keeps stdin closed, reads asynchronously and is bounded by a timeout.
     try {
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = 'netsh.exe'
-        foreach ($token in @($PathTokens)) {
-            $startInfo.ArgumentList.Add($token)
+        foreach ($argument in @($Arguments)) {
+            $startInfo.ArgumentList.Add($argument)
         }
-        $startInfo.ArgumentList.Add('/?')
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardInput = $true
@@ -182,7 +188,7 @@ function Invoke-NetshHelpText {
             $process.Dispose()
         }
     } catch {
-        Write-Debug "netsh help failed for '$(Get-NetshPathText -PathTokens $PathTokens)': $($_.Exception.Message)"
+        Write-Debug "netsh failed for '$(@($Arguments) -join ' ')': $($_.Exception.Message)"
         @()
     }
 }
@@ -900,6 +906,291 @@ function Get-NetshInlineTagValueSuggestions {
     @($results | Sort-Object -Property CompletionText -Unique)
 }
 
+function Get-NetshCursorTagValue {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The word comes from the parser, so an open quote ('name="Ethernet 2') stays one
+    # word. An unquoted comma list parses as an array and PowerShell replaces only the
+    # segment after the last comma (SegmentOnly).
+    $element = $CommandAst.CommandElements |
+        Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+        Select-Object -First 1
+    if (-not $element) {
+        return $null
+    }
+
+    $text = $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+    if ($text -notmatch '^(?<Tag>[A-Za-z][A-Za-z0-9-]*)=(?<Raw>(?<Quote>[''"]?)(?<Value>.*))$') {
+        return $null
+    }
+
+    $quote = $matches.Quote
+    $value = $matches.Value
+    if ($quote -and $value.EndsWith($quote)) {
+        $value = $value.Substring(0, $value.Length - 1)
+    }
+
+    if ($quote -eq "'") {
+        $value = $value.Replace("''", "'")
+    } elseif ($quote -eq '"') {
+        $value = $value -replace '`(.)', '$1'
+    }
+
+    $cut = $value.LastIndexOf(',') + 1
+    [pscustomobject]@{
+        Tag         = $matches.Tag
+        RawValue    = $matches.Raw
+        Quote       = $quote
+        Value       = $value
+        ListPrefix  = $value.Substring(0, $cut)
+        Segment     = $value.Substring($cut)
+        SegmentOnly = (-not $quote) -and $cut -gt 0
+    }
+}
+
+function ConvertTo-NetshArgumentText {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    # Keep the user's quote; otherwise single-quote anything an argument-mode
+    # metacharacter or whitespace would split ('vEthernet (Default Switch)').
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    $Value
+}
+
+function Get-NetshTagValueSource {
+    param(
+        [string[]]$CommandWords,
+        [string]$Tag
+    )
+
+    $words = @($CommandWords | ForEach-Object { $_.ToLowerInvariant() })
+    if ($words.Count -eq 0) {
+        return $null
+    }
+
+    $tagKey = $Tag.ToLowerInvariant()
+    switch ($words[0]) {
+        'interface' {
+            # 6to4 'set relay' and isatap 'set router' name= is a host, and
+            # 'add v6v4tunnel' interface= names a tunnel that does not exist yet.
+            $notInterface = @($words | Where-Object { $_ -in @('relay', 'router', 'v6v4tunnel') })
+            if ($tagKey -in @('name', 'interface') -and $notInterface.Count -eq 0) {
+                return 'Interface'
+            }
+        }
+        'dnsclient' {
+            if ($tagKey -eq 'name') {
+                return 'Interface'
+            }
+        }
+        'wlan' {
+            if ($tagKey -eq 'name') {
+                return 'WlanProfile'
+            }
+        }
+        'trace' {
+            if ($tagKey -eq 'scenario' -or ($tagKey -eq 'name' -and $words -contains 'scenario')) {
+                return 'TraceScenario'
+            }
+
+            if ($tagKey -eq 'tracefile') {
+                return 'Path'
+            }
+        }
+        'advfirewall' {
+            # Firewall rule names stay out: Get-NetFirewallRule takes seconds.
+            if ($words.Count -gt 1 -and $words[1] -eq 'firewall') {
+                if ($tagKey -eq 'service') {
+                    return 'Service'
+                }
+
+                if ($tagKey -eq 'program') {
+                    return 'Path'
+                }
+            }
+        }
+    }
+
+    $null
+}
+
+function Get-NetshInterfaceName {
+    # Fixed-width table with the name last; names contain spaces, so the name column
+    # starts where the header's last label does (the header sits above the dashes).
+    $lines = @(Invoke-NetshProcess -Arguments @('interface', 'show', 'interface'))
+    $offset = -1
+    for ($index = 1; $index -lt $lines.Count; $index++) {
+        $line = $lines[$index]
+        if ($offset -lt 0) {
+            if ($line -match '^-{10,}\s*$') {
+                $header = $lines[$index - 1].TrimEnd()
+                if ([string]::IsNullOrWhiteSpace($header)) {
+                    return
+                }
+
+                $offset = $header.LastIndexOf(@($header.Trim() -split '\s{2,}')[-1])
+            }
+            continue
+        }
+
+        if ($line.Length -gt $offset) {
+            $name = $line.Substring($offset).Trim()
+            if ($name) {
+                $name
+            }
+        }
+    }
+}
+
+function Get-NetshWlanProfileName {
+    foreach ($line in @(Invoke-NetshProcess -Arguments @('wlan', 'show', 'profiles'))) {
+        # '    All User Profile     : <name>'; section headers and '<None>' have no ' : '.
+        if ($line -match '^\s+[^:]+?\s:\s(?<Name>.*\S)\s*$') {
+            $matches.Name
+        }
+    }
+}
+
+function Get-NetshTraceScenarioName {
+    # Passive registry read; 'netsh trace show scenarios' lists exactly these keys.
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\NetTrace\Scenarios')
+    if (-not $key) {
+        return
+    }
+
+    try {
+        $key.GetSubKeyNames()
+    } finally {
+        $key.Dispose()
+    }
+}
+
+function Get-NetshServiceName {
+    foreach ($service in [System.ServiceProcess.ServiceController]::GetServices()) {
+        $service.ServiceName
+        $service.Dispose()
+    }
+}
+
+function Get-NetshDynamicValue {
+    param([string]$Source)
+
+    # Machine state can change mid-session, so entries live for 60 s; an empty
+    # answer (no netsh, no WLAN service) is cached the same way.
+    $cache = $script:NetshCompletionCatalog.DynamicValues
+    $now = [DateTime]::UtcNow
+    if ($cache.ContainsKey($Source) -and $cache[$Source].ExpiresUtc -gt $now) {
+        return $cache[$Source].Names
+    }
+
+    $names = switch ($Source) {
+        'Interface' { Get-NetshInterfaceName }
+        'WlanProfile' { Get-NetshWlanProfileName }
+        'TraceScenario' { Get-NetshTraceScenarioName }
+        'Service' { Get-NetshServiceName }
+    }
+
+    $names = @($names | Where-Object { $_ } | Sort-Object -Unique)
+    $cache[$Source] = [pscustomobject]@{
+        Names      = $names
+        ExpiresUtc = $now.AddSeconds(60)
+    }
+
+    $names
+}
+
+function Get-NetshTagValueSuggestion {
+    param(
+        [string]$Source,
+        [psobject]$TagValue
+    )
+
+    $results = if ($Source -eq 'Path') {
+        # Paths start once something is typed: an empty value would list the whole
+        # current directory, so 'program=' stays the bare tag (a lone quote is echoed).
+        if (-not $TagValue.Value) {
+            [pscustomobject]@{
+                CompletionText = $TagValue.Tag + '=' + $TagValue.RawValue
+                ToolTip        = "File path for $($TagValue.Tag)=."
+                ResultType     = 'ParameterName'
+            }
+        } elseif (-not $TagValue.SegmentOnly) {
+            foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($TagValue.RawValue)) {
+                [pscustomobject]@{
+                    CompletionText = $TagValue.Tag + '=' + $item.CompletionText
+                    ToolTip        = $item.ToolTip
+                    ResultType     = [string]$item.ResultType
+                }
+            }
+        }
+    } else {
+        # Only scenario= takes a comma list. Elsewhere an unquoted comma is part of the
+        # value, but PowerShell replaces only the text after it, so a match on the full
+        # value is offered as its remainder when that needs no quoting.
+        $isList = $Source -eq 'TraceScenario'
+        $listPrefix = if ($isList) { $TagValue.ListPrefix } else { '' }
+        $partial = if ($isList) { $TagValue.Segment } else { $TagValue.Value }
+        $chosen = @($listPrefix -split ',' | Where-Object { $_ })
+        $pattern = [System.Management.Automation.WildcardPattern]::Escape($partial) + '*'
+        $sourceLabel = switch ($Source) {
+            'WlanProfile' { 'WLAN profile' }
+            'TraceScenario' { 'Trace scenario' }
+            default { $Source }
+        }
+
+        foreach ($name in @(Get-NetshDynamicValue -Source $Source)) {
+            if ($name -notlike $pattern -or $chosen -contains $name) {
+                continue
+            }
+
+            $completionText = if (-not $TagValue.SegmentOnly) {
+                $TagValue.Tag + '=' + (ConvertTo-NetshArgumentText -Value ($listPrefix + $name) -Quote $TagValue.Quote)
+            } elseif ($isList) {
+                ConvertTo-NetshArgumentText -Value $name -Quote ''
+            } else {
+                $rest = $name.Substring($TagValue.ListPrefix.Length)
+                if ($rest -and (ConvertTo-NetshArgumentText -Value $rest -Quote '') -ceq $rest) { $rest }
+            }
+
+            if ($completionText) {
+                [pscustomobject]@{
+                    CompletionText = $completionText
+                    ToolTip        = "$sourceLabel on this machine: $name"
+                    ResultType     = 'ParameterValue'
+                }
+            }
+        }
+    }
+
+    $results = @($results)
+    # After a comma PowerShell falls back to the filesystem when nothing comes back, so
+    # an unmatched segment is echoed. An empty segment returns nothing and the caller
+    # offers the command's tags instead.
+    if ($results.Count -eq 0 -and $TagValue.SegmentOnly -and $TagValue.Segment) {
+        $results = @([pscustomobject]@{
+                CompletionText = $TagValue.Segment
+                ToolTip        = "Typed value for $($TagValue.Tag)=: $($TagValue.Value)"
+                ResultType     = 'ParameterValue'
+            })
+    }
+
+    $results
+}
+
 Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
@@ -960,6 +1251,28 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
         $activeNode = Get-NetshNode -PathTokens $resolved.PathTokens -Create
     }
 
+    # Machine-state and path values for tags such as name=, scenario=, program=.
+    $tagValueSource = $null
+    $tagValue = Get-NetshCursorTagValue -CommandAst $commandAst -CursorPosition $cursorPosition
+    if ($tagValue) {
+        $commandWords = @($resolved.PathTokens) + @($resolved.Remaining | Where-Object { $_ -notmatch '=' })
+        $tagValueSource = Get-NetshTagValueSource -CommandWords $commandWords -Tag $tagValue.Tag
+    }
+
+    # After an unquoted comma PowerShell replaces only the segment past it, so tag values
+    # stand alone there; with nothing to offer the command's tags follow, as without a source.
+    if ($tagValueSource -and $tagValue.SegmentOnly) {
+        $segmentItems = @(Get-NetshTagValueSuggestion -Source $tagValueSource -TagValue $tagValue)
+        if ($segmentItems.Count -gt 0) {
+            foreach ($item in $segmentItems) {
+                New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
+            }
+            return
+        }
+
+        $tagValueSource = $null
+    }
+
     $resultMap = [ordered]@{}
     $candidateItems = New-Object System.Collections.Generic.List[object]
 
@@ -981,6 +1294,12 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
 
         foreach ($item in (Get-NetshInlineTagValueSuggestions -ValueHintsByTag $activeNode.ValueHintsByTag -WordToComplete $currentWord)) {
             $candidateItems.Add($item)
+        }
+
+        if ($tagValueSource) {
+            foreach ($item in (Get-NetshTagValueSuggestion -Source $tagValueSource -TagValue $tagValue)) {
+                $candidateItems.Add($item)
+            }
         }
     }
 
