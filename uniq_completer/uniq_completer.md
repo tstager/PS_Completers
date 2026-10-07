@@ -69,14 +69,15 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
+- `--group` and `--all-repeated` take an optional METHOD that uniq accepts only attached (`--group=both`); `uniq --group separate` reads `separate` as the INPUT file. Their values are offered only after `=`, and the word after a space completes as an operand.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Option values
 
-- `--all-repeated`: `none`, `prepend`, `separate`
-- `--group`: `separate`, `prepend`, `append`, `both`
+- `--all-repeated=`: `none`, `prepend`, `separate` (attached form only)
+- `--group=`: `separate`, `prepend`, `append`, `both` (attached form only)
 - `-f`, `--skip-fields`, `-s`, `--skip-chars`, `-w`, `--check-chars`: `<number>`
 
 ## Representative validation scenarios
@@ -91,7 +92,7 @@ uniq --all-repeated=
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
-- `--all-repeated` shows its documented values in both the separate and the attached form
+- `--all-repeated=` shows its documented values; `--all-repeated ` (space) falls through to operand completion
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 

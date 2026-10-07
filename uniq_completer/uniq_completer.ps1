@@ -216,6 +216,12 @@ function Get-UniqOptionValueCompletions {
         return @()
     }
 
+    # --group and --all-repeated take an optional METHOD that uniq accepts only attached (--group=both);
+    # after a space the word is the INPUT operand, so no value is pending.
+    if ([string]::IsNullOrEmpty($attached) -and ($option -ceq '--group' -or $option -ceq '--all-repeated')) {
+        return @()
+    }
+
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
     $table['--all-repeated'] = @(
         @{ Text = 'none'; Tip = 'No group separator.' }
