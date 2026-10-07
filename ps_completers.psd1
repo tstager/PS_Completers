@@ -1523,7 +1523,7 @@
         @{
             Path    = 'wslc_completer/wslc_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5FCFA69C8CBA25132EB18AA7D1ADF4A0ACCF5AE507ED63B07170919DC51789B5'
+            Hash    = 'SHA256:1865417760C11FD8800E1991AF9286A7ED20625EF7DCB552516EBF7E8E189113'
             Targets = @(
                 @{ CommandName = 'wslc'; Native = $true }
                 @{ CommandName = 'wslc.exe'; Native = $true }

@@ -30,15 +30,17 @@ Register-ArgumentCompleter -Native -CommandName @('wslc', 'wslc.exe') -ScriptBlo
 
 ## Dynamic names
 
-Read-only queries, cached for 8 seconds, with a 3 second timeout:
+Read-only queries:
 
-- `wslc system session list` for `--session`. It has no `--format`, so the `Display Name` column is parsed; `--session` takes that name, not the numeric ID.
+- `wslc system session list` for `--session`, cached for 8 seconds with a 3 second timeout. It has no `--format`, so the `Display Name` column is parsed; `--session` takes that name, not the numeric ID.
 - `wslc list --all --format json`
 - `wslc images --format json`
 - `wslc network list --format json`
 - `wslc volume list --format json`
 
-The object lists start the default session when none is running, which takes about 2 seconds. `system session list` does not. So object names are queried only when a session is running, and only when the `--session` named on the line, if any, is one of them. That session is passed on to the query. Otherwise the slot gets its placeholder and no session is started.
+The object lists start their target session when it is not running, which takes about 2 seconds. `system session list` does not. So an object list runs only when the session it will target is running: the `--session` named on the line, or else the default session `wslc-cli-<user>` (`wslc-cli-admin-<user>` when elevated). Another running session does not count. A named session is passed on to the query. Otherwise the slot gets its placeholder and no session is started.
+
+Object lists are cached for 30 seconds and time out after 0.8 seconds; one normally takes about 70 ms. A running session goes idle after roughly 30 seconds without a wslc call, and the next list then takes about 3 seconds while it wakes. When a list times out, the slot gets its placeholder and no object list runs for that session for 4 seconds. The session finishes waking in that time, so the next Tab after it gets names, and the keystrokes in between do not stall.
 
 Object list output is newline-delimited JSON. If a query is empty or fails, the slot gets a placeholder (`<container>`, `<image>`, `<network>`, `<volume>`, `<session>`) instead of unrelated file names.
 
@@ -46,6 +48,8 @@ Object list output is newline-delimited JSON. If a query is empty or fails, the 
 
 - `--password` is `<password>`. The completer never reads credentials.
 - `--name` on create/run is `<name>` (a new name, not an existing container).
+- `network create` and `volume create` name a new object, so their operand is `<network-name>` / `<volume-name>`, not existing names.
+- `wslc inspect` takes any object type, so it offers container, image, network and volume names. `-t` / `--type` completes `image`, `container`, `network` and `volume` (from wslc's own `Supported inspect types` error), and a type given as `--type network`, `--type=network`, `-t=network` or a chain such as `-st network` narrows the names to that kind.
 - `-p` / `--publish` is `<host:container>`.
 - `-e` / `--env`, `--build-arg`, and `--label` are `<key=value>`.
 - `build --secret` is `<secret>`; its value is a spec (`id=NAME,src=PATH`), not a path.

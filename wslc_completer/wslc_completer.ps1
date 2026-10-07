@@ -168,6 +168,15 @@ function Get-WslcEnumValues {
         }
     }
 
+    # inspect --type lists no values in help; these come from its 'Supported inspect types' error.
+    if ($OptionName -eq '--type' -and $Description -match '(?i)object to inspect') {
+        foreach ($part in @('image', 'container', 'network', 'volume')) {
+            if (-not $values.Contains($part)) {
+                [void]$values.Add($part)
+            }
+        }
+    }
+
     return @($values)
 }
 
@@ -650,11 +659,15 @@ function Get-WslcCompletionContext {
     $operandCount = 0
     $pendingOption = ''
     $session = ''
+    $inspectType = ''
 
     foreach ($token in $tokens) {
         if (-not [string]::IsNullOrEmpty($pendingOption)) {
             if ($pendingOption -eq '--session') {
                 $session = $token
+            }
+            elseif ($pendingOption -eq '--type') {
+                $inspectType = $token
             }
 
             $pendingOption = ''
@@ -669,6 +682,14 @@ function Get-WslcCompletionContext {
                 $option = Resolve-WslcOption -Catalog $catalog -Name $token
                 if ($null -ne $option -and $option.TakesValue) {
                     $pendingOption = @($option.Names)[-1]
+                }
+            }
+            elseif ($token -match '^(?<name>-[^=]+)=(?<value>.*)$') {
+                # --type=network, -t=network and -st=network all set the inspect type.
+                $value = $Matches.value
+                $option = Resolve-WslcOption -Catalog $catalog -Name $Matches.name
+                if ($null -ne $option -and @($option.Names)[-1] -eq '--type') {
+                    $inspectType = $value
                 }
             }
 
@@ -700,6 +721,7 @@ function Get-WslcCompletionContext {
         Previous     = $previous
         OperandCount = $operandCount
         Session      = $session
+        InspectType  = $inspectType
         Passthrough  = $passthrough
     }
 }
@@ -776,6 +798,25 @@ function Get-WslcSessionNames {
     return @($values)
 }
 
+function Get-WslcDefaultSessionName {
+    # Without --session the CLI uses wslc-cli-<user>; wslservice.exe names the elevated one wslc-cli-admin.
+    $cache = Get-WslcListCache
+    if (-not $cache.ContainsKey('default-session')) {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        try {
+            $elevated = [System.Security.Principal.WindowsPrincipal]::new($identity).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        }
+        finally {
+            $identity.Dispose()
+        }
+
+        $prefix = if ($elevated) { 'wslc-cli-admin-' } else { 'wslc-cli-' }
+        $cache['default-session'] = $prefix + [System.Environment]::UserName
+    }
+
+    return $cache['default-session']
+}
+
 function Get-WslcDynamicNames {
     param(
         [string]$Kind,
@@ -786,15 +827,25 @@ function Get-WslcDynamicNames {
         return @(Get-WslcSessionNames)
     }
 
-    # Listing objects boots the session when none is running (about 2 s). Completion must not do that.
-    $sessions = @(Get-WslcSessionNames)
-    if ($sessions.Count -eq 0 -or (-not [string]::IsNullOrEmpty($Session) -and $sessions -cnotcontains $Session)) {
+    # Listing objects boots the target session when it is not running (about 2 s). Completion must not do that.
+    # Without --session the list targets the default session, so that one must be running, not just any session.
+    $target = $Session
+    if ([string]::IsNullOrEmpty($target)) {
+        $target = Get-WslcDefaultSessionName
+    }
+
+    if (@(Get-WslcSessionNames) -cnotcontains $target) {
         return @()
     }
 
     $cache = Get-WslcListCache
     $key = 'list:' + $Kind + ':' + $Session
+    $stallKey = 'stall:' + $target
     $now = [datetime]::UtcNow
+    if ($cache.ContainsKey($stallKey) -and $cache[$stallKey] -gt $now) {
+        return @()
+    }
+
     if ($cache.ContainsKey($key)) {
         $entry = $cache[$key]
         if ($entry.Expires -gt $now) {
@@ -817,7 +868,15 @@ function Get-WslcDynamicNames {
     $values = New-Object System.Collections.Generic.List[string]
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     if (@($arguments).Count -gt 0) {
-        $text = Invoke-WslcCapture -Arguments $arguments -TimeoutMs 3000
+        # A list takes ~70 ms, but the first one after ~30 s without a wslc call wakes the session (~3 s).
+        # Give up after 800 ms and skip every list for this session for 4 s rather than stall each
+        # keystroke; the session keeps waking after the client is killed and is ready by then.
+        $text = Invoke-WslcCapture -Arguments $arguments -TimeoutMs 800
+        if ([string]::IsNullOrEmpty($text)) {
+            $cache[$stallKey] = $now.AddSeconds(4)
+            return @()
+        }
+
         foreach ($line in @([regex]::Split([string]$text, '\r?\n'))) {
             $trimmed = $line.Trim()
             if (-not $trimmed.StartsWith('{')) {
@@ -873,7 +932,7 @@ function Get-WslcDynamicNames {
     }
 
     $cache[$key] = [pscustomobject]@{
-        Expires = $now.AddSeconds(8)
+        Expires = $now.AddSeconds(30)
         Values  = @($values)
     }
 
@@ -943,7 +1002,7 @@ function Get-WslcKindValues {
 
     $values = New-Object System.Collections.Generic.List[string]
     $kinds = switch ($Kind) {
-        'inspect' { @('container', 'image') }
+        'inspect' { @('container', 'image', 'network', 'volume') }
         { $_ -in @('container', 'image', 'network', 'volume', 'session') } { $Kind }
     }
 
@@ -961,7 +1020,7 @@ function Get-WslcKindValues {
             'network' { '<network>' }
             'volume' { '<volume>' }
             'session' { '<session>' }
-            'inspect' { '<container-or-image>' }
+            'inspect' { '<object-id>' }
             'secret' { '<password>' }
             'server' { '<server>' }
             'publish' { '<host:container>' }
@@ -1030,7 +1089,8 @@ function Get-WslcOperandCompletions {
         [int]$OperandCount,
         [string]$Word,
         [string[]]$Path,
-        [string]$Session
+        [string]$Session,
+        [string]$InspectType
     )
 
     $operands = @($Catalog.Operands)
@@ -1069,11 +1129,19 @@ function Get-WslcOperandCompletions {
     $pathText = (@($Path) -join ' ')
     if ($kind -eq 'placeholder' -and $pathText -match '(^| )inspect$' -and $operand.Name -match 'object|id|name') {
         $kind = 'inspect'
+        if ($InspectType -cin @('image', 'container', 'network', 'volume')) {
+            $kind = $InspectType
+        }
     }
 
     $results = New-Object System.Collections.Generic.List[object]
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    $candidates = @(Get-WslcKindValues -Kind $kind -Word $Word -Session $Session)
+    $candidates = @()
+    # network/volume create name a new object, so existing names are taken; offer the operand placeholder.
+    if (-not ($kind -in @('network', 'volume') -and $pathText -match '(^| )create$')) {
+        $candidates = @(Get-WslcKindValues -Kind $kind -Word $Word -Session $Session)
+    }
+
     if ($candidates.Count -eq 0 -and [string]::IsNullOrEmpty($Word)) {
         $candidates = @((Get-WslcPlaceholder -Name $operand.Name))
     }
@@ -1103,7 +1171,7 @@ function Complete-Wslc {
             return @()
         }
 
-        return @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session)
+        return @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType)
     }
 
     if ($word -match '^(?<name>--?[A-Za-z0-9?][A-Za-z0-9-]*)=(?<value>.*)$') {
@@ -1171,7 +1239,7 @@ function Complete-Wslc {
         }
     }
 
-    foreach ($item in @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session)) {
+    foreach ($item in @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType)) {
         if ($null -ne $item -and $seen.Add($item.CompletionText)) {
             [void]$results.Add($item)
         }
