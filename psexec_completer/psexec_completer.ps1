@@ -296,14 +296,17 @@ function Complete-PsExec {
             if ($spec.PSObject.Properties['Group'] -and $spec.Group -eq 'Priority') { $prioritySelected = $true }
             if ($key -eq '-c') { $copyMode = $true }
             if ($spec.TakesValue) {
+                # '-i [session]' takes an OPTIONAL id, so only a number consumes
+                # the next token; a switch, target or program stays what it is.
+                $optional = [bool]($spec.PSObject.Properties['OptionalValue'] -and $spec.OptionalValue)
                 if ($i -eq ($tokensBeforeCurrent.Count - 1)) {
-                    $valueContext = $spec.ValueKind
-                    break
+                    if (-not $optional -or [string]::IsNullOrEmpty($currentWord) -or $currentWord -match '^\d+$') {
+                        $valueContext = $spec.ValueKind
+                        break
+                    }
+                    continue
                 }
 
-                # '-i [session]' takes an OPTIONAL id, so only a number consumes
-                # the next token; a program name must stay a program name.
-                $optional = [bool]($spec.PSObject.Properties['OptionalValue'] -and $spec.OptionalValue)
                 if (-not $optional -or $tokensBeforeCurrent[$i + 1] -match '^\d+$') {
                     $i++
                 }

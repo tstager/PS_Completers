@@ -75,7 +75,10 @@ unrelated hint.
 
 `-i` takes an *optional* session id (`-i [session]`), so the token after it is
 consumed as its value only when it is a number; a program name after a bare `-i`
-stays a program name.
+stays a program name. The same holds while that word is being typed: an empty
+word or a number right after `-i` gets the session samples, while a switch
+(`-i -`), a `\\computer`/`@file` target or a program (`-i cmd`) completes as it
+would anywhere else.
 
 ### Command slot handling
 
