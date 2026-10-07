@@ -209,6 +209,11 @@ function Get-VdirOptionValueCompletions {
         } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
             $option = $elements[-2]
         }
+
+        # --color[=WHEN] and --hyperlink[=WHEN] take their value only in the attached form.
+        if ($option -cin @('--color', '--hyperlink')) {
+            return @()
+        }
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)

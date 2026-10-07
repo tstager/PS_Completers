@@ -1433,7 +1433,7 @@
         @{
             Path    = 'vdir_completer/vdir_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:37410475B17258549B54205B62D1627275DB4C3DDB8D5758303B3B3AEECEFE0F'
+            Hash    = 'SHA256:BE2E8C60F96D5FB62DC82DFCE3145857CE30BD7ECF0AC48E46D4C577969AC399'
             Targets = @(
                 @{ CommandName = 'vdir'; Native = $true }
                 @{ CommandName = 'vdir.exe'; Native = $true }

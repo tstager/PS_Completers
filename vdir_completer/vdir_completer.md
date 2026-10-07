@@ -142,7 +142,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ## Option values
 
 - `--block-size`: `K`, `M`, `G`, `KB`, `MB`, `GB`
-- `--color`, `--hyperlink`: `always`, `auto`, `never`
+- `--color`, `--hyperlink`: `always`, `auto`, `never` (attached form only: `--color=WHEN`; the value is optional, so `vdir --color <Tab>` completes operands)
 - `--format`: `across`, `commas`, `horizontal`, `long`, `single-column`, `verbose`, `vertical`
 - `--hide`, `-I`, `--ignore`: `<pattern>`
 - `--indicator-style`: `none`, `slash`, `file-type`, `classify`
