@@ -84,6 +84,18 @@ function Get-MarkItDownExtensionSuggestions {
     )
 }
 
+function Get-MarkItDownCuFileTypeTable {
+    # ContentUnderstandingFileType values in markitdown 0.1.8; --cu-file-types
+    # rejects anything else with 'Unknown file type'.
+    @(
+        'pdf', 'docx', 'pptx', 'xlsx', 'html', 'txt', 'md', 'rtf', 'xml',
+        'eml', 'msg',
+        'jpeg', 'png', 'bmp', 'tiff', 'heif',
+        'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv',
+        'wav', 'mp3', 'm4a', 'flac', 'ogg', 'aac', 'wma'
+    )
+}
+
 function Get-MarkItDownMimeTypeSuggestions {
     # Every ACCEPTED_MIME_TYPE_PREFIXES entry across markitdown 0.1.7's converters.
     @(
@@ -439,7 +451,7 @@ function Get-MarkItDownValueCompletions {
             return @()
         }
         'FileTypes' {
-            return @(Complete-MarkItDownCommaList -Candidates (Get-MarkItDownExtensionSuggestions) -CurrentWord $CurrentWord -ToolTip 'File type routed to Content Understanding.')
+            return @(Complete-MarkItDownCommaList -Candidates (Get-MarkItDownCuFileTypeTable) -CurrentWord $CurrentWord -ToolTip 'File type routed to Content Understanding.')
         }
     }
 

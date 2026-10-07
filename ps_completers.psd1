@@ -573,7 +573,7 @@
         @{
             Path    = 'markitdown_completer/markitdown_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:FDB7B6717AF0E135AB0D56933B864BF6F3C37EC9F6F5CB7152E03091FD9D14CD'
+            Hash    = 'SHA256:FB8FED5F0E2AA4D035398ED76197F95D70D401525F418F21C3CE8490C1F3E505'
             Targets = @(
                 @{ CommandName = 'markitdown'; Native = $true }
                 @{ CommandName = 'markitdown.exe'; Native = $true }
