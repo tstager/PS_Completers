@@ -145,33 +145,52 @@ function Remove-CargoOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
+function ConvertFrom-CargoQuotedPath {
+    param([string]$Value)
+
+    # CompleteFilename already quotes paths it considers unsafe; undo that so the
+    # path is quoted exactly once, with the quote character the user typed.
+    if ($Value.Length -ge 2 -and $Value.StartsWith("'") -and $Value.EndsWith("'")) {
+        return $Value.Substring(1, $Value.Length - 2).Replace("''", "'")
+    }
+
+    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
+        return [regex]::Replace($Value.Substring(1, $Value.Length - 2), '`(.)', '$1')
+    }
+
+    $Value
+}
+
 function ConvertTo-CargoQuotedPath {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+        return $Value
     }
 
-    $Value
+    if ($QuoteChar -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
 }
 
 function Get-CargoPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-CargoOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            $completionText = ConvertTo-CargoQuotedPath -Value $_.CompletionText -AlwaysQuote $alwaysQuote
+            $completionText = ConvertTo-CargoQuotedPath -Value (ConvertFrom-CargoQuotedPath -Value $_.CompletionText) -QuoteChar $quoteChar
             New-CargoCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 }

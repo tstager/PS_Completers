@@ -112,7 +112,7 @@
         @{
             Path    = 'cargo_completer/cargo_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:C694A08F1B997E5838C61F3D47FC797A012E5C33B59D50F51BB31863A3C5E693'
+            Hash    = 'SHA256:C3A1077A928D56B4377AB7C9C8E9EB2F5B23816AE758F62F6FE7DE0B848897FE'
             Targets = @(
                 @{ CommandName = 'cargo'; Native = $true }
                 @{ CommandName = 'cargo.exe'; Native = $true }
