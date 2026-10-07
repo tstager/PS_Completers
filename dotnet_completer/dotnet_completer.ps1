@@ -131,6 +131,230 @@ function Get-DotnetProjectCompletion {
         }
 }
 
+function Get-DotnetRuntimeIdentifier {
+    # The installed SDK ships its portable RID graph as a plain file, so the RIDs
+    # are read from disk instead of asking a process; the newest SDK's graph is
+    # read once per session.
+    $cache = Get-DotnetCompletionCache
+    if ($cache.ContainsKey('RuntimeIdentifiers')) {
+        return $cache.RuntimeIdentifiers
+    }
+
+    $architectures = @('arm', 'arm64', 'armel', 'armv6', 'loongarch64', 'mips64', 'ppc64le', 'riscv64', 's390x', 'wasm', 'x64', 'x86')
+    $names = @()
+    $executablePath = Get-DotnetExecutablePath
+    if (-not [string]::IsNullOrWhiteSpace($executablePath)) {
+        $sdkRoot = Join-Path ([System.IO.Path]::GetDirectoryName($executablePath)) 'sdk'
+        $graph = @(
+            Get-ChildItem -LiteralPath $sdkRoot -Directory -ErrorAction Ignore |
+                Where-Object { $_.Name -match '^\d+\.\d+\.\d+' } |
+                Sort-Object -Property @{ Expression = { [version]([regex]::Match($_.Name, '^\d+\.\d+\.\d+').Value) } } -Descending |
+                ForEach-Object { Join-Path $_.FullName 'PortableRuntimeIdentifierGraph.json' } |
+                Where-Object { [System.IO.File]::Exists($_) }
+        ) | Select-Object -First 1
+        if ($graph) {
+            try {
+                $names = @((Get-Content -LiteralPath $graph -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).runtimes.PSObject.Properties.Name)
+            } catch {
+                $names = @()
+            }
+        }
+    }
+
+    if ($names.Count -eq 0) {
+        $names = @('linux-arm', 'linux-arm64', 'linux-musl-arm64', 'linux-musl-x64', 'linux-x64', 'osx-arm64', 'osx-x64', 'win-arm64', 'win-x64', 'win-x86')
+    }
+
+    $cache.RuntimeIdentifiers = @($names | Where-Object { $_.Contains('-') -and $_.Substring($_.LastIndexOf('-') + 1) -in $architectures } | Sort-Object)
+    $cache.RuntimeIdentifiers
+}
+
+function Get-DotnetProjectDirectory {
+    # The directory a project-relative value is read from: the --project
+    # argument when one was given, otherwise the current location.
+    param([string[]]$SettledTokens)
+
+    $path = '.'
+    for ($i = 0; $i -lt $SettledTokens.Count - 1; $i++) {
+        if ($SettledTokens[$i] -eq '--project') {
+            $path = $SettledTokens[$i + 1].Trim("'", '"')
+        }
+    }
+
+    try {
+        $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path)
+    } catch {
+        return $null
+    }
+
+    if ([System.IO.File]::Exists($resolved)) {
+        return [pscustomobject]@{ Directory = [System.IO.Path]::GetDirectoryName($resolved); Project = $resolved }
+    }
+
+    if ([System.IO.Directory]::Exists($resolved)) {
+        return [pscustomobject]@{ Directory = $resolved; Project = $null }
+    }
+
+    $null
+}
+
+function Get-DotnetLaunchProfile {
+    param($Project)
+
+    if ($null -eq $Project) {
+        return
+    }
+
+    $settings = Join-Path $Project.Directory 'Properties\launchSettings.json'
+    if (-not [System.IO.File]::Exists($settings)) {
+        return
+    }
+
+    try {
+        $profiles = (Get-Content -LiteralPath $settings -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).profiles
+    } catch {
+        return
+    }
+
+    if ($null -ne $profiles) {
+        @($profiles.PSObject.Properties.Name)
+    }
+}
+
+function Get-DotnetTargetFramework {
+    # The SDK answers --framework inside a project it can evaluate; this covers
+    # the rest: the frameworks the project files here declare, else the current
+    # target frameworks.
+    param($Project)
+
+    $frameworks = @(
+        if ($null -ne $Project) {
+            $files = if ($Project.Project) {
+                @($Project.Project)
+            } else {
+                @(Get-ChildItem -LiteralPath $Project.Directory -File -Filter '*proj' -ErrorAction Ignore | ForEach-Object FullName)
+            }
+
+            foreach ($file in $files) {
+                $content = Get-Content -LiteralPath $file -Raw -ErrorAction Ignore
+                if ($content) {
+                    foreach ($match in [regex]::Matches($content, '<TargetFrameworks?>([^<]*)</TargetFrameworks?>')) {
+                        $match.Groups[1].Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.Contains('$(') }
+                    }
+                }
+            }
+        }
+    )
+
+    if ($frameworks.Count -eq 0) {
+        $frameworks = @('net10.0', 'net9.0', 'net8.0', 'netstandard2.1', 'netstandard2.0', 'net481', 'net48', 'net472')
+    }
+
+    @($frameworks | Select-Object -Unique)
+}
+
+function Get-DotnetOptionValue {
+    # The values for an option the SDK leaves unanswered. $null means this is not
+    # a value slot the table knows; an empty array is a value slot with nothing
+    # to offer, which must not fall through to the option list.
+    param(
+        [string]$Command,
+        [string]$Option,
+        [string[]]$SettledTokens
+    )
+
+    # Option names are case-sensitive: vstest's '--Framework' is not '--framework'.
+    switch -CaseSensitive ($Option) {
+        '--runtime' {
+            return , @(Get-DotnetRuntimeIdentifier)
+        }
+        '--os' {
+            return , @(Get-DotnetRuntimeIdentifier | ForEach-Object { $_.Substring(0, $_.LastIndexOf('-')) } | Sort-Object -Unique)
+        }
+        '--arch' {
+            return , @(Get-DotnetRuntimeIdentifier | ForEach-Object { $_.Substring($_.LastIndexOf('-') + 1) } | Sort-Object -Unique)
+        }
+        '--launch-profile' {
+            return , @(Get-DotnetLaunchProfile -Project (Get-DotnetProjectDirectory -SettledTokens $SettledTokens))
+        }
+        '--framework' {
+            return , @(Get-DotnetTargetFramework -Project (Get-DotnetProjectDirectory -SettledTokens $SettledTokens))
+        }
+    }
+
+    # Bundled tools are outside the SDK's completion engine, so their value
+    # options are listed here; free-form values offer nothing.
+    $tool = ($Command -split ';')[1]
+    $bundled = @{
+        'dev-certs --format'           = @('Pfx', 'Pem')
+        'dev-certs --password'         = @()
+        'user-jwts --output'           = @('default', 'token', 'json')
+        'user-jwts --scheme'           = @()
+        'user-jwts --name'             = @()
+        'user-jwts --audience'         = @()
+        'user-jwts --issuer'           = @()
+        'user-jwts --scope'            = @()
+        'user-jwts --role'             = @()
+        'user-jwts --claim'            = @()
+        'user-jwts --not-before'       = @()
+        'user-jwts --expires-on'       = @()
+        'user-jwts --valid-for'        = @()
+        'user-secrets --configuration' = @('Debug', 'Release')
+        'user-secrets --id'            = @()
+        'watch --configuration'        = @('Debug', 'Release')
+        'watch --verbosity'            = @('q', 'quiet', 'm', 'minimal', 'n', 'normal', 'd', 'detailed', 'diag', 'diagnostic')
+        'watch --device'               = @()
+    }
+    $key = "$tool $Option"
+    if ($bundled.ContainsKey($key)) {
+        return , @($bundled[$key])
+    }
+
+    $null
+}
+
+function ConvertFrom-DotnetTypedWord {
+    # Splits the word typed so far into its value and the opening quote the user
+    # typed ('' when bare), undoing that quote style's escapes.
+    param([string]$Text)
+
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    }
+
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
+}
+
+function ConvertTo-DotnetArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was
+    # typed, otherwise in the typed quote style (single by default).
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
 Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
@@ -185,6 +409,10 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
                 [CompletionResult]::new('sdk', 'sdk', [CompletionResultType]::ParameterValue, ".NET SDK Command")
                 [CompletionResult]::new('workload', 'workload', [CompletionResultType]::ParameterValue, "Install or work with workloads that extend the .NET experience.")
                 [CompletionResult]::new('completions', 'completions', [CompletionResultType]::ParameterValue, "Commands for generating and registering completions for supported shells")
+                [CompletionResult]::new('dev-certs', 'dev-certs', [CompletionResultType]::ParameterValue, "Create and manage development certificates.")
+                [CompletionResult]::new('user-jwts', 'user-jwts', [CompletionResultType]::ParameterValue, "Manage JSON Web Tokens in development.")
+                [CompletionResult]::new('user-secrets', 'user-secrets', [CompletionResultType]::ParameterValue, "Manage development user secrets.")
+                [CompletionResult]::new('watch', 'watch', [CompletionResultType]::ParameterValue, "Start a file watcher that runs a command when files change.")
             )
             $completions += $staticCompletions
             break
@@ -1500,8 +1728,327 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
             $completions += $staticCompletions
             break
         }
+        'dotnet;dev-certs' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('https', 'https', [CompletionResultType]::ParameterValue, "Create, trust, export, import or check the HTTPS development certificate.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;dev-certs;https' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--export-path', '-ep', [CompletionResultType]::ParameterName, "Full path to the exported certificate")
+                [CompletionResult]::new('--export-path', '--export-path', [CompletionResultType]::ParameterName, "Full path to the exported certificate")
+                [CompletionResult]::new('--password', '-p', [CompletionResultType]::ParameterName, "Password to use when exporting the certificate with the private key into a pfx file or to encrypt the Pem exported key")
+                [CompletionResult]::new('--password', '--password', [CompletionResultType]::ParameterName, "Password to use when exporting the certificate with the private key into a pfx file or to encrypt the Pem exported key")
+                [CompletionResult]::new('--no-password', '-np', [CompletionResultType]::ParameterName, "Explicitly request that you don't use a password for the key when exporting a certificate to a PEM format")
+                [CompletionResult]::new('--no-password', '--no-password', [CompletionResultType]::ParameterName, "Explicitly request that you don't use a password for the key when exporting a certificate to a PEM format")
+                [CompletionResult]::new('--check', '-c', [CompletionResultType]::ParameterName, "Check for the existence of the certificate but do not perform any action")
+                [CompletionResult]::new('--check', '--check', [CompletionResultType]::ParameterName, "Check for the existence of the certificate but do not perform any action")
+                [CompletionResult]::new('--clean', '--clean', [CompletionResultType]::ParameterName, "Cleans all HTTPS development certificates from the machine.")
+                [CompletionResult]::new('--import', '-i', [CompletionResultType]::ParameterName, "Imports the provided HTTPS development certificate into the machine. All other HTTPS developer certificates will be cleared out")
+                [CompletionResult]::new('--import', '--import', [CompletionResultType]::ParameterName, "Imports the provided HTTPS development certificate into the machine. All other HTTPS developer certificates will be cleared out")
+                [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, "Export the certificate in the given format. Valid values are Pfx and Pem. Pfx is the default.")
+                [CompletionResult]::new('--trust', '-t', [CompletionResultType]::ParameterName, "When not combined with the --check option, trusts the certificate on the current platform, creating one if necessary. When combined with the --check option, validates that there is a certificate and it is trusted.")
+                [CompletionResult]::new('--trust', '--trust', [CompletionResultType]::ParameterName, "When not combined with the --check option, trusts the certificate on the current platform, creating one if necessary. When combined with the --check option, validates that there is a certificate and it is trusted.")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Display more debug information.")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Display more debug information.")
+                [CompletionResult]::new('--quiet', '-q', [CompletionResultType]::ParameterName, "Display warnings and errors only.")
+                [CompletionResult]::new('--quiet', '--quiet', [CompletionResultType]::ParameterName, "Display warnings and errors only.")
+                [CompletionResult]::new('--check-trust-machine-readable', '--check-trust-machine-readable', [CompletionResultType]::ParameterName, "Same as running --check --trust, but output the results in json.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('clear', 'clear', [CompletionResultType]::ParameterValue, "Remove all issued JWTs for a project")
+                [CompletionResult]::new('create', 'create', [CompletionResultType]::ParameterValue, "Issue a new JSON Web Token")
+                [CompletionResult]::new('key', 'key', [CompletionResultType]::ParameterValue, "Display or reset the signing key used to issue JWTs")
+                [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, "Lists the JWTs issued for the project")
+                [CompletionResult]::new('print', 'print', [CompletionResultType]::ParameterValue, "Print the details of a given JWT")
+                [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, "Remove a given JWT")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;clear' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, "Don't prompt for confirmation before deleting JWTs.")
+                [CompletionResult]::new('--appsettings-file', '--appsettings-file', [CompletionResultType]::ParameterName, "The appSettings configuration file to add the test scheme to.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;create' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--scheme', '--scheme', [CompletionResultType]::ParameterName, "The scheme name to use for the generated token. Defaults to 'Bearer'.")
+                [CompletionResult]::new('--name', '-n', [CompletionResultType]::ParameterName, "The name of the user to create the JWT for. Defaults to the current environment user.")
+                [CompletionResult]::new('--name', '--name', [CompletionResultType]::ParameterName, "The name of the user to create the JWT for. Defaults to the current environment user.")
+                [CompletionResult]::new('--audience', '--audience', [CompletionResultType]::ParameterName, "The audiences to create the JWT for. Defaults to the URLs configured in the project's launchSettings.json.")
+                [CompletionResult]::new('--issuer', '--issuer', [CompletionResultType]::ParameterName, "The issuer of the JWT. Defaults to 'dotnet-user-jwts'.")
+                [CompletionResult]::new('--scope', '--scope', [CompletionResultType]::ParameterName, "A scope claim to add to the JWT. Specify once for each scope.")
+                [CompletionResult]::new('--role', '--role', [CompletionResultType]::ParameterName, "A role claim to add to the JWT. Specify once for each role.")
+                [CompletionResult]::new('--claim', '--claim', [CompletionResultType]::ParameterName, "Claims to add to the JWT. Specify once for each claim in the format `"name=value`".")
+                [CompletionResult]::new('--not-before', '--not-before', [CompletionResultType]::ParameterName, "The UTC date & time the JWT should not be valid before. Defaults to the date & time the JWT is created.")
+                [CompletionResult]::new('--expires-on', '--expires-on', [CompletionResultType]::ParameterName, "The UTC date & time the JWT should expire. Defaults to 3 months after the --not-before date.")
+                [CompletionResult]::new('--valid-for', '--valid-for', [CompletionResultType]::ParameterName, "The period the JWT should expire after, e.g. '365d'.")
+                [CompletionResult]::new('--appsettings-file', '--appsettings-file', [CompletionResultType]::ParameterName, "The appSettings configuration file to add the test scheme to.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;key' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--scheme', '--scheme', [CompletionResultType]::ParameterName, "The scheme name associated with the signing key to be reset or displayed. Defaults to 'Bearer'.")
+                [CompletionResult]::new('--issuer', '--issuer', [CompletionResultType]::ParameterName, "The issuer associated with the signing key to be reset or displayed. Defaults to 'dotnet-user-jwts'.")
+                [CompletionResult]::new('--reset', '--reset', [CompletionResultType]::ParameterName, "Reset the signing key. This will invalidate all previously issued JWTs for this project.")
+                [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, "Don't prompt for confirmation before resetting the signing key.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;list' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--show-tokens', '--show-tokens', [CompletionResultType]::ParameterName, "Indicates whether JWT base64 strings should be shown.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;print' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--show-all', '--show-all', [CompletionResultType]::ParameterName, "Whether to show all details associated with the JWT.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-jwts;remove' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "The path of the project to operate on. Defaults to the project in the current directory.")
+                [CompletionResult]::new('--output', '-o', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, "The format to use for displaying output from the command. Can be one of 'default', 'token', or 'json'.")
+                [CompletionResult]::new('--appsettings-file', '--appsettings-file', [CompletionResultType]::ParameterName, "The appSettings configuration file to add the test scheme to.")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, "Show version information")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+                [CompletionResult]::new('clear', 'clear', [CompletionResultType]::ParameterValue, "Deletes all the application secrets")
+                [CompletionResult]::new('init', 'init', [CompletionResultType]::ParameterValue, "Set a user secrets ID to enable secret storage")
+                [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, "Lists all the application secrets")
+                [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, "Removes the specified user secret")
+                [CompletionResult]::new('set', 'set', [CompletionResultType]::ParameterValue, "Sets the user secret to the specified value")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets;clear' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets;init' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets;list' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, "Use json output. JSON is wrapped by '//BEGIN' and '//END'")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets;remove' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;user-secrets;set' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help information")
+                [CompletionResult]::new('--verbose', '-v', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--project', '-p', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Path to project. Defaults to searching the current directory.")
+                [CompletionResult]::new('--file', '-f', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "Path to file-based app.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The project configuration to use. Defaults to 'Debug'.")
+                [CompletionResult]::new('--id', '--id', [CompletionResultType]::ParameterName, "The user secret ID to use.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        'dotnet;watch' {
+            $staticCompletions = @(
+                [CompletionResult]::new('--quiet', '-q', [CompletionResultType]::ParameterName, "Suppresses all output except warnings and errors")
+                [CompletionResult]::new('--quiet', '--quiet', [CompletionResultType]::ParameterName, "Suppresses all output except warnings and errors")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--list', '--list', [CompletionResultType]::ParameterName, "Lists all discovered files without starting the watcher.")
+                [CompletionResult]::new('--no-hot-reload', '--no-hot-reload', [CompletionResultType]::ParameterName, "Suppress hot reload for supported apps.")
+                [CompletionResult]::new('--non-interactive', '--non-interactive', [CompletionResultType]::ParameterName, "Runs dotnet-watch in non-interactive mode. This option is only supported when running with Hot Reload enabled.")
+                [CompletionResult]::new('--framework', '-f', [CompletionResultType]::ParameterName, "The target framework to build for. The target framework must also be specified in the project file.")
+                [CompletionResult]::new('--framework', '--framework', [CompletionResultType]::ParameterName, "The target framework to build for. The target framework must also be specified in the project file.")
+                [CompletionResult]::new('--device', '--device', [CompletionResultType]::ParameterName, "The device identifier to run on (e.g. emulator, simulator, or physical device).")
+                [CompletionResult]::new('--project', '--project', [CompletionResultType]::ParameterName, "Defines the path of the project file to run. Use path to the project file, or path to the directory containing the project file.")
+                [CompletionResult]::new('--file', '--file', [CompletionResultType]::ParameterName, "The path to the file-based app to run.")
+                [CompletionResult]::new('--launch-profile', '-lp', [CompletionResultType]::ParameterName, "The name of the launch profile (if any) to use when launching the application.")
+                [CompletionResult]::new('--launch-profile', '--launch-profile', [CompletionResultType]::ParameterName, "The name of the launch profile (if any) to use when launching the application.")
+                [CompletionResult]::new('--no-launch-profile', '--no-launch-profile', [CompletionResultType]::ParameterName, "Do not attempt to use launchSettings.json or [app].run.json to configure the application.")
+                [CompletionResult]::new('--configuration', '-c', [CompletionResultType]::ParameterName, "The configuration to run for. The default for most projects is 'Debug'.")
+                [CompletionResult]::new('--configuration', '--configuration', [CompletionResultType]::ParameterName, "The configuration to run for. The default for most projects is 'Debug'.")
+                [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, "Allows the command to stop and wait for user input or action (for example to complete authentication).")
+                [CompletionResult]::new('--no-restore', '--no-restore', [CompletionResultType]::ParameterName, "Do not restore the project before building.")
+                [CompletionResult]::new('--self-contained', '--sc', [CompletionResultType]::ParameterName, "Publish the .NET runtime with your application so the runtime doesn't need to be installed on the target machine.")
+                [CompletionResult]::new('--self-contained', '--self-contained', [CompletionResultType]::ParameterName, "Publish the .NET runtime with your application so the runtime doesn't need to be installed on the target machine.")
+                [CompletionResult]::new('--no-self-contained', '--no-self-contained', [CompletionResultType]::ParameterName, "Publish your application as a framework dependent application.")
+                [CompletionResult]::new('--verbosity', '-v', [CompletionResultType]::ParameterName, "Set the MSBuild verbosity level. Allowed values are q[uiet], m[inimal], n[ormal], d[etailed], and diag[nostic].")
+                [CompletionResult]::new('--verbosity', '--verbosity', [CompletionResultType]::ParameterName, "Set the MSBuild verbosity level. Allowed values are q[uiet], m[inimal], n[ormal], d[etailed], and diag[nostic].")
+                [CompletionResult]::new('--runtime', '-r', [CompletionResultType]::ParameterName, "The target runtime to run for.")
+                [CompletionResult]::new('--runtime', '--runtime', [CompletionResultType]::ParameterName, "The target runtime to run for.")
+                [CompletionResult]::new('--arch', '-a', [CompletionResultType]::ParameterName, "The target architecture.")
+                [CompletionResult]::new('--arch', '--arch', [CompletionResultType]::ParameterName, "The target architecture.")
+                [CompletionResult]::new('--os', '--os', [CompletionResultType]::ParameterName, "The target operating system.")
+                [CompletionResult]::new('--disable-build-servers', '--disable-build-servers', [CompletionResultType]::ParameterName, "Force the command to ignore any persistent build servers.")
+                [CompletionResult]::new('--artifacts-path', '--artifacts-path', [CompletionResultType]::ParameterName, "The artifacts path. All output from the project, including build, publish, and pack output, will go in subfolders under the specified path.")
+                [CompletionResult]::new('--help', '-?', [CompletionResultType]::ParameterName, "Show help and usage information")
+                [CompletionResult]::new('--help', '-h', [CompletionResultType]::ParameterName, "Show help and usage information")
+                [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, "Show help and usage information")
+                [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, "Show version information")
+                [CompletionResult]::new('run', 'run', [CompletionResultType]::ParameterValue, "Watch the project and rerun 'dotnet run' on changes (the default).")
+                [CompletionResult]::new('test', 'test', [CompletionResultType]::ParameterValue, "Watch the project and rerun 'dotnet test' on changes.")
+                [CompletionResult]::new('build', 'build', [CompletionResultType]::ParameterValue, "Watch the project and rerun 'dotnet build' on changes.")
+            )
+            $completions += $staticCompletions
+            break
+        }
+        { $_ -match '^dotnet;watch;(?:run|test|build)(?:;|$)' } {
+            # The forwarded command's own options come from the live engine; these
+            # are the options dotnet-watch keeps for itself.
+            $staticCompletions = @(
+                [CompletionResult]::new('--quiet', '-q', [CompletionResultType]::ParameterName, "Suppresses all output except warnings and errors")
+                [CompletionResult]::new('--quiet', '--quiet', [CompletionResultType]::ParameterName, "Suppresses all output except warnings and errors")
+                [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, "Show verbose output")
+                [CompletionResult]::new('--list', '--list', [CompletionResultType]::ParameterName, "Lists all discovered files without starting the watcher.")
+                [CompletionResult]::new('--no-hot-reload', '--no-hot-reload', [CompletionResultType]::ParameterName, "Suppress hot reload for supported apps.")
+                [CompletionResult]::new('--non-interactive', '--non-interactive', [CompletionResultType]::ParameterName, "Runs dotnet-watch in non-interactive mode. This option is only supported when running with Hot Reload enabled.")
+            )
+            $completions += $staticCompletions
+            break
+        }
     }
-    $word = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
+    $word =if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
 
     # The vendored table lists every spelling of an option as its own row with the
     # canonical name in CompletionText and the spelling in ListItemText. Match and
@@ -1525,7 +2072,17 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
     }
 
     $safeCursor = [Math]::Min($relativeCursor, $extentText.Length)
-    $liveTokens = @(Get-DotnetLiveCompletion -Text $extentText.Substring(0, $safeCursor) -Position $safeCursor)
+    # The bundled tools (dev-certs, user-jwts, user-secrets, watch) are outside
+    # the SDK's completion engine, which answers them with the root command list.
+    # 'watch run|test|build' is the exception: watch forwards the command to the
+    # SDK, and the engine answers it exactly as it answers 'dotnet run|test|build'.
+    $bundledTool = $command -match '^dotnet;(?:dev-certs|user-jwts|user-secrets|watch)(?:;|$)' -and
+        $command -notmatch '^dotnet;watch;(?:run|test|build)(?:;|$)'
+    $liveTokens = @(
+        if (-not $bundledTool) {
+            Get-DotnetLiveCompletion -Text $extentText.Substring(0, $safeCursor) -Position $safeCursor
+        }
+    )
 
     $settledTokens = @(
         foreach ($element in @($commandElements | Select-Object -Skip 1)) {
@@ -1535,12 +2092,33 @@ Register-ArgumentCompleter -Native -CommandName 'dotnet' -ScriptBlock {
         }
     )
     $previousToken = if ($settledTokens.Count -gt 0) { $settledTokens[$settledTokens.Count - 1] } else { '' }
+    $previousOption = if ($candidates.Contains($previousToken)) { $candidates[$previousToken].CompletionText } else { $previousToken }
+    $liveOptionCount = @($liveTokens | Where-Object { Test-DotnetOptionToken -Token $_ }).Count
 
-    if (Test-DotnetPathOption -Token $previousToken) {
+    if ($liveOptionCount -eq $liveTokens.Count -and (Test-DotnetOptionToken -Token $previousToken)) {
+        # A value slot the SDK leaves unanswered (runtime identifiers, launch
+        # profiles, ...) gets its values here, or nothing, but never the option list.
+        $values = Get-DotnetOptionValue -Command $command -Option $previousOption -SettledTokens $settledTokens
+        if ($null -ne $values) {
+            $typed = ConvertFrom-DotnetTypedWord -Text $word
+            return @(
+                foreach ($value in $values) {
+                    if ($value.StartsWith($typed.Value, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        [CompletionResult]::new((ConvertTo-DotnetArgument -Value $value -Quote $typed.Quote), $value, [CompletionResultType]::ParameterValue, "$previousToken $value")
+                    }
+                }
+            )
+        }
+    }
+
+    if ($bundledTool -and $previousOption -in @('--file', '--export-path', '--import', '--appsettings-file')) {
+        return @([System.Management.Automation.CompletionCompleters]::CompleteFilename($word))
+    }
+
+    if ((Test-DotnetPathOption -Token $previousToken) -or ($bundledTool -and $previousOption -eq '--project')) {
         return @(Get-DotnetProjectCompletion -WordToComplete $word -IncludeDirectories $true)
     }
 
-    $liveOptionCount = @($liveTokens | Where-Object { Test-DotnetOptionToken -Token $_ }).Count
     if ($liveTokens.Count -gt 0 -and $liveOptionCount -eq 0 -and (Test-DotnetOptionToken -Token $previousToken)) {
         # Every live suggestion is a bare value, so this is an option's value slot
         # and the option list must not be repeated into it.
