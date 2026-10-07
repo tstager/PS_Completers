@@ -4,8 +4,9 @@ Registers GitHub CLI (`gh`) tab-completion through the installed `gh` executable
 
 .DESCRIPTION
 This script registers importer-safe native completers for `gh` and `gh.exe`.
-The generated completion script is resolved lazily at completion time, cached,
-and then invoked through the installed GitHub CLI's own PowerShell completer.
+Every Tab speaks cobra's completion protocol to the installed GitHub CLI
+directly: the typed words are projected from the command AST without being
+evaluated and passed to `gh __complete` as a process argument list.
 
 Run once per session, or dot-source it from your PowerShell profile.
 #>
@@ -13,6 +14,7 @@ Run once per session, or dot-source it from your PowerShell profile.
 Set-StrictMode -Version Latest
 
 function Get-GhCliCommandPath {
+    # A missing gh is cached too, so a machine without it pays for the lookup once per session.
     $cachedPath = Get-Variable -Name GhCliCommandPath -Scope Script -ErrorAction Ignore
     if ($null -ne $cachedPath) {
         return $cachedPath.Value
@@ -23,76 +25,202 @@ function Get-GhCliCommandPath {
     $script:GhCliCommandPath
 }
 
-function Get-GhCliGeneratedCompletionScript {
-    # A completion callback must stay silent: diagnostics go to the verbose stream only.
-    $ghCommandPath = Get-GhCliCommandPath
-    if ([string]::IsNullOrWhiteSpace($ghCommandPath)) {
-        Write-Verbose 'GitHub CLI (gh) was not found in PATH.'
-        return $null
-    }
+function Get-GhCliCompletionRequest {
+    # Projects the typed command line to the argument list cobra expects, without evaluating anything:
+    # string constants by value, every other prior element by its literal text, the word under the cursor
+    # cut at the cursor, and an empty final argument when the cursor follows whitespace. Returns $null
+    # when the word under the cursor is not literal text (a variable, subexpression, splat, ...).
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
 
-    try {
-        $completionScript = $null | & $ghCommandPath completion -s powershell 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $word = $null
+    $quote = ''
 
-        if ([string]::IsNullOrWhiteSpace($completionScript)) {
-            Write-Verbose 'gh returned an empty completion script.'
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $start = $element.Extent.StartOffset
+        if ($start -ge $CursorPosition) {
+            break
+        }
+
+        if ($element.Extent.EndOffset -lt $CursorPosition) {
+            if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                $arguments.Add($element.Value)
+            } else {
+                $arguments.Add($element.Extent.Text)
+            }
+            continue
+        }
+
+        $typed = $element.Extent.Text.Substring(0, $CursorPosition - $start)
+        $isWhole = $typed.Length -eq $element.Extent.Text.Length
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            switch ($element.StringConstantType) {
+                'BareWord' {
+                    $word = if ($isWhole) { $element.Value } else { $typed -replace '`(.)', '$1' }
+                }
+                'SingleQuoted' {
+                    $quote = "'"
+                    $word = if ($isWhole) { $element.Value } else { $typed.Substring(1) -replace "''", "'" }
+                }
+                'DoubleQuoted' {
+                    $quote = '"'
+                    $word = if ($isWhole) { $element.Value } else { $typed.Substring(1) -replace '`(.)', '$1' }
+                }
+                default { return $null }
+            }
+        } elseif ($element -is [System.Management.Automation.Language.CommandParameterAst] -and $null -eq $element.Argument) {
+            $word = $typed
+        } elseif ($element -is [System.Management.Automation.Language.ArrayLiteralAst] -and
+            @($element.Elements | Where-Object { $_ -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $_.StringConstantType -ne 'BareWord' }).Count -eq 0) {
+            # A bare comma list such as '--json number,ti' reaches gh as one argument, exactly as typed.
+            $word = $typed
+        } else {
             return $null
         }
 
-        return $completionScript
-    } catch {
-        Write-Verbose ("Failed to load gh completion: {0}" -f $_.Exception.Message)
-        $null
+        break
+    }
+
+    if ($null -eq $word) {
+        $word = ''
+    }
+    $arguments.Add($word)
+
+    [pscustomobject]@{
+        Arguments = $arguments.ToArray()
+        Word      = $word
+        Quote     = $quote
     }
 }
 
-function Get-GhCliCompletionInvoker {
-    $cachedInvoker = Get-Variable -Name GhCliCompletionInvoker -Scope Script -ErrorAction Ignore
-    if ($null -ne $cachedInvoker) {
-        return $cachedInvoker.Value
+function Invoke-GhCliCompleteRequest {
+    # Runs 'gh __complete <arguments>' directly (no shell, no command-line string) and returns its
+    # ANSI-stripped stdout lines. The session's location is handed over because gh resolves the
+    # repository from its working directory.
+    param([string[]]$Arguments)
+
+    $ghCommandPath = Get-GhCliCommandPath
+    if (-not $ghCommandPath) {
+        return @()
     }
-
-    # A failed discovery is cached too, so a machine without gh pays for it once per session.
-    if (Get-Variable -Name GhCliCompletionUnavailable -Scope Script -ErrorAction Ignore) {
-        return $null
-    }
-
-    $completionScript = Get-GhCliGeneratedCompletionScript
-    if ([string]::IsNullOrWhiteSpace($completionScript)) {
-        $script:GhCliCompletionUnavailable = $true
-        return $null
-    }
-
-    $completionScript = $completionScript -replace (
-        "(?m)^\s*Register-ArgumentCompleter\s+-CommandName\s+'gh'\s+-ScriptBlock\s+\$\{__ghCompleterBlock\}\s*\r?$"
-    ), ''
-
-    # With no suggestions $Values is $null, and piping $null still runs the filter and the emitting
-    # ForEach-Object once: the filter assigns .Name on $null for '--flag=' words and the emitter builds a
-    # CompletionResult from a null name, each leaving a record in $Error on such a Tab.
-    $completionScript = $completionScript -replace (
-        '(?m)^(\s*)\$Values = \$Values \| Where-Object \{\s*$'
-    ), '$1$$Values = $$Values | Where-Object { $$null -ne $$_ } | Where-Object {'
-    $completionScript = $completionScript -replace (
-        '(?m)^(\s*)\$Values \| ForEach-Object \{\s*$'
-    ), '$1$$Values | Where-Object { $$null -ne $$_ } | ForEach-Object {'
-
-    # gh's block dereferences properties of an empty pipeline when there are no suggestions; run it
-    # outside this script's strict mode so those accesses stay silent.
-    $completionInvokerSource = @"
-Set-StrictMode -Off
-$completionScript
-
-& `${__ghCompleterBlock} @args
-"@
 
     try {
-        $script:GhCliCompletionInvoker = [scriptblock]::Create($completionInvokerSource)
-        return $script:GhCliCompletionInvoker
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new($ghCommandPath)
+        [void]$startInfo.ArgumentList.Add('__complete')
+        foreach ($argument in $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        # ActiveHelp lines have no PowerShell rendering; set on the child only.
+        $startInfo.Environment['GH_ACTIVE_HELP'] = '0'
+
+        $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+        if ($location) {
+            $startInfo.WorkingDirectory = $location.ProviderPath
+        }
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Verbose $_.Exception.Message }
+                return @()
+            }
+
+            @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n' | Where-Object { $_ -ne '' })
+        } finally {
+            $process.Dispose()
+        }
     } catch {
-        Write-Verbose ("Failed to prepare gh completion: {0}" -f $_.Exception.Message)
-        $script:GhCliCompletionUnavailable = $true
-        $null
+        Write-Verbose ("gh __complete failed: {0}" -f $_.Exception.Message)
+        @()
+    }
+}
+
+function ConvertTo-GhCliArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed, otherwise in
+    # the typed quote style (single by default). A bare comma list stays bare: PowerShell passes it to a
+    # native command as one argument.
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
+function Get-GhCliLiveCompletion {
+    # Cobra's protocol: 'value<TAB>description' lines, then ':<directive>' with the bit flags
+    # 1 Error, 2 NoSpace, 4 NoFileComp, 8 FilterFileExt, 16 FilterDirs, 32 KeepOrder, 64 ActiveHelp.
+    # An empty answer leaves the slot to the fallback and then to PowerShell's own path completion.
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    $request = Get-GhCliCompletionRequest -CommandAst $CommandAst -CursorPosition $CursorPosition
+    if ($null -eq $request) {
+        return @()
+    }
+
+    $lines = @(Invoke-GhCliCompleteRequest -Arguments $request.Arguments)
+    if ($lines.Count -eq 0 -or $lines[-1] -notmatch '^:(?<directive>\d+)$') {
+        return @()
+    }
+
+    $directive = [int]$Matches['directive']
+    if ($directive -band (1 + 8 + 16)) {
+        return @()
+    }
+
+    # For '--flag=value' cobra answers with bare values; the flag spelling goes back in front.
+    $prefix = ''
+    $filter = $request.Word
+    if ($filter -match '^(?<flag>--[^=]+=)(?<value>.*)$') {
+        $prefix = $Matches['flag']
+        $filter = $Matches['value']
+    }
+
+    $candidates = @(
+        foreach ($line in ($lines | Select-Object -SkipLast 1)) {
+            $name, $description = $line.Split("`t", 2)
+            if ($name -and $name.StartsWith($filter, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [pscustomobject]@{ Name = $prefix + $name; Description = $description }
+            }
+        }
+    )
+
+    if (-not ($directive -band 32)) {
+        $candidates = @($candidates | Sort-Object -Property Name)
+    }
+
+    foreach ($candidate in $candidates) {
+        $resultType = if (-not $prefix -and $candidate.Name.StartsWith('-')) { 'ParameterName' } else { 'ParameterValue' }
+        $toolTip = if ([string]::IsNullOrWhiteSpace($candidate.Description)) { $candidate.Name } else { $candidate.Description }
+        [System.Management.Automation.CompletionResult]::new(
+            (ConvertTo-GhCliArgument -Value $candidate.Name -Quote $request.Quote), $candidate.Name, $resultType, $toolTip)
     }
 }
 
@@ -389,45 +517,26 @@ function Get-GhCliFallbackCompletion {
 
 function Invoke-GhCliCompletion {
     param(
-        [string]$wordToComplete,
-        [System.Management.Automation.Language.CommandAst]$commandAst,
-        [int]$cursorPosition
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    $completionInvoker = Get-GhCliCompletionInvoker
-    if ($null -eq $completionInvoker) {
-        return
-    }
-
-    # gh's generated block lets the child process's 'Completion ended with directive' banner reach
-    # stderr; redirecting the whole invocation keeps the console clean.
-    $delegated = @()
-    try {
-        $delegated = @(& $completionInvoker $wordToComplete $commandAst $cursorPosition 2>$null)
-    } catch {
-        Write-Verbose ("gh completion block failed: {0}" -f $_.Exception.Message)
-    }
-    $realResults = @($delegated | Where-Object { $_ -is [System.Management.Automation.CompletionResult] })
+    $liveResults = @(Get-GhCliLiveCompletion -CommandAst $CommandAst -CursorPosition $CursorPosition)
 
     # gh's completion offers commands but not the HELP TOPICS for 'gh help <topic>', so that slot
     # also consults the (cheap, cached) fallback and appends the topics.
-    $elements = $commandAst.CommandElements
+    $elements = $CommandAst.CommandElements
     $isHelp = $elements.Count -gt 1 -and $elements[1].Extent.Text -eq 'help'
-    if ($realResults.Count -gt 0 -and -not $isHelp) {
-        return $realResults
+    if ($liveResults.Count -gt 0 -and -not $isHelp) {
+        return $liveResults
     }
 
-    $fallback = @(Get-GhCliFallbackCompletion -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition)
-    if ($realResults.Count -gt 0 -or $fallback.Count -gt 0) {
-        return @($realResults) + @($fallback)
-    }
-
-    # gh's "" sentinel (ShellCompDirectiveNoFileComp) is not passed on: the engine rejects an empty
-    # completion text and records the failure in $Error.
+    @($liveResults) + @(Get-GhCliFallbackCompletion -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition)
 }
 
 Register-ArgumentCompleter -Native -CommandName @('gh', 'gh.exe') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    Invoke-GhCliCompletion -wordToComplete $wordToComplete -commandAst $commandAst -cursorPosition $cursorPosition
+    Invoke-GhCliCompletion -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }
