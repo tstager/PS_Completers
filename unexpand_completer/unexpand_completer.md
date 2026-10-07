@@ -52,7 +52,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option names come from the resolved `unexpand` binary's `--help` output, cached in script scope and keyed on that binary's path and last-write time. The binary is resolved again only when `$env:PATH` changes or the cached file disappears, so switching between the uutils and GNU builds (or upgrading one in place) refreshes the option list on the next Tab. A static fallback list is used when the tool is not installed; it is keyed the same way, so a later install or PATH fix replaces it. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.

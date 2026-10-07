@@ -3,22 +3,40 @@
 
 Set-StrictMode -Version 2.0
 
-function Get-UnexpandCompletionOptions {
-    $cache = Get-Variable -Name 'UnexpandCompletionOptions' -Scope Script -ErrorAction Ignore
-    if ($null -ne $cache -and $null -ne $cache.Value) {
+function Get-UnexpandCompletionCache {
+    $cache = Get-Variable -Name 'UnexpandCompletionCache' -Scope Script -ErrorAction Ignore
+    $path = [string]$env:PATH
+    $hasCache = $null -ne $cache -and $null -ne $cache.Value
+    $resolve = -not ($hasCache -and $cache.Value.Path -ceq $path)
+    if (-not $resolve) {
+        $sources = @($cache.Value.Sources)
+        $resolve = $sources.Count -gt 0 -and -not [System.IO.File]::Exists($sources[0])
+    }
+    if ($resolve) {
+        $sources = @(foreach ($candidate in @('unexpand.exe', 'unexpand')) {
+            $command = Get-Command -Name $candidate -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+            if ($null -ne $command) {
+                $command.Source
+                break
+            }
+        })
+    }
+
+    $key = ''
+    if ($sources.Count -gt 0) {
+        $key = $sources[0] + '|' + [System.IO.File]::GetLastWriteTimeUtc($sources[0]).Ticks
+    }
+
+    if ($hasCache -and $cache.Value.Key -ceq $key) {
+        $cache.Value.Path = $path
+        $cache.Value.Sources = $sources
         return $cache.Value
     }
 
     $fallbackOptions = @('-a', '--all', '-i', '--initial', '-t', '--tabs', '--help', '--version')
-    $commandCandidates = @('unexpand.exe', 'unexpand')
-    foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
-        if ($null -eq $command) {
-            continue
-        }
-
+    foreach ($source in $sources) {
         try {
-            $helpOutput = $null | & $command.Source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
+            $helpOutput = $null | & $source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
         } catch {
             continue
         }
@@ -50,14 +68,15 @@ function Get-UnexpandCompletionOptions {
         }
 
         if ($options.Count -gt 0) {
-            Set-Variable -Name 'UnexpandCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
-            Set-Variable -Name 'UnexpandCompletionDescriptions' -Value $descriptions -Scope Script
-            return (Get-Variable -Name 'UnexpandCompletionOptions' -Scope Script).Value
+            $entry = @{ Path = $path; Sources = $sources; Key = $key; Options = @($options | Sort-Object); Descriptions = $descriptions }
+            Set-Variable -Name 'UnexpandCompletionCache' -Value $entry -Scope Script
+            return $entry
         }
     }
 
-    Set-Variable -Name 'UnexpandCompletionOptions' -Value $fallbackOptions -Scope Script
-    return (Get-Variable -Name 'UnexpandCompletionOptions' -Scope Script).Value
+    $entry = @{ Path = $path; Sources = $sources; Key = $key; Options = $fallbackOptions; Descriptions = @{} }
+    Set-Variable -Name 'UnexpandCompletionCache' -Value $entry -Scope Script
+    $entry
 }
 
 function New-UnexpandCompletionResult {
@@ -246,11 +265,13 @@ function Get-UnexpandOptionValueCompletions {
 }
 
 function Get-UnexpandOptionDescription {
-    param([string]$Option)
+    param(
+        [string]$Option,
+        [hashtable]$Descriptions
+    )
 
-    $cache = Get-Variable -Name 'UnexpandCompletionDescriptions' -Scope Script -ErrorAction Ignore
-    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.ContainsKey($Option)) {
-        return $cache.Value[$Option]
+    if ($Descriptions.ContainsKey($Option)) {
+        return $Descriptions[$Option]
     }
 
     'Option for unexpand.'
@@ -279,10 +300,11 @@ function Complete-Unexpand {
     }
 
     if ($currentWord.StartsWith('-')) {
+        $optionCache = Get-UnexpandCompletionCache
         return @(
-            foreach ($option in Get-UnexpandCompletionOptions) {
+            foreach ($option in $optionCache.Options) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-UnexpandCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-UnexpandOptionDescription -Option $option)
+                    New-UnexpandCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-UnexpandOptionDescription -Option $option -Descriptions $optionCache.Descriptions)
                 }
             }
         )
