@@ -1025,7 +1025,7 @@
         @{
             Path    = 'ru_completer/ru_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:A7B577AAC1AAC97B50FE2349DDF86F66FF2AB4F5449A9CA9A108AD86BBE74E3C'
+            Hash    = 'SHA256:8D54A03BC6B3F0AC4943CBBD5A70279EA0AFCA33BE63BB7E396F7F67BE80B2B7'
             Targets = @(
                 @{ CommandName = 'ru'; Native = $true }
                 @{ CommandName = 'ru.exe'; Native = $true }

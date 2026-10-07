@@ -31,6 +31,8 @@ if (-not (Get-Variable -Name RuCompletionCatalog -Scope Script -ErrorAction Igno
             'HKEY_CURRENT_CONFIG' = 'HKCC'
         }
         ChildCache = @{}
+        ChildCacheTtlSeconds = 30
+        ChildCacheMaxEntries = 256
         MaxChildResults = 300
     }
 }
@@ -391,9 +393,16 @@ function Get-RuChildKeyState {
         [string]$SubKeyPath
     )
 
+    # Entries expire so keys created or deleted during the session show up on a later
+    # Tab, and the table is cleared once it grows past its bound.
+    $cache = $script:RuCompletionCatalog.ChildCache
+    $now = [datetime]::UtcNow
     $cacheKey = $CanonicalRoot + '\' + $SubKeyPath
-    if ($script:RuCompletionCatalog.ChildCache.ContainsKey($cacheKey)) {
-        return $script:RuCompletionCatalog.ChildCache[$cacheKey]
+    if ($cache.ContainsKey($cacheKey)) {
+        $entry = $cache[$cacheKey]
+        if (($now - $entry.Captured).TotalSeconds -lt $script:RuCompletionCatalog.ChildCacheTtlSeconds) {
+            return $entry
+        }
     }
 
     # RegistryKey.GetSubKeyNames lists the names held by the parent without opening
@@ -441,8 +450,11 @@ function Get-RuChildKeyState {
         }
     }
 
-    $state = [pscustomobject]@{ Names = @($names); Denied = $denied }
-    $script:RuCompletionCatalog.ChildCache[$cacheKey] = $state
+    $state = [pscustomobject]@{ Names = @($names); Denied = $denied; Captured = $now }
+    if (-not $cache.ContainsKey($cacheKey) -and $cache.Count -ge $script:RuCompletionCatalog.ChildCacheMaxEntries) {
+        $cache.Clear()
+    }
+    $cache[$cacheKey] = $state
     $state
 }
 
