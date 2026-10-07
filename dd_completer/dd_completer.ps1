@@ -12,7 +12,7 @@ function Get-DdCompletionOptions {
     $fallbackOptions = @('--if=', '--of=', '--bs=', '--ibs=', '--obs=', '--skip=', '--seek=', '--count=', '--conv=', '--status=', '--help', '--version')
     $commandCandidates = @('dd.exe', 'dd')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -190,7 +190,8 @@ function Get-DdPathCompletions {
 function Get-DdOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [string]$WordToComplete
     )
 
     $option = $null
@@ -333,10 +334,28 @@ function Get-DdOptionValueCompletions {
     }
 
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+
+    # conv=, iflag= and oflag= take a comma separated symbol list: complete the
+    # segment after the last comma. PowerShell parses 'conv=sync,no' as an array
+    # literal whose replacement range is only the word after the comma, so emit
+    # just the part of the full value that $WordToComplete covers.
+    $listHead = ''
+    $usedSymbols = @()
+    $emitFrom = 0
+    $lastComma = $prefix.LastIndexOf(',')
+    if (@('conv', 'iflag', 'oflag') -ccontains $option -and $lastComma -ge 0) {
+        $listHead = $prefix.Substring(0, $lastComma + 1)
+        $prefix = $prefix.Substring($lastComma + 1)
+        $usedSymbols = @($listHead.Split(','))
+        if ($CurrentWord.EndsWith($WordToComplete, [System.StringComparison]::Ordinal)) {
+            $emitFrom = $CurrentWord.Length - $WordToComplete.Length
+        }
+    }
+
     @(
         foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-DdCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal) -and -not ($usedSymbols -ccontains $entry.Text)) {
+                New-DdCompletionResult -CompletionText ($attached + $listHead + $entry.Text).Substring($emitFrom) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
@@ -366,7 +385,7 @@ function Complete-Dd {
         Get-DdCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-DdOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $optionValues = @(Get-DdOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -WordToComplete $wordToComplete)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }

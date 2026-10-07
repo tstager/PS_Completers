@@ -258,7 +258,7 @@
         @{
             Path    = 'dd_completer/dd_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:0EC34AF88422C9909BF8513B54BE016BE7181B6C5E476F4809D89D9F7BA5887C'
+            Hash    = 'SHA256:F9C0B2837F022FF37F62856ED994A8B8C014E05B4DADB2584E336E10F5B796BB'
             Targets = @(
                 @{ CommandName = 'dd'; Native = $true }
                 @{ CommandName = 'dd.exe'; Native = $true }

@@ -63,6 +63,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - `iflag`, `oflag`: `append`, `direct`, `directory`, `dsync`, `sync`, `fullblock`, `nonblock`, `noatime`, `nocache`, `noctty`, `nofollow`
 - `status`: `none`, `noxfer`, `progress`
 
+`conv`, `iflag` and `oflag` take a comma-separated symbol list. Completion continues after each comma (`dd conv=sync,no` offers `nocreat`, `notrunc`, `noerror`), and symbols already in the list are not offered again. PowerShell parses the unquoted list as an array literal and replaces only the word after the last comma, so the completion text is just the symbol; PowerShell passes the list to `dd` joined with commas.
+
 ## Representative validation scenarios
 
 ```powershell
@@ -71,12 +73,13 @@ dd --
 dd 
 dd if=
 dd conv=
+dd conv=sync,no
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
-- a bare slot shows the operand keywords, `if=` completes paths and `conv=` completes conversion flags
+- a bare slot shows the operand keywords, `if=` completes paths, `conv=` completes conversion flags, and `conv=sync,no` continues the list after the comma
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
