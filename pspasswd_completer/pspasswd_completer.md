@@ -20,7 +20,7 @@ Instead, it focuses on the documented syntax shapes for both local-account and d
   - `\\*`
   - `@file`
 - Remote auth (offered only after a remote target and before the account):
-  - `-u` -> `<username>`, `<domain\user>`
+  - `-u` -> `<username>`, `<domain\user>`, filtered by the typed prefix; a typed user name that matches neither is echoed back so Tab never overwrites it
   - `-p` -> `<password>`
 - Singleton switches: `-nobanner`, `-accepteula` (accepted by the binary, never printed by its help), `-?`, `/?`
 - Account slot:

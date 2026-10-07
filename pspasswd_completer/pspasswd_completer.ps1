@@ -129,10 +129,19 @@ function Complete-PsPasswd {
 
     switch ($valueContext) {
         'User' {
-            return @(
-                New-PsPasswdCompletionResult -CompletionText '<username>' -ResultType 'ParameterValue' -ToolTip 'Remote user name.'
-                New-PsPasswdCompletionResult -CompletionText '<domain\user>' -ResultType 'ParameterValue' -ToolTip 'Remote user name in Domain\User syntax.'
+            $userResults = @(
+                foreach ($userHint in @(
+                        @{ Text = '<username>'; ToolTip = 'Remote user name.' }
+                        @{ Text = '<domain\user>'; ToolTip = 'Remote user name in Domain\User syntax.' }
+                    )) {
+                    if ([string]::IsNullOrWhiteSpace($currentWord) -or $userHint.Text.StartsWith((Remove-PsPasswdOuterQuotes -Value $currentWord), [System.StringComparison]::OrdinalIgnoreCase)) {
+                        New-PsPasswdCompletionResult -CompletionText $userHint.Text -ResultType 'ParameterValue' -ToolTip $userHint.ToolTip
+                    }
+                }
             )
+            if ($userResults.Count -gt 0) { return $userResults }
+            # A typed user name that matches no placeholder is kept as-is instead of being overwritten.
+            return @(New-PsPasswdCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'Remote user name.')
         }
         'Password' {
             return @(New-PsPasswdCompletionResult -CompletionText $(if ([string]::IsNullOrWhiteSpace($currentWord)) { '<password>' } else { $currentWord }) -ResultType 'ParameterValue' -ToolTip 'Remote password value.')
