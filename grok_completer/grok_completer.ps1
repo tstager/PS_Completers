@@ -29,7 +29,7 @@ function New-GrokCompletionResult {
 
 function Get-GrokCommandPath {
     foreach ($candidate in @('grok', 'grok.exe')) {
-        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction Ignore |
             Select-Object -First 1
 
         if ($null -ne $command) {
@@ -400,27 +400,38 @@ function ConvertTo-GrokArray {
 
 function Get-GrokCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
+    if ($null -eq $CommandAst) {
         return $Fallback
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
+    # The parser's element under the cursor is the word, quotes included; an
+    # unterminated quote is one element running to the end of the input.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    return ''
+}
+
+function Split-GrokQuotedWord {
+    param([string]$Word)
+
+    # Returns the user's opening quote character ('' when none) and the word
+    # without its surrounding quotes.
+    $quoteChar = ''
+    if ($Word.Length -gt 0 -and ($Word[0] -eq [char]34 -or $Word[0] -eq [char]39)) {
+        $quoteChar = [string]$Word[0]
     }
 
-    return $Fallback
+    return @($quoteChar, $Word.Trim([char[]]@([char]34, [char]39)))
 }
 
 function Get-GrokCommandTokens {
@@ -448,15 +459,14 @@ function Get-GrokCommandTokens {
 function Get-GrokPathCompletions {
     param(
         [string]$InputPath,
-        [switch]$DirectoryOnly
+        [switch]$DirectoryOnly,
+        [string]$QuoteChar = ''
     )
 
     $cleanInput = $InputPath
     if ($null -eq $cleanInput) {
         $cleanInput = ''
     }
-
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -477,7 +487,7 @@ function Get-GrokPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -495,10 +505,12 @@ function Get-GrokPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
+        # Keep the quote the user opened; otherwise double-quote paths with whitespace.
         $quotedPath = $pathText
-        if (($alwaysQuote -or $pathText -match '\s') -and -not ($pathText.StartsWith('"') -and $pathText.EndsWith('"'))) {
-            $escaped = $pathText.Replace('`', '``').Replace('"', '`"')
-            $quotedPath = '"' + $escaped + '"'
+        if ($QuoteChar -eq "'") {
+            $quotedPath = "'" + $pathText.Replace("'", "''") + "'"
+        } elseif ($QuoteChar -eq '"' -or $pathText -match '\s') {
+            $quotedPath = '"' + $pathText.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
         }
 
         if ($item.PSIsContainer) {
@@ -561,7 +573,8 @@ function Complete-GrokOptionValue {
     param(
         [psobject]$OptionSpec,
         [string]$ValueText,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [string]$QuoteChar = ''
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -575,12 +588,12 @@ function Complete-GrokOptionValue {
             }
         }
         'Directory' {
-            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText -DirectoryOnly)) {
+            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText -DirectoryOnly -QuoteChar $QuoteChar)) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip))
             }
         }
         'Path' {
-            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText)) {
+            foreach ($result in @(Get-GrokPathCompletions -InputPath $ValueText -QuoteChar $QuoteChar)) {
                 [void]$results.Add((New-GrokCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip))
             }
         }
@@ -604,16 +617,9 @@ function Complete-Grok {
     $tokensBeforeCurrent = @(Get-GrokCommandTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
 
     # The engine hands over the whole token when the cursor sits inside it;
-    # re-derive the word from the command-relative text before the cursor.
-    $currentToken = $currentWord
-    if ($null -ne $commandAst) {
-        if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-            $currentToken = ''
-        } else {
-            $currentToken = Get-GrokCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $currentWord
-        }
-    }
-    $currentToken = $currentToken.Trim([char[]]@([char]34, [char]39))
+    # re-derive the word from the element text before the cursor.
+    $currentToken = Get-GrokCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $currentWord
+    $quoteChar, $currentToken = Split-GrokQuotedWord -Word $currentToken
 
     # Walk the command path greedily: every leading non-option token that
     # names a subcommand (or alias) of the current node descends one level.
@@ -654,13 +660,15 @@ function Complete-Grok {
     }
 
     if ($null -ne $pendingOption) {
-        return Complete-GrokOptionValue -OptionSpec $pendingOption -ValueText $currentToken
+        return Complete-GrokOptionValue -OptionSpec $pendingOption -ValueText $currentToken -QuoteChar $quoteChar
     }
 
     if ($currentToken -match '^(--?[A-Za-z0-9][A-Za-z0-9-]*)=(.*)$') {
-        $spec = Get-GrokOptionSpec -Catalog $activeCatalog -OptionName $Matches[1]
+        $optionName = $Matches[1]
+        $valueQuote, $valueText = Split-GrokQuotedWord -Word $Matches[2]
+        $spec = Get-GrokOptionSpec -Catalog $activeCatalog -OptionName $optionName
         if ($null -ne $spec -and $spec.TakesValue) {
-            return Complete-GrokOptionValue -OptionSpec $spec -ValueText $Matches[2] -Prefix ($Matches[1] + '=')
+            return Complete-GrokOptionValue -OptionSpec $spec -ValueText $valueText -Prefix ($optionName + '=') -QuoteChar $valueQuote
         }
 
         return @()
