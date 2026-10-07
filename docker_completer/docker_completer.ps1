@@ -554,22 +554,24 @@ function ConvertFrom-DockerHelp {
 
         # Option rows start at column 2 or 6. Wrapped description lines are indented
         # to the description column, so they can never be mistaken for definitions.
+        # Only the leading "-s, --long" cluster names the option; dashed words in
+        # the description ("-1 for unlimited", "implied by --tlsverify") do not.
         if ($indent -le 6 -and $trimmed.StartsWith('-')) {
-            $names = New-Object System.Collections.Generic.List[string]
-            foreach ($match in [regex]::Matches($trimmed, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(?:\s|,|=|$))')) {
-                $value = $match.Value
-                if (-not $names.Contains($value)) {
-                    [void]$names.Add($value)
-                }
-            }
-
-            if ($names.Count -eq 0) {
+            $definition = [regex]::Match($trimmed, '^(?:(?<short>-[A-Za-z0-9]),\s+)?(?<long>--[A-Za-z0-9][A-Za-z0-9-]*)(?=\s|=|$)|^(?<short>-[A-Za-z0-9])(?=\s|=|$)')
+            if (-not $definition.Success) {
                 $current = $null
                 continue
             }
 
+            $names = New-Object System.Collections.Generic.List[string]
+            foreach ($group in @('short', 'long')) {
+                if ($definition.Groups[$group].Success) {
+                    [void]$names.Add($definition.Groups[$group].Value)
+                }
+            }
+
             $lastName = $names[$names.Count - 1]
-            $remainder = $trimmed.Substring($trimmed.IndexOf($lastName) + $lastName.Length)
+            $remainder = $trimmed.Substring($definition.Length)
             $valueType = Get-DockerOptionValueType -Remainder $remainder
             $description = if ([string]::IsNullOrWhiteSpace($valueType)) { $remainder.Trim() } else { $remainder.Trim().Substring($valueType.Length).Trim() }
 
@@ -593,7 +595,8 @@ function ConvertFrom-DockerHelp {
 
     $hasHelp = $false
     foreach ($option in $options) {
-        if ($option.Names -contains '--help' -or $option.Names -contains '-h') {
+        # Case-sensitive: the root's -H (--host) is not -h.
+        if ($option.Names -ccontains '--help' -or $option.Names -ccontains '-h') {
             $hasHelp = $true
             break
         }
@@ -610,10 +613,12 @@ function ConvertFrom-DockerHelp {
             })
     }
 
+    $usage = Get-DockerUsageOperand -UsageLines @($usageLines.ToArray())
     return [pscustomobject]@{
-        Commands = @($commands.ToArray())
-        Options  = @($options.ToArray())
-        Operands = @(Get-DockerUsageOperand -UsageLines @($usageLines.ToArray()))
+        Commands           = @($commands.ToArray())
+        Options            = @($options.ToArray())
+        Operands           = $usage.Operands
+        HasTrailingCommand = $usage.HasTrailingCommand
     }
 }
 
@@ -621,6 +626,7 @@ function Get-DockerUsageOperand {
     param([string[]]$UsageLines)
 
     $operands = New-Object System.Collections.Generic.List[object]
+    $hasTrailingCommand = $false
 
     foreach ($usage in @($UsageLines)) {
         if ($usage -notmatch '(?i)^\s*docker(?:\.exe)?\b(?<rest>.*)$') {
@@ -633,7 +639,17 @@ function Get-DockerUsageOperand {
                 continue
             }
 
-            if ($name -cmatch '^[A-Z][A-Z0-9_]*$' -and $name -notin @('OPTIONS', 'COMMAND', 'ARG', 'SUBCOMMAND')) {
+            # "IMAGE [COMMAND] [ARG...]": a COMMAND/ARG tail after an operand is the
+            # container's own command line, not more docker arguments.
+            if ($name -cin @('COMMAND', 'ARG', 'ARGS')) {
+                if ($operands.Count -gt 0) {
+                    $hasTrailingCommand = $true
+                }
+
+                continue
+            }
+
+            if ($name -cmatch '^[A-Z][A-Z0-9_]*$' -and $name -notin @('OPTIONS', 'SUBCOMMAND')) {
                 [void]$operands.Add([pscustomobject]@{
                         Name   = $name
                         IsPath = ($name -match '(?i)(PATH|URL|FILE|DIR|DIRECTORY)$')
@@ -644,7 +660,10 @@ function Get-DockerUsageOperand {
         break
     }
 
-    return @($operands.ToArray())
+    return [pscustomobject]@{
+        Operands           = @($operands.ToArray())
+        HasTrailingCommand = $hasTrailingCommand
+    }
 }
 
 function Get-DockerCommandCatalog {
@@ -868,6 +887,12 @@ function Complete-DockerCommand {
 
     $context = Get-DockerCompletionContext -CommandAst $commandAst -CursorPosition $cursorPosition
     if ($null -eq $context) {
+        return @()
+    }
+
+    # Past the operands of run/create/exec every word belongs to the container's
+    # command, which docker's own completion leaves alone too.
+    if ($context.Catalog.HasTrailingCommand -and $context.OperandCount -ge @($context.Catalog.Operands).Count) {
         return @()
     }
 

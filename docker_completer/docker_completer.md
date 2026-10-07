@@ -53,6 +53,15 @@ contain text such as `states) (default -1)`, which a flag-shaped regex otherwise
 harvests as an option named `-1`. Continuation lines are appended to the option's
 description instead, which is also what makes the enum harvest below work.
 
+On the definition row itself only the leading `-s, --long` cluster names the
+option. Dashed words later in the description (`--parallel int  Control max
+parallelism, -1 for`, `--tls  Use TLS; implied by --tlsverify`) are description
+text, not aliases, so they neither appear as flags nor hide the real name and
+its value type.
+
+The synthetic `-h`/`--help` pair is added unless the help already lists one of
+them, compared case-sensitively, so the root's `-H` (`--host`) does not count.
+
 ## Key completion behaviors / supported values
 The script provides:
 - root `docker` subcommand completion
@@ -89,6 +98,11 @@ The script provides:
 - operand placeholders taken from the `Usage:` line when no live names exist
   (`docker network create <TAB>` offers `<NETWORK>`); operands named `PATH`,
   `URL`, `FILE` or `DIR` are left to the engine's own path completion
+- nothing after the operands of a command whose usage ends in a `COMMAND` /
+  `ARG...` tail (`run`, `create`, `exec`, their `container` forms, and
+  `compose run|exec`): `docker run alpine <TAB>` and `docker run alpine -<TAB>`
+  belong to the container's command line, which docker's own completion also
+  leaves alone, so docker's flags are not offered there
 
 Because completion is based on live help output, it remains aligned with the
 installed Docker version rather than a stale, manually-maintained static table.
@@ -152,6 +166,12 @@ installed Docker version rather than a stale, manually-maintained static table.
   `docker logs 'ai_memory-d` (0 -> quoted container names). `docker -H tcp://...
   logs `, `docker --context nosuchctx logs ` and `docker buildx use ` start no
   process and keep their placeholders. Cold Tab 0.5-0.7 s, warm about 25 ms
+- Docker 29.8.2: `docker -` (17 with a duplicate `--tlsverify` -> 18, adding
+  `-h` and `--help`), `docker --he` (0 -> `--help`), `docker compose -` (loses
+  `-1`), `docker compose --parallel ` and `docker update --pids-limit `
+  (`<for>` -> `<int>`), `docker run alpine -` and `docker run alpine ls `
+  (114 run flags -> none; PowerShell's filename fallback applies),
+  `docker exec <container> ` (17 exec flags -> none)
 
 ## Limitations / notes
 - This script does not implement every Docker plugin surface as a static custom grammar.
