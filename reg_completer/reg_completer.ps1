@@ -59,7 +59,7 @@ function Resolve-RegCommandName {
         return $script:RegCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name reg.exe, reg -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name reg.exe, reg -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:RegCompletionCatalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -468,13 +468,16 @@ function Get-RegCurrentToken {
 
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    # An unterminated quote is one token running to the cursor, spaces included.
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+'))
     if ($parts.Count -gt 0) {
-        return $parts[-1]
+        $last = $parts[-1]
+        if ($last.Index + $last.Length -lt $prefix.Length) {
+            return ''
+        }
+
+        return $last.Value
     }
 
     $Fallback
@@ -701,7 +704,7 @@ function Get-RegFileCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($AllowedExtensions -and $AllowedExtensions.Count -gt 0) {
@@ -996,7 +999,7 @@ function Get-RegValueNameCompletions {
         return @(New-RegLiteralValueResults -CurrentValue $CurrentValue -ToolTip 'Registry value name.')
     }
 
-    $item = Get-Item -LiteralPath $providerPath -ErrorAction SilentlyContinue
+    $item = Get-Item -LiteralPath $providerPath -ErrorAction Ignore
     if (-not $item) {
         return @(New-RegLiteralValueResults -CurrentValue $CurrentValue -ToolTip 'Registry value name.')
     }
@@ -1136,7 +1139,7 @@ function Complete-Reg {
     $line = $commandAst.ToString()
     $prefixLength = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $prefixLength)
-    $tokens = @([regex]::Matches($linePrefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $tokens = @([regex]::Matches($linePrefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
     $currentWord = if ($hasTrailingSpace) { '' } else { Get-RegCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
