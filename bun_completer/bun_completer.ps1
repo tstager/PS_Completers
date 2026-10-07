@@ -1547,6 +1547,8 @@ function Get-BunStaticOptionNameList {
         'audit fix' { return @('--dry-run', '-L', '--latest') }
         'why' { return @('--top', '--depth') }
         'init' { return @('--help', '-y', '--yes', '-m', '--minimal', '-r', '--react') }
+        # 'bun x --help' prints only to stderr, which the help capture drops.
+        'x' { return @('--bun', '-p', '--package', '--no-install', '--verbose', '--silent', '-h', '--help') }
         'pm pack' { return @('--dry-run', '--destination', '--filename', '--ignore-scripts', '--gzip-level', '--quiet') }
         default { return @() }
     }
@@ -2046,7 +2048,9 @@ function Complete-Bun {
         }
     }
 
-    if (-not $context.AfterDoubleDash) {
+    # bunx takes its own flags only before the package; later flags belong to the package.
+    $isBunxPackageArgument = (Get-BunCacheKey -Path $path) -eq 'x' -and @($positionals).Count -gt 0
+    if (-not $context.AfterDoubleDash -and -not $isBunxPackageArgument) {
         foreach ($item in @(Get-BunOptionSuggestions -Path $path)) {
             [void]$items.Add($item)
         }

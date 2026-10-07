@@ -158,7 +158,7 @@ It also seeds important nested paths:
 
 ### Help-driven option completion
 
-Option names are primarily discovered from the local Bun help text for the active command path, unioned with a static option-name floor (`Get-BunStaticOptionNameList`, seeded from the bun 1.4.2 help for the root, `run`, `test`, `build`, the install family, `audit`, `audit fix`, `why`, `init` and `pm pack`) so a missing or unparsable help capture never leaves a path without options.
+Option names are primarily discovered from the local Bun help text for the active command path, unioned with a static option-name floor (`Get-BunStaticOptionNameList`, seeded from the bun 1.4.2 help for the root, `run`, `test`, `build`, the install family, `audit`, `audit fix`, `why`, `init`, `x` and `pm pack`) so a missing or unparsable help capture never leaves a path without options. `bun x --help` writes its flags (`--bun`, `-p`/`--package`, `--no-install`, `--verbose`, `--silent`) only to stderr, which the help capture discards, so the `x` floor is the only source of its flags.
 
 The script also keeps a static list of options that are known to expect values for important paths, including:
 
