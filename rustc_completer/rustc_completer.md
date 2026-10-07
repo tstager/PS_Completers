@@ -8,7 +8,8 @@ It is a **help-driven** completer with a small amount of safe local discovery:
 
 - parses the installed `rustc -h` surface for documented switches
 - reads local `rustc -W help` output for lint names
-- reads local `rustc -C help` output for codegen option names
+- reads local `rustc -C help` output for codegen option names and descriptions
+- reads `-C` option values lazily, one option at a time (see below)
 - reads local `rustc --print target-list` output for target triples
 - reads local `rustc --print target-cpus` output for CPU names
 - completes local files and directories for input/output path slots
@@ -160,19 +161,42 @@ Both value forms work. The attached form keeps its `--opt=` prefix on the
 inserted text, so `rustc --emit=<TAB>` yields `--emit=asm` rather than a bare
 `asm` that would replace the whole token and delete the option name.
 
-For `-C` / `--codegen`, the completer also recognizes `name=value` forms and suggests values for common options such as:
+For `-C` / `--codegen`, the completer recognizes `name=value` forms and reads
+each option's values from rustc itself, lazily, the first time that option's
+value slot is completed, and caches them for the session:
 
-- `opt-level`
-- `target-cpu`
-- `target-feature`
-- `code-model`
-- `lto`
-- `panic`
-- `strip`
-- `split-debuginfo`
-- `symbol-mangling-version`
-- common boolean switches
+- options whose `rustc -C help` description points at a `rustc --print` topic
+  use that topic: `code-model` (`code-models`), `relocation-model`
+  (`relocation-models`), `target-cpu` (`target-cpus`) and `target-feature`
+  (`target-features`, offered as `+feature` / `-feature` plus `help`)
+- every other listed option is probed once with `rustc -C <name>=?` and no
+  input file; rustc's own error ("incorrect value `?` for codegen option ... -
+  one of ... was expected") names the accepted values, e.g. `debuginfo`,
+  `control-flow-guard`, `relro-level`, `linker-flavor`, `collapse-macro-debuginfo`,
+  `overflow-checks` and the other booleans, `lto`, `panic`, `strip`,
+  `split-debuginfo`, `symbol-mangling-version`, `link-self-contained`,
+  `linker-features`. Values rustc marks "(with -Zunstable-options)" are dropped.
+  Nothing is compiled or written: with no input file rustc stops after option
+  parsing.
+- options with free-form or numeric values (`codegen-units`, `dwarf-version`,
+  `linker`, `link-arg`, ...) keep the `name=<value>` placeholder; `opt-level`,
+  whose error has a different shape, uses the static list.
 
+The values are the set rustc's parser accepts. Some of them are gated further
+by channel or target - for example most `linker-flavor` values, `panic=immediate-abort`,
+`symbol-mangling-version=legacy` and `split-debuginfo=off` need
+`-Z unstable-options` or another target on stable rustc 1.98.1 for
+`x86_64-pc-windows-msvc` - and rustc reports that precisely when used.
+
+Signed lists (`target-feature`, `link-self-contained`, `linker-features`)
+complete the segment after the last comma. Unquoted, PowerShell replaces only
+that segment, so `rustc -C target-feature=+avx2,+ss<TAB>` inserts `+sse`,
+`+sse2`, ...; inside quotes the whole value is replaced and the user's quote is
+kept (`'target-feature=+avx2,+sse'`).
+
+Without rustc on PATH the static tables (`opt-level`, the common booleans,
+`code-model`, `lto`, `panic`, `strip`, `split-debuginfo`,
+`symbol-mangling-version`) are used.
 ### Path completion
 
 The completer uses local-only filesystem enumeration for:
@@ -223,6 +247,10 @@ rustc.exe --print <TAB>
 - Help text is treated as authoritative even though native tools do not always use conventional exit codes for help paths.
 - `$cursorPosition` is rebased by `$commandAst.Extent.StartOffset` before it is
   applied to the command-relative extent text.
+- Every rustc call is bounded: stdin closed, stdout and stderr drained
+  asynchronously, killed after 5 s, ANSI-stripped.
+- A `-C` value slot's first Tab costs one rustc call (about 110-260 ms with the
+  catalog warm); later Tabs read the cache (about 35-130 ms).
 - rustc version during this revision: `1.98.1`.
 
 ### Representative validation

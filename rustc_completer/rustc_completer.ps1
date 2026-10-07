@@ -222,7 +222,7 @@ function Get-RustcCommandPath {
         return $script:RustcCommandPath
     }
 
-    $command = Get-Command -Name rustc.exe, rustc -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name rustc.exe, rustc -ErrorAction Ignore | Select-Object -First 1
     $script:RustcCommandPath = if ($command) {
         if ($command.Source) { $command.Source } else { $command.Name }
     } else {
@@ -232,19 +232,61 @@ function Get-RustcCommandPath {
     $script:RustcCommandPath
 }
 
+function Invoke-RustcProcess {
+    param([string[]]$Arguments)
+
+    $empty = [pscustomobject]@{ StdOut = @(); StdErr = @() }
+    $commandPath = Get-RustcCommandPath
+    if (-not $commandPath) {
+        return $empty
+    }
+
+    # Bounded: stdin closed, both streams drained asynchronously, killed after
+    # 5 s. The -C value probes need stderr, where rustc reports parse errors.
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new($commandPath)
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        # rustup picks the toolchain from the working directory.
+        $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+        if ($location) {
+            $startInfo.WorkingDirectory = $location.ProviderPath
+        }
+        foreach ($argument in $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(5000)) {
+            $process.Kill($true)
+            return $empty
+        }
+
+        [pscustomobject]@{
+            StdOut = @(($stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n')
+            StdErr = @(($stderr.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n')
+        }
+    } catch {
+        $empty
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-RustcText {
     param([string[]]$Arguments)
 
-    $commandPath = Get-RustcCommandPath
-    if (-not $commandPath) {
-        return @()
-    }
-
-    try {
-        @(& $commandPath @Arguments 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
-    } catch {
-        @()
-    }
+    @((Invoke-RustcProcess -Arguments $Arguments).StdOut)
 }
 
 function Get-RustcCatalog {
@@ -341,9 +383,11 @@ function Get-RustcCatalog {
     }
 
     $codegenOptions = New-Object System.Collections.Generic.List[string]
+    $codegenDescriptions = New-Object 'System.Collections.Generic.Dictionary[string, string]' ([System.StringComparer]::Ordinal)
     foreach ($line in (Invoke-RustcText -Arguments @('-C', 'help'))) {
-        if ($line -match '^\s+-C\s+([A-Za-z0-9\-]+)=val\b') {
+        if ($line -match '^\s+-C\s+([A-Za-z0-9\-]+)=val\b(?:\s+--\s+(.*))?') {
             [void]$codegenOptions.Add($matches[1])
+            $codegenDescriptions[$matches[1]] = if ($matches[2]) { $matches[2].Trim() } else { '' }
         }
     }
 
@@ -366,6 +410,7 @@ function Get-RustcCatalog {
         LintNames      = @($lintNames.ToArray() | Sort-Object -Unique)
         LintGroups     = @($lintGroups.ToArray() | Sort-Object -Property Name -Unique)
         CodegenOptions = @($codegenOptions.ToArray() | Sort-Object -Unique)
+        CodegenDescriptions = $codegenDescriptions
         TargetTriples  = @($targetTriples | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         TargetCpus     = @($targetCpus.ToArray() | Sort-Object -Unique)
         TargetFeatures = @('help')
@@ -499,12 +544,15 @@ function Get-RustcValueKindSuggestions {
                 $optionName = $matches[1]
                 $optionValuePrefix = $matches[2]
                 foreach ($value in (Get-RustcCodegenValueSuggestions -OptionName $optionName -ValuePrefix $optionValuePrefix)) {
-                    [void]$results.Add($value)
+                    # A quoted token keeps its quote: list values carry commas.
+                    $quoted = ConvertTo-RustcQuotedValue -Value $value.CompletionText -OriginalToken $raw
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $quoted -ResultType $value.ResultType -ToolTip $value.ToolTip -ListItemText $value.ListItemText))
                 }
             } else {
                 foreach ($value in $catalog.CodegenOptions) {
                     if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        [void]$results.Add((New-RustcCompletionResult -CompletionText ($value + '=') -ResultType 'ParameterValue' -ToolTip 'rustc -C option'))
+                        $toolTip = if ($catalog.CodegenDescriptions.ContainsKey($value) -and $catalog.CodegenDescriptions[$value]) { $catalog.CodegenDescriptions[$value] } else { 'rustc -C option' }
+                        [void]$results.Add((New-RustcCompletionResult -CompletionText ($value + '=') -ResultType 'ParameterValue' -ToolTip $toolTip))
                     }
                 }
             }
@@ -553,6 +601,106 @@ function Get-RustcValueKindSuggestions {
     @($results.ToArray())
 }
 
+function Get-RustcCodegenValueSet {
+    param([string]$OptionName)
+
+    if (-not (Test-Path -LiteralPath variable:script:RustcCodegenValueCache)) {
+        $script:RustcCodegenValueCache = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)
+    }
+
+    if ($script:RustcCodegenValueCache.ContainsKey($OptionName)) {
+        return $script:RustcCodegenValueCache[$OptionName]
+    }
+
+    $catalog = Get-RustcCatalog
+    $values = New-Object System.Collections.Generic.List[object]
+    $listNames = New-Object System.Collections.Generic.List[object]
+
+    # Only options `rustc -C help` listed are probed, so an unknown name or a
+    # missing rustc never starts a process; either way the empty answer is cached.
+    if ($catalog.CodegenDescriptions.ContainsKey($OptionName)) {
+        $description = $catalog.CodegenDescriptions[$OptionName]
+        if ($description -match '`rustc --print ([a-z0-9\-]+)`') {
+            # code-model, relocation-model, target-cpu and target-feature point
+            # at the --print topic that enumerates their values.
+            $topic = $matches[1]
+            $target = $values
+            if ($topic -eq 'target-features') {
+                $target = $listNames
+                foreach ($value in $catalog.TargetFeatures) {
+                    [void]$values.Add([pscustomobject]@{ Text = $value; ToolTip = 'Print the target features' })
+                }
+            }
+
+            if ($topic -eq 'target-cpus') {
+                foreach ($value in $catalog.TargetCpus) {
+                    [void]$values.Add([pscustomobject]@{ Text = $value; ToolTip = '' })
+                }
+            } else {
+                foreach ($line in (Invoke-RustcText -Arguments @('--print', $topic))) {
+                    if ($line -match '^\s{2,}([A-Za-z0-9_.+\-]+)(?:\s+-\s+(.*))?$') {
+                        $toolTip = if ($matches[2]) { $matches[2].Trim() } else { '' }
+                        [void]$target.Add([pscustomobject]@{ Text = $matches[1]; ToolTip = $toolTip })
+                    }
+                }
+            }
+        } else {
+            # rustc's own parse error for an invalid value names the accepted
+            # values. With no input file nothing is compiled or written.
+            $probe = Invoke-RustcProcess -Arguments @('-C', ($OptionName + '=?'))
+            $pattern = 'for codegen option `' + [regex]::Escape($OptionName) + '` - (.+) was expected'
+            foreach ($line in $probe.StdErr) {
+                if ($line -notmatch $pattern) {
+                    continue
+                }
+
+                # Values gated behind -Zunstable-options are not offered.
+                $expected = $matches[1] -replace '\(with -Z[^)]*\).*$', ''
+                $scalarPart = $expected
+                $listPart = ''
+                if ($expected -match '^(.*?)a list of enabled \(`\+` prefix\) and disabled \(`-` prefix\) [a-z ]+:(.*)$') {
+                    $scalarPart = $matches[1]
+                    $listPart = $matches[2]
+                }
+
+                $scalars = New-Object System.Collections.Generic.List[string]
+                foreach ($match in [regex]::Matches($scalarPart, '\((\d+(?:,\s*\d+)*)\)')) {
+                    foreach ($number in ($match.Groups[1].Value -split ',\s*')) {
+                        [void]$scalars.Add($number)
+                    }
+                }
+
+                foreach ($match in [regex]::Matches($scalarPart, '`([^`]+)`')) {
+                    [void]$scalars.Add($match.Groups[1].Value)
+                }
+
+                if (($scalars.Count -eq 0) -and ($scalarPart -match '^one of:\s*(.+)$')) {
+                    foreach ($word in ($matches[1].Trim() -split '\s+')) {
+                        [void]$scalars.Add($word)
+                    }
+                }
+
+                foreach ($value in $scalars) {
+                    [void]$values.Add([pscustomobject]@{ Text = $value; ToolTip = '' })
+                }
+
+                foreach ($match in [regex]::Matches($listPart, '`([^`]+)`')) {
+                    [void]$listNames.Add([pscustomobject]@{ Text = $match.Groups[1].Value; ToolTip = '' })
+                }
+
+                break
+            }
+        }
+    }
+
+    $entry = [pscustomobject]@{
+        Values    = @($values.ToArray())
+        ListNames = @($listNames.ToArray())
+    }
+    $script:RustcCodegenValueCache[$OptionName] = $entry
+    $entry
+}
+
 function Get-RustcCodegenValueSuggestions {
     param(
         [string]$OptionName,
@@ -562,31 +710,63 @@ function Get-RustcCodegenValueSuggestions {
     $catalog = Get-RustcCatalog
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
     $name = $OptionName.ToLowerInvariant()
+    $defaultToolTip = "rustc -C $OptionName value"
+    $candidates = New-Object System.Collections.Generic.List[object]
+    $head = ''
+    $segment = $ValuePrefix
 
-    $values = switch ($name) {
-        'opt-level' { $catalog.OptLevels }
-        'debug-assertions' { $catalog.BoolValues }
-        'embed-bitcode' { $catalog.BoolValues }
-        'force-frame-pointers' { $catalog.BoolValues }
-        'force-unwind-tables' { $catalog.BoolValues }
-        'link-dead-code' { $catalog.BoolValues }
-        'prefer-dynamic' { $catalog.BoolValues }
-        'rpath' { $catalog.BoolValues }
-        'save-temps' { $catalog.BoolValues }
-        'target-cpu' { $catalog.TargetCpus }
-        'target-feature' { $catalog.TargetFeatures }
-        'code-model' { $catalog.CodeModels }
-        'lto' { $catalog.LtoModes }
-        'panic' { $catalog.PanicModes }
-        'strip' { $catalog.StripModes }
-        'split-debuginfo' { $catalog.SplitDebuginfo }
-        'symbol-mangling-version' { $catalog.SymbolMangling }
-        default { @() }
+    $live = Get-RustcCodegenValueSet -OptionName $name
+    if (($live.Values.Count -gt 0) -or ($live.ListNames.Count -gt 0)) {
+        # Signed lists (+feature,-feature) complete the segment after the last
+        # comma and keep the earlier segments in the inserted text.
+        $lastComma = $ValuePrefix.LastIndexOf(',')
+        if (($live.ListNames.Count -gt 0) -and ($lastComma -ge 0)) {
+            $head = $ValuePrefix.Substring(0, $lastComma + 1)
+            $segment = $ValuePrefix.Substring($lastComma + 1)
+        } else {
+            foreach ($item in $live.Values) {
+                [void]$candidates.Add($item)
+            }
+        }
+
+        $signs = if ($segment.StartsWith('+') -or $segment.StartsWith('-')) { @($segment.Substring(0, 1)) } else { @('+', '-') }
+        foreach ($sign in $signs) {
+            foreach ($item in $live.ListNames) {
+                [void]$candidates.Add([pscustomobject]@{ Text = $sign + $item.Text; ToolTip = $item.ToolTip })
+            }
+        }
+    } else {
+        # Static fallback for when rustc is absent or its message is not parseable.
+        $values = switch ($name) {
+            'opt-level' { $catalog.OptLevels }
+            'debug-assertions' { $catalog.BoolValues }
+            'embed-bitcode' { $catalog.BoolValues }
+            'force-frame-pointers' { $catalog.BoolValues }
+            'force-unwind-tables' { $catalog.BoolValues }
+            'link-dead-code' { $catalog.BoolValues }
+            'prefer-dynamic' { $catalog.BoolValues }
+            'rpath' { $catalog.BoolValues }
+            'save-temps' { $catalog.BoolValues }
+            'target-cpu' { $catalog.TargetCpus }
+            'target-feature' { $catalog.TargetFeatures }
+            'code-model' { $catalog.CodeModels }
+            'lto' { $catalog.LtoModes }
+            'panic' { $catalog.PanicModes }
+            'strip' { $catalog.StripModes }
+            'split-debuginfo' { $catalog.SplitDebuginfo }
+            'symbol-mangling-version' { $catalog.SymbolMangling }
+            default { @() }
+        }
+
+        foreach ($value in $values) {
+            [void]$candidates.Add([pscustomobject]@{ Text = $value; ToolTip = '' })
+        }
     }
 
-    foreach ($value in $values) {
-        if ($value.StartsWith($ValuePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$results.Add((New-RustcCompletionResult -CompletionText ($OptionName + '=' + $value) -ResultType 'ParameterValue' -ToolTip "rustc -C $OptionName value"))
+    foreach ($item in $candidates) {
+        if ($item.Text.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $toolTip = if ($item.ToolTip) { $item.ToolTip } else { $defaultToolTip }
+            [void]$results.Add((New-RustcCompletionResult -CompletionText ($OptionName + '=' + $head + $item.Text) -ResultType 'ParameterValue' -ToolTip $toolTip))
         }
     }
 
@@ -672,6 +852,48 @@ Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptB
     $tokenState = Get-RustcTokenState -Line $commandAst.Extent.Text -CursorPosition $relativeCursor
     $currentToken = if ($null -eq $tokenState.CurrentToken) { $wordToComplete } else { $tokenState.CurrentToken }
     $tokensBeforeCurrent = @($tokenState.TokensBeforeCurrent)
+
+    # An unquoted comma splits the word for PowerShell, which then replaces only
+    # the segment after the last comma. A -C signed list (target-feature=+a,+b)
+    # is completed whole and trimmed back to that segment.
+    $listHead = ''
+    if (-not [string]::IsNullOrEmpty($currentToken) -and -not $currentToken.StartsWith('"') -and -not $currentToken.StartsWith("'")) {
+        $lastComma = $currentToken.LastIndexOf(',')
+        if ($lastComma -ge 0) {
+            $listHead = $currentToken.Substring(0, $lastComma + 1)
+        }
+    }
+
+    if ($listHead) {
+        $listResults = $null
+        $listState = Get-RustcState -TokensBeforeCurrent @($tokensBeforeCurrent | Select-Object -Skip 1)
+        if ($listState.PendingValueKind -eq 'CodegenOption') {
+            $listResults = @(Get-RustcValueKindSuggestions -ValueKind 'CodegenOption' -CurrentToken $currentToken)
+        } elseif ($currentToken -match '^(--[A-Za-z0-9\-]+)=(.*)$') {
+            $catalog = Get-RustcCatalog
+            $optionName = $matches[1]
+            $attachedValue = $matches[2]
+            if ($catalog.AliasLookup.ContainsKey($optionName) -and $catalog.AliasLookup[$optionName].ValueKind -eq 'CodegenOption') {
+                $listResults = @(
+                    Get-RustcValueKindSuggestions -ValueKind 'CodegenOption' -CurrentToken $attachedValue |
+                        ForEach-Object {
+                            New-RustcCompletionResult -CompletionText ($optionName + '=' + $_.CompletionText) -ResultType $_.ResultType -ToolTip $_.ToolTip
+                        }
+                )
+            }
+        }
+
+        if ($null -ne $listResults) {
+            return @(
+                $listResults |
+                    Where-Object { $_.CompletionText.Length -gt $listHead.Length -and $_.CompletionText.StartsWith($listHead, [System.StringComparison]::Ordinal) } |
+                    ForEach-Object {
+                        New-RustcCompletionResult -CompletionText $_.CompletionText.Substring($listHead.Length) -ResultType $_.ResultType -ToolTip $_.ToolTip
+                    }
+            )
+        }
+    }
+
     if ([string]::IsNullOrEmpty($wordToComplete) -and -not [string]::IsNullOrEmpty($currentToken)) {
         $tokensBeforeCurrent = @($tokensBeforeCurrent + $currentToken)
         $currentToken = ''
