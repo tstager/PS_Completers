@@ -128,6 +128,8 @@ A per-subcommand value-slot table (`Get-SchtasksValueOptionTable`) decides how e
 
 Path and task-name suggestions are quoted when needed for spaces, or when the current input already started with a quote.
 
+Value hints (`/SC`, `/RU`, ...) match the typed prefix past an opening `"` or `'`, so `/RU N`, `/RU "NT` and `/RU 'NT` all reach the `NT AUTHORITY\...` accounts. A hint is quoted with the quote character you typed, or with double quotes when it contains whitespace and you typed none.
+
 ## Key completion behaviors / supported values
 
 ### Top-level and subcommand options
@@ -144,7 +146,7 @@ The script provides explicit value suggestions for these options:
 - `/D`: `MON`, `TUE`, `WED`, `THU`, `FRI`, `SAT`, `SUN`, `*`
 - `/M`: `JAN`, `FEB`, `MAR`, `APR`, `MAY`, `JUN`, `JUL`, `AUG`, `SEP`, `OCT`, `NOV`, `DEC`, `*`
 - `/XML`: `ONE`
-- `/RU`: `SYSTEM`, `"NT AUTHORITY\SYSTEM"`, `"NT AUTHORITY\LOCALSERVICE"`, `"NT AUTHORITY\NETWORKSERVICE"`
+- `/RU`: `SYSTEM`, `NT AUTHORITY\SYSTEM`, `NT AUTHORITY\LOCALSERVICE`, `NT AUTHORITY\NETWORKSERVICE` (the last three are emitted quoted)
 
 ### Task-name completion
 

@@ -80,9 +80,9 @@ function Get-SchtasksStaticValueHints {
         '/xml' = @('ONE')
         '/ru'  = @(
             'SYSTEM',
-            '"NT AUTHORITY\SYSTEM"',
-            '"NT AUTHORITY\LOCALSERVICE"',
-            '"NT AUTHORITY\NETWORKSERVICE"'
+            'NT AUTHORITY\SYSTEM',
+            'NT AUTHORITY\LOCALSERVICE',
+            'NT AUTHORITY\NETWORKSERVICE'
         )
     }
 }
@@ -537,9 +537,30 @@ function Get-SchtasksValueSlotCompletionList {
                 $hints = @($script:SchtasksCompletionCatalog.ValueHintsByOption[$optionKey])
             }
 
+            # Hints are stored unquoted: match past the user's opening quote, then
+            # quote on emit with that quote character (double quotes when none was typed).
+            $quote = if ($word.StartsWith("'")) { "'" } elseif ($word.StartsWith('"')) { '"' } else { '' }
+            $typed = $word
+            if ($quote) {
+                $typed = $word.Substring(1)
+                if ($typed.EndsWith($quote)) {
+                    $typed = $typed.Substring(0, $typed.Length - 1)
+                }
+            }
+
+            $hintPattern = [System.Management.Automation.WildcardPattern]::Escape($typed) + '*'
             return @($hints |
-                Where-Object { $_ -like $pattern } |
-                ForEach-Object { New-SchtasksCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $Slot.ToolTip })
+                Where-Object { $_ -like $hintPattern } |
+                ForEach-Object {
+                    $text = $_
+                    if ($quote -eq "'") {
+                        $text = "'" + $text.Replace("'", "''") + "'"
+                    } elseif ($quote -or $text -match '[\s{}();,|&<>''"`$]|^[@#]') {
+                        $text = '"' + ($text -replace '([`"$])', '`$1') + '"'
+                    }
+
+                    New-SchtasksCompletionResult -CompletionText $text -ResultType 'ParameterValue' -ToolTip $Slot.ToolTip
+                })
         }
         'Modifier' {
             return @(Get-SchtasksModifierValueList -TokensBeforeCurrent $TokensBeforeCurrent |
