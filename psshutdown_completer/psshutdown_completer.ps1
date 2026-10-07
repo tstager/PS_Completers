@@ -104,6 +104,7 @@ if (-not (Get-Variable -Name PsShutdownCompletionCatalog -Scope Script -ErrorAct
         Switches            = @()
         SwitchLookup        = @{}
         ValueTakingSwitches = @{}
+        ReasonCodes         = $null
     }
 }
 
@@ -441,6 +442,79 @@ function Get-PsShutdownOptionCompletions {
     @($results.ToArray())
 }
 
+function Get-PsShutdownReasonCodeList {
+    $cached = $script:PsShutdownCompletionCatalog['ReasonCodes']
+    if ($null -ne $cached) {
+        return $cached
+    }
+
+    $fallback = @(
+        [pscustomobject]@{ CompletionText = 'u:0:0'; ListItemText = 'u:0:0'; ToolTip = 'Other (Unplanned).' }
+        [pscustomobject]@{ CompletionText = 'p:0:0'; ListItemText = 'p:0:0'; ToolTip = 'Other (Planned).' }
+        [pscustomobject]@{ CompletionText = 'u:2:18'; ListItemText = 'u:2:18'; ToolTip = 'Operating System: Security fix (Unplanned).' }
+        [pscustomobject]@{ CompletionText = 'p:2:17'; ListItemText = 'p:2:17'; ToolTip = 'Operating System: Hot fix (Planned).' }
+        [pscustomobject]@{ CompletionText = 'p:4:2'; ListItemText = 'p:4:2'; ToolTip = 'Application: Installation (Planned).' }
+    )
+
+    # Without an accepted EULA the tool would raise its first-run dialog, so it is
+    # never started; this is not cached, so accepting the EULA later takes effect.
+    $eulaAccepted = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Sysinternals\PsShutdown', 'EulaAccepted', $null)
+    if ($eulaAccepted -ne 1) {
+        return $fallback
+    }
+
+    $command = Get-Command -Name 'psshutdown' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    $text = ''
+    if ($command) {
+        # '-nobanner -?' only prints usage plus this computer's reason table; stdin is
+        # closed and the call is bounded so a hang can never stall the completion thread.
+        try {
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $command.Source
+            $startInfo.ArgumentList.Add('-nobanner')
+            $startInfo.ArgumentList.Add('-?')
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardInput = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            try {
+                $process.StandardInput.Close()
+                $outputTask = $process.StandardOutput.ReadToEndAsync()
+                $errorTask = $process.StandardError.ReadToEndAsync()
+                if ($process.WaitForExit(5000)) {
+                    $text = ($outputTask.Result + "`n" + $errorTask.Result) -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+                } else {
+                    $process.Kill()
+                }
+            } finally {
+                $process.Dispose()
+            }
+        } catch {
+            Write-Debug ('psshutdown completer: help capture failed: ' + $_.Exception.Message)
+            $text = ''
+        }
+    }
+
+    # Table rows under 'Reasons defined on this computer': '  U      2      17     Operating System: Hot fix (Unplanned)'.
+    $codes = New-Object System.Collections.Generic.List[object]
+    foreach ($match in [regex]::Matches($text, '(?m)^\s+([UP])\s+(\d+)\s+(\d+)\s+(\S.*?)\s*$')) {
+        $kind = if ($match.Groups[1].Value -eq 'U') { 'Unplanned' } else { 'Planned' }
+        $title = $match.Groups[4].Value
+        if ($title -notmatch '\((Un)?planned\)$') {
+            $title = "$title ($kind)"
+        }
+
+        $code = '{0}:{1}:{2}' -f $match.Groups[1].Value.ToLowerInvariant(), $match.Groups[2].Value, $match.Groups[3].Value
+        [void]$codes.Add([pscustomobject]@{ CompletionText = $code; ListItemText = $code; ToolTip = "$title." })
+    }
+
+    $script:PsShutdownCompletionCatalog['ReasonCodes'] = if ($codes.Count -gt 0) { $codes.ToArray() } else { $fallback }
+    $script:PsShutdownCompletionCatalog['ReasonCodes']
+}
+
 function Get-PsShutdownValueCompletions {
     param(
         [string]$OptionToken,
@@ -467,13 +541,7 @@ function Get-PsShutdownValueCompletions {
                 ))
         }
         '-e' {
-            return @(Get-PsShutdownSampleValueResults -CurrentValue $CurrentWord -Placeholder '[u|p]:xx:yy' -PlaceholderToolTip 'Shutdown reason code in planned/unplanned major:minor form.' -Samples @(
-                    [pscustomobject]@{ CompletionText = 'u:0:0'; ListItemText = 'u:0:0'; ToolTip = 'Other (Unplanned).' }
-                    [pscustomobject]@{ CompletionText = 'p:0:0'; ListItemText = 'p:0:0'; ToolTip = 'Other (Planned).' }
-                    [pscustomobject]@{ CompletionText = 'u:2:18'; ListItemText = 'u:2:18'; ToolTip = 'Operating System: Security fix (Unplanned).' }
-                    [pscustomobject]@{ CompletionText = 'p:2:17'; ListItemText = 'p:2:17'; ToolTip = 'Operating System: Hot fix (Planned).' }
-                    [pscustomobject]@{ CompletionText = 'p:4:2'; ListItemText = 'p:4:2'; ToolTip = 'Application: Installation (Planned).' }
-                ))
+            return @(Get-PsShutdownSampleValueResults -CurrentValue $CurrentWord -Placeholder '[u|p]:xx:yy' -PlaceholderToolTip 'Shutdown reason code in planned/unplanned major:minor form.' -Samples @(Get-PsShutdownReasonCodeList))
         }
         '-m' {
             return @(New-PsShutdownLiteralValueResults -CurrentValue $CurrentWord -Placeholder '"<message>"' -ToolTip 'Message text shown to logged on users.')

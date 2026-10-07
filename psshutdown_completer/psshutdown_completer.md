@@ -4,7 +4,7 @@
 
 `psshutdown_completer.ps1` registers a native PowerShell argument completer for `psshutdown` and `psshutdown.exe`.
 
-The completer is intentionally static and non-destructive. It does not probe remote systems or call `psshutdown` at completion time. Instead, it layers known actions, documented switches, placeholder values, and safe local `@file` path completion on top of the PsShutdown syntax surface.
+The completer is static-first and non-destructive. It never probes remote systems. It layers known actions, documented switches, placeholder values, and safe local `@file` path completion on top of the PsShutdown syntax surface; the only live read is the `-e` reason-code table described below.
 
 ## Registration and command names
 
@@ -73,7 +73,7 @@ Examples:
 
 - `-t` suggests countdown/time samples such as `20`, `30`, `60`, `300`, `1:00`, and `23:00`, plus a `<seconds-or-h:mm>` placeholder
 - `-v` suggests numeric display durations such as `0`, `5`, `10`, and `30`
-- `-e` suggests common reason-code samples such as `u:0:0` and `p:0:0`, plus a `[u|p]:xx:yy` placeholder
+- `-e` suggests every reason code from the "Reasons defined on this computer" table that `psshutdown -nobanner -?` prints (for example `u:2:17`, `p:7:0`), with each title as the tooltip, plus a `[u|p]:xx:yy` placeholder; it falls back to five common samples (`u:0:0`, `p:0:0`, `u:2:18`, `p:2:17`, `p:4:2`) when the tool is absent or its EULA is not yet accepted
 - `-m` returns a message placeholder: `"<message>"`
 - `-u` returns username-oriented placeholders/examples such as `<username>` and `<domain\user>`
 - `-p` returns a `<password>` placeholder
@@ -135,12 +135,13 @@ PsShutdown accepts freeform text for values like passwords and shutdown messages
 
 ## Dependencies or external command expectations
 
-This completer is static and does not require invoking `psshutdown` at completion time.
+Everything except the `-e` value list is static.
 
-It only depends on:
+It depends on:
 
 - PowerShell's native argument completer support
 - local filesystem access when completing `@file` paths
+- for `-e` only: `psshutdown` on `PATH`, run once per session as `psshutdown -nobanner -?` (stdin closed, 5 s timeout, ANSI stripped, about 250 ms cold and 35 ms warm). It is started only when `HKCU:\Software\Sysinternals\PsShutdown\EulaAccepted` is 1, so completion can never raise the first-run EULA dialog; the EULA check is not cached, so accepting it later takes effect without reloading. A missing tool is cached for the session.
 
 ## Usage / loading example
 
