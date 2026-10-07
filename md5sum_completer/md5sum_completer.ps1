@@ -12,7 +12,7 @@ function Get-Md5sumCompletionOptions {
     $fallbackOptions = @('-b', '--binary', '-c', '--check', '--tag', '-t', '--text', '-z', '--zero', '--status', '--quiet', '--strict', '--ignore-missing', '--warn', '-h', '--help', '-V', '--version')
     $commandCandidates = @('md5sum.exe', 'md5sum')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -97,11 +97,16 @@ function Remove-Md5sumOuterQuotes {
 function ConvertTo-Md5sumQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [bool]$AlwaysQuote = $false,
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
+    }
+
+    if ($QuoteChar -eq "'") {
+        return "'" + $Value.Replace("'", "''") + "'"
     }
 
     if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
@@ -114,27 +119,19 @@ function ConvertTo-Md5sumQuotedValue {
 
 function Get-Md5sumCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-Md5sumPathCompletions {
@@ -142,6 +139,10 @@ function Get-Md5sumPathCompletions {
 
     $cleanInput = Remove-Md5sumOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if ($alwaysQuote) { $InputPath.Substring(0, 1) } else { '' }
+    if ($quoteChar -eq "'") {
+        $cleanInput = $cleanInput.Replace("''", "'")
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -176,7 +177,7 @@ function Get-Md5sumPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-Md5sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-Md5sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-Md5sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -197,17 +198,14 @@ function Get-Md5sumOptionDescription {
 }
 
 function Complete-Md5sum {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete spans past the cursor and unescapes quotes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-Md5sumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-Md5sumCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return Get-Md5sumPathCompletions -InputPath ''
