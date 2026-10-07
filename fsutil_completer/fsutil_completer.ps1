@@ -73,7 +73,7 @@ function Resolve-FsutilCommandName {
         return $script:FsutilCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name fsutil.exe, fsutil -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name fsutil.exe, fsutil -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:FsutilCompletionCatalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -896,24 +896,18 @@ function Resolve-FsutilCommandPath {
 
 function Get-FsutilCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    # The parser keeps an unterminated quote as one element running to the cursor, so the
+    # element under the cursor (truncated there) is the word, quotes and spaces included.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
     $Fallback
@@ -2476,7 +2470,7 @@ function Complete-Fsutil {
     $currentWord = if ($hasTrailingSpace) {
         ''
     } else {
-        Get-FsutilCurrentToken -Line $line -CursorPosition $safeCursor -Fallback $WordToComplete
+        Get-FsutilCurrentToken -CommandAst $CommandAst -CursorPosition $CursorPosition -Fallback $WordToComplete
     }
 
     # Only elements that end before the cursor are completed tokens; the element under the cursor

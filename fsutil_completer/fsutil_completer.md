@@ -26,7 +26,7 @@ On first use, the script:
 
 Nothing else is ever executed: pressing Tab after any other two-token path never runs `fsutil <family> <verb>` or `fsutil <family> <verb> /?`, because several verbs treat `/?` as an operand (`fsutil tiering queryFlags /?` tries to open a volume named `/?`) and set-style verbs would perform their operation. Every invocation goes through a `System.Diagnostics.Process` with stdin closed and a 5-second timeout, so a verb that blocks cannot stall the prompt. Help-entry parsing accepts a single space between verb and description, so a verb that fills the column (`file queryExtentsAndRefCounts`) is not dropped.
 
-The cursor is rebased on `CommandAst.Extent.StartOffset`, so completion works when `fsutil` is not the first statement on the line, and only elements that end before the cursor count as completed tokens, so a cursor inside an earlier token completes that token's prefix.
+The cursor is rebased on `CommandAst.Extent.StartOffset`, so completion works when `fsutil` is not the first statement on the line, and only elements that end before the cursor count as completed tokens, so a cursor inside an earlier token completes that token's prefix. The word being completed is the parser's command element under the cursor, so a half-typed quoted path with a space (`fsutil file layout "C:\Program Files\`) is one word and completes to quoted children instead of the fragment after the space.
 
 ## Value-aware coverage
 Every leaf whose usage line was captured from the installed binary (10.0.26100) has an argument model: positionals, `/x` options, `name=value` tags (`startUsn=`, `format=`, `Action=`, `q=`) and bare keywords (`csv`, `wait`, `tail`). Handlers cover the irregular grammars, including:
