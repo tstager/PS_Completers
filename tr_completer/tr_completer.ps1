@@ -12,7 +12,7 @@ function Get-TrCompletionOptions {
     $fallbackOptions = @('-c', '--complement', '-C', '-d', '--delete', '-s', '--squeeze-repeats', '-t', '--truncate-set1', '-h', '--help', '-V', '--version')
     $commandCandidates = @('tr.exe', 'tr')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -30,7 +30,7 @@ function Get-TrCompletionOptions {
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
-            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
+            foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|\]|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
                 if ($normalized.StartsWith('--')) {
@@ -151,12 +151,9 @@ function Get-TrPathCompletions {
         $parent = $cleanInput
         $leaf = ''
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+        $parent = if ($separatorIndex -ge 0) { $cleanInput.Substring(0, $separatorIndex + 1) } else { '.' }
+        $leaf = $cleanInput.Substring($separatorIndex + 1)
     }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
@@ -188,6 +185,83 @@ function Get-TrPathCompletions {
     }
 }
 
+function Get-TrSetVocabulary {
+    param([string]$InputWord)
+
+    $quote = if (-not [string]::IsNullOrEmpty($InputWord) -and ($InputWord[0] -eq [char]39 -or $InputWord[0] -eq [char]34)) { [string]$InputWord[0] } else { '' }
+    $typed = Remove-TrOuterQuotes -Value $InputWord
+
+    $vocabulary = [ordered]@{
+        '[:alnum:]'  = 'Letters and digits'
+        '[:alpha:]'  = 'Letters'
+        '[:blank:]'  = 'Horizontal whitespace (space and tab)'
+        '[:cntrl:]'  = 'Control characters'
+        '[:digit:]'  = 'Digits'
+        '[:graph:]'  = 'Printable characters, not including space'
+        '[:lower:]'  = 'Lowercase letters'
+        '[:print:]'  = 'Printable characters, including space'
+        '[:punct:]'  = 'Punctuation characters'
+        '[:space:]'  = 'Horizontal or vertical whitespace'
+        '[:upper:]'  = 'Uppercase letters'
+        '[:xdigit:]' = 'Hexadecimal digits'
+        '\\'         = 'Backslash'
+        '\a'         = 'Audible BEL'
+        '\b'         = 'Backspace'
+        '\f'         = 'Form feed'
+        '\n'         = 'New line'
+        '\r'         = 'Return'
+        '\t'         = 'Horizontal tab'
+        '\v'         = 'Vertical tab'
+    }
+
+    if ($typed -match '^\[=(.)=?$') {
+        $vocabulary['[=' + $Matches[1] + '=]'] = 'All characters equivalent to ' + $Matches[1]
+    } elseif ($typed -match '^\[([^:=])\*(\d*)$') {
+        $vocabulary['[' + $Matches[1] + '*' + $Matches[2] + ']'] = if ($Matches[2]) { $Matches[2] + ' copies of ' + $Matches[1] } else { 'Copies of ' + $Matches[1] + ' up to the length of SET1 (SET2 only)' }
+    }
+
+    foreach ($entry in $vocabulary.GetEnumerator()) {
+        if ($entry.Key.StartsWith($typed, [System.StringComparison]::Ordinal)) {
+            New-TrCompletionResult -CompletionText ($quote + $entry.Key + $quote) -ListItemText $entry.Key -ResultType 'ParameterValue' -ToolTip $entry.Value
+        }
+    }
+}
+
+function Test-TrSetOperandSlot {
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [int]$cursorPosition
+    )
+
+    # tr takes SET1 alone with -d (and no -s), otherwise SET1 SET2 (SET2 is optional with -s alone).
+    # Options end at '--' or at the first operand; long options may be abbreviated.
+    $operands = 0
+    $delete = $false
+    $squeeze = $false
+    $endOfOptions = $false
+    foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.EndOffset -ge $cursorPosition) {
+            break
+        }
+
+        $text = $element.Extent.Text
+        if ($endOfOptions -or $operands -gt 0 -or -not $text.StartsWith('-') -or $text -eq '-') {
+            $operands++
+        } elseif ($text -ceq '--') {
+            $endOfOptions = $true
+        } elseif ($text.StartsWith('--')) {
+            $delete = $delete -or '--delete'.StartsWith($text, [System.StringComparison]::Ordinal)
+            $squeeze = $squeeze -or '--squeeze-repeats'.StartsWith($text, [System.StringComparison]::Ordinal)
+        } else {
+            $delete = $delete -or $text.Contains('d')
+            $squeeze = $squeeze -or $text.Contains('s')
+        }
+    }
+
+    $maxOperands = if ($delete -and -not $squeeze) { 1 } else { 2 }
+    $operands -lt $maxOperands
+}
+
 function Get-TrOptionDescription {
     param([string]$Option)
 
@@ -212,7 +286,8 @@ function Complete-Tr {
         Get-TrCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
+    $inSetSlot = Test-TrSetOperandSlot -commandAst $commandAst -cursorPosition $cursorPosition
+    if ([string]::IsNullOrEmpty($currentWord) -and -not $inSetSlot) {
         return @()
     }
 
@@ -224,6 +299,17 @@ function Complete-Tr {
                 }
             }
         )
+    }
+
+    if ($inSetSlot) {
+        $setCompletions = @(Get-TrSetVocabulary -InputWord $currentWord)
+        if ($setCompletions.Count -gt 0) {
+            return $setCompletions
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($currentWord)) {
+        return @()
     }
 
     Get-TrPathCompletions -InputPath $currentWord
