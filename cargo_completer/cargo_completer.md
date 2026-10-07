@@ -61,13 +61,20 @@ After a command is chosen, the completer lazily parses `cargo <command> --help` 
 
 ### Value completion
 
-The completer provides explicit value completion for representative non-path slots such as:
+Every option whose `<command> --help` entry ends in clap's `[possible values: ...]` list completes exactly those values, including lists clap wraps onto continuation lines. That covers, per command:
 
 - `--color` -> `auto`, `always`, `never`
-- `--message-format` -> documented Cargo message formats
+- `--message-format` -> the formats that command accepts (`build` and friends: `human`, `short`, `json`, ...; `locate-project`: `json`, `plain`; `package`: `human`, `json`)
+- `new/init --vcs` -> `git`, `hg`, `pijul`, `fossil`, `none`; `new/init --edition` -> `2015`, `2018`, `2021`, `2024`
+- `tree --edges`/`-e`, `--charset`, `--prefix`; `doc`/`rustdoc --output-format`; `metadata --format-version`
+
+Third-party subcommands that name their choices only in prose get a fallback set, used only when their help has no `[possible values: ...]` list: `--color` -> `auto`, `always`, `never` (for example `cargo nextest --color`), and `fmt --message-format` -> `short`, `json`, `human`.
+
+Other value slots:
+
 - `--target` -> `rustc --print target-list`
 - `-Z` -> `cargo -Z help`
-- `new/init --vcs` -> `git`, `hg`, `pijul`, `fossil`, `none`
+- options without a fixed list show their metavar as a placeholder, for example `add --base` -> `<base>`
 
 Attached forms complete too and keep their prefix: `--color=al` -> `--color=always`, `-Zbind` -> `-Zbindeps`, `-Ffa` -> `-Ffast`. A word such as `--features=x` or `-pfoo` earlier on the line is read as an option with its value, not as an operand.
 

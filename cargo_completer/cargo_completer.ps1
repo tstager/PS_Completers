@@ -238,7 +238,6 @@ function Get-CargoArgumentTokens {
 
 function Get-CargoRootValueMap {
     @{
-        '--color' = @('auto', 'always', 'never')
         '--config' = @('<KEY=VALUE>', '<path>')
         '--explain' = @('<error-code>')
         '-Z' = @()
@@ -247,8 +246,6 @@ function Get-CargoRootValueMap {
 
 function Get-CargoCommonValueMap {
     @{
-        '--color' = @('auto', 'always', 'never')
-        '--message-format' = @('human', 'short', 'json', 'json-diagnostic-short', 'json-diagnostic-rendered-ansi', 'json-render-diagnostics')
         '--profile' = @('<profile>')
         '--target' = @()
         '--target-dir' = @('<path>')
@@ -285,7 +282,6 @@ function Get-CargoCommandValueHints {
                 '--tag' = @('<tag>')
                 '--rev' = @('<rev>')
                 '--features' = @('<features>')
-                '--base' = @('dev-dependencies', 'build-dependencies', 'dependencies')
                 '--public' = @('true', 'false')
             }
         }
@@ -309,14 +305,12 @@ function Get-CargoCommandValueHints {
         'new' {
             return @{
                 '--name' = @('<package-name>')
-                '--vcs' = @('git', 'hg', 'pijul', 'fossil', 'none')
                 '--registry' = @('<registry>')
             }
         }
         'init' {
             return @{
                 '--name' = @('<package-name>')
-                '--vcs' = @('git', 'hg', 'pijul', 'fossil', 'none')
                 '--registry' = @('<registry>')
             }
         }
@@ -350,7 +344,6 @@ function Get-CargoCommandValueHints {
         }
         'test' {
             return @{
-                '--message-format' = @('human', 'short', 'json', 'json-diagnostic-short', 'json-diagnostic-rendered-ansi', 'json-render-diagnostics')
                 '--target' = @()
             }
         }
@@ -358,6 +351,20 @@ function Get-CargoCommandValueHints {
             return @{}
         }
     }
+}
+
+# Value sets for options whose help names the choices only in prose instead of a clap
+# '[possible values: ...]' block (cargo-nextest's '--color', cargo-fmt's '--message-format').
+# They fill in only where the live help lists no values, so a parsed list always wins.
+function Get-CargoEnumFallbackMap {
+    param([string]$CommandName)
+
+    $fallbacks = @{ '--color' = @('auto', 'always', 'never') }
+    if ($CommandName -eq 'fmt') {
+        $fallbacks['--message-format'] = @('short', 'json', 'human')
+    }
+
+    $fallbacks
 }
 
 function Get-CargoCommandPathOptions {
@@ -765,17 +772,43 @@ function Get-CargoOptionSpecsFromHelp {
     # clap indents every option line by 2-7 spaces and wraps descriptions further in, so the flag
     # segment is whatever precedes the first run of two spaces on such a line. Both layouts cargo
     # emits are covered: '  -F, --features <FEATURES>  Desc' and '      --public' with the
-    # description on the following line.
-    $specs = New-Object System.Collections.Generic.List[object]
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-
+    # description on the following line. Description lines indented past the flag column belong to
+    # the option above them; clap wraps '[possible values: a, b,' across them, and in the long
+    # layout a blank line separates the list from the description.
+    $blocks = New-Object System.Collections.Generic.List[object]
+    $block = $null
     foreach ($line in @($Lines)) {
-        if ($line -notmatch '^ {2,7}-\S') {
+        if ($line -match '^ {2,7}-\S') {
+            $block = [pscustomobject]@{
+                Line = $line
+                Text = [System.Text.StringBuilder]::new($line.Trim())
+            }
+            [void]$blocks.Add($block)
             continue
         }
 
-        $segment = (($line.Trim() -split '\s{2,}')[0])
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        if ($block -and $line -match '^ {8,}\S') {
+            [void]$block.Text.Append(' ').Append($line.Trim())
+            continue
+        }
+
+        $block = $null
+    }
+
+    $specs = New-Object System.Collections.Generic.List[object]
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($block in $blocks) {
+        $segment = (($block.Line.Trim() -split '\s{2,}')[0])
         $metaVar = if ($segment -match '\[?<[^>]+>\]?') { $matches[0] } else { '' }
+        $values = @()
+        if ($metaVar -and $block.Text.ToString() -match '\[possible values:\s*([^\]]*)\]') {
+            $values = @($matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
 
         foreach ($match in [regex]::Matches($segment, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)')) {
             $token = $match.Groups[1].Value
@@ -786,6 +819,7 @@ function Get-CargoOptionSpecsFromHelp {
             [void]$specs.Add([pscustomobject]@{
                     Token   = $token
                     MetaVar = $metaVar
+                    Values  = $values
                 })
         }
     }
@@ -796,6 +830,7 @@ function Get-CargoOptionSpecsFromHelp {
 function Get-CargoValueHintTable {
     param(
         [object[]]$Specs,
+        [hashtable]$Fallbacks = @{},
         [hashtable[]]$Overlays
     )
 
@@ -806,12 +841,22 @@ function Get-CargoValueHintTable {
             continue
         }
 
+        if ($spec.Values.Count -gt 0) {
+            $hints[$spec.Token] = @($spec.Values)
+            continue
+        }
+
+        if ($Fallbacks.ContainsKey($spec.Token)) {
+            $hints[$spec.Token] = @($Fallbacks[$spec.Token])
+            continue
+        }
+
         $name = $spec.MetaVar.Trim([char[]]@('[', ']', '<', '>')).ToLowerInvariant()
         $hints[$spec.Token] = @("<$name>")
     }
 
     # Only options that help says carry a value get a curated hint, so a bare flag can never
-    # swallow the following token.
+    # swallow the following token. Enumerated values come from clap's own list above.
     foreach ($overlay in @($Overlays)) {
         foreach ($key in $overlay.Keys) {
             if ($hints.ContainsKey($key)) {
@@ -843,7 +888,7 @@ function Initialize-CargoCompletionCache {
 
     $cache.CommandMetadata['<root>'] = [pscustomobject]@{
         Options    = @($cache.RootOptions)
-        ValueHints = Get-CargoValueHintTable -Specs $rootSpecs -Overlays @($cache.RootValueMap)
+        ValueHints = Get-CargoValueHintTable -Specs $rootSpecs -Fallbacks (Get-CargoEnumFallbackMap) -Overlays @($cache.RootValueMap)
         PathOptions = @($cache.PathOptions)
     }
 
@@ -870,7 +915,7 @@ function Get-CargoCommandMetadata {
     $specs = @(Get-CargoOptionSpecsFromHelp -Lines $helpLines)
     $options = @($specs | ForEach-Object { $_.Token })
 
-    $valueHints = Get-CargoValueHintTable -Specs $specs -Overlays @(
+    $valueHints = Get-CargoValueHintTable -Specs $specs -Fallbacks (Get-CargoEnumFallbackMap -CommandName $CommandName) -Overlays @(
         $cache.CommonValueMap
         (Get-CargoCommandValueHints -CommandName $CommandName)
     )
