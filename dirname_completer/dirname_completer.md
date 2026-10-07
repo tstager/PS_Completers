@@ -52,8 +52,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the command element whose extent contains the cursor, cut at the cursor, so completion works when the command is not the first statement on the line and an unterminated quoted operand such as `"my docs\c` stays one word instead of splitting at its space.
+- Path completions keep the quote character the user typed: a single-quoted operand is emitted single-quoted with embedded `'` doubled, and a double-quoted operand (or an unquoted path containing whitespace) is emitted double-quoted with `` ` ``, `"` and `$` escaped.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe and the tool lookup use `-ErrorAction Ignore` so a cold load adds nothing to `$Error`, even when dirname is not installed.
 
 ## Representative validation scenarios
 

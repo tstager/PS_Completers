@@ -12,7 +12,7 @@ function Get-DirnameCompletionOptions {
     $fallbackOptions = @('-z', '--zero', '--help', '--version')
     $commandCandidates = @('dirname.exe', 'dirname')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -97,15 +97,19 @@ function Remove-DirnameOuterQuotes {
 function ConvertTo-DirnameQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+    if ($QuoteChar -eq "'") {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    if ($QuoteChar -eq '"' -or $Value -match '\s') {
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -114,24 +118,17 @@ function ConvertTo-DirnameQuotedValue {
 
 function Get-DirnameCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    $elements = $CommandAst.CommandElements
+    for ($i = 1; $i -lt $elements.Count; $i++) {
+        $extent = $elements[$i].Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
     $Fallback
@@ -141,7 +138,7 @@ function Get-DirnamePathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-DirnameOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -178,7 +175,7 @@ function Get-DirnamePathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-DirnameQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-DirnameQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-DirnameCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -205,11 +202,7 @@ function Complete-Dirname {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-DirnameCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-DirnameCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
