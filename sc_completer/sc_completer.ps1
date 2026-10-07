@@ -64,7 +64,7 @@ function Resolve-ScCommandName {
         return $script:ScCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name 'sc.exe', 'sc' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name 'sc.exe', 'sc' -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:ScCompletionCatalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -368,7 +368,8 @@ function Get-ScCurrentTokenState {
         [void]$builder.Append($character)
     }
 
-    $hasTrailingSpace = $prefix -match '\s$'
+    # Whitespace inside a still-open quote belongs to the current word.
+    $hasTrailingSpace = ($prefix -match '\s$') -and ($quoteChar -eq [char]0)
     if ($builder.Length -gt 0) {
         $tokens.Add($builder.ToString())
     }

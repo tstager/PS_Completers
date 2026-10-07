@@ -101,7 +101,7 @@ Commands that take an existing service name complete from local `Get-Service` na
 - `qc`, `qdescription`, `qfailure`, `qfailureflag`, `qsidtype`, `qprivs`, `qtriggerinfo`, `qpreferrednode`, `qmanagedaccount`, `qprotection`
 - `delete`, `control`, `sdshow`, `sdset`, `triggerinfo`, `preferrednode`, `EnumDepend`
 
-Service names and display names that contain spaces are returned as quoted completion texts so the native command receives them as a single argument. A prefix typed inside an open quote (`sc start "Win`) is matched without the quote the parser closes for it, so quoted names stay reachable.
+Service names and display names that contain spaces are returned as quoted completion texts so the native command receives them as a single argument. A prefix typed inside an open quote (`sc start "Win`) is matched without the quote the parser closes for it, so quoted names stay reachable. Whitespace typed inside a still-open quote stays part of the current word, so `sc getkeyname "Windows Audio ` keeps narrowing to multi-word display names instead of moving on to the next argument.
 
 ### `query` / `queryex`
 
