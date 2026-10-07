@@ -166,7 +166,7 @@ The completer also handles conservative attached short forms for:
 - `-l80`
 - `-i.bak` (PowerShell splits the token into `-i` and `.bak`; the completer re-joins adjacent command elements before routing)
 
-It intentionally avoids aggressive short-option cluster parsing because `sed` short clustering is nuanced and `-i` has optional attached suffix semantics. An unrecognised `--option` is treated as an option, never as the implicit script, so the following slot keeps its meaning.
+Bundled short flags are walked the way getopt does: flag letters continue, and the first letter that takes a value owns the rest of the word. So `-ne <TAB>` and `-nf <TAB>` complete the script and script-file slots, `-nes<TAB>` completes to `-nes///`, `-nl7<TAB>` to `-nl70`/`-nl72`, and `-si.b<TAB>` to `-si.bak`. Because `-i` takes an optional suffix, `-ni` leaves nothing pending, and `-in` means suffix `n`. A word that contains an unknown letter is left alone. An unrecognised `--option` is treated as an option, never as the implicit script, so the following slot keeps its meaning.
 
 ## Dependencies or external command expectations
 
@@ -205,5 +205,5 @@ sed -- -n <TAB>
 
 - The completer does not try to fully synthesize sed-program text for `-e` or `--expression`; it only offers a few starter hints to avoid generic fallback completion.
 - `-i` / `--in-place` suffix completion is intentionally conservative and limited to sample hints.
-- Short-option clustering is not deeply interpreted beyond safe attached-value forms.
+- A bundled word that ends on a value-taking letter (`-ne` with no space) still completes only option names; its value slot opens after the space.
 - Help parsing drives option discovery and value modes; the embedded metadata supplies richer value hints for the options it knows and is the offline fallback.

@@ -202,7 +202,7 @@ function Get-SedExecutablePath {
     $candidates += @('sed.exe', 'sed')
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($command) {
             $script:SedCompletionCatalog.ExecutablePath = $command.Source
             break
@@ -640,6 +640,30 @@ function Update-SedStateFromOption {
     }
 }
 
+function Resolve-SedShortCluster {
+    # Walks a bundled short word ('-ne', '-si.bak') the way getopt does: flag letters continue,
+    # and the first letter that takes a value ends the walk and owns the rest as its attached value.
+    # Returns $null when the word holds an unknown letter or no value-taking letter.
+    param([string]$Token)
+
+    for ($index = 1; $index -lt $Token.Length; $index++) {
+        $definition = Get-SedOptionDefinition -Token ('-' + $Token[$index])
+        if ($null -eq $definition) {
+            return $null
+        }
+
+        if ($definition.ValueMode -ne 'None') {
+            return @{
+                Definition = $definition
+                Prefix     = $Token.Substring(0, $index + 1)
+                Value      = $Token.Substring($index + 1)
+            }
+        }
+    }
+
+    $null
+}
+
 function Parse-SedShortCompletedToken {
     param(
         [string]$Token,
@@ -673,24 +697,23 @@ function Parse-SedShortCompletedToken {
         return
     }
 
-    $prefix = $Token.Substring(0, 2)
-    $attachedDefinition = Get-SedOptionDefinition -Token $prefix
-    if (-not $attachedDefinition) {
+    $cluster = Resolve-SedShortCluster -Token $Token
+    if ($null -eq $cluster) {
         return
     }
 
-    if (-not ($attachedDefinition.ContainsKey('ShortAllowsAttached') -and $attachedDefinition.ShortAllowsAttached)) {
+    $attachedDefinition = $cluster.Definition
+    if ($cluster.Value) {
+        if ($attachedDefinition.ContainsKey('ShortAllowsAttached') -and $attachedDefinition.ShortAllowsAttached) {
+            Update-SedStateFromValue -State $State -Definition $attachedDefinition -Value $cluster.Value
+        }
+
         return
     }
 
-    $attachedValue = $Token.Substring(2)
-    switch ($attachedDefinition.ValueMode) {
-        'Required' {
-            Update-SedStateFromValue -State $State -Definition $attachedDefinition -Value $attachedValue
-        }
-        'Optional' {
-            Update-SedStateFromValue -State $State -Definition $attachedDefinition -Value $attachedValue
-        }
+    # The value-taking letter ended the cluster ('-ne'), so a required value is the next word.
+    if (($attachedDefinition.ValueMode -eq 'Required') -and $attachedDefinition.ContainsKey('ShortAllowsSeparate') -and $attachedDefinition.ShortAllowsSeparate) {
+        $State.PendingSeparateOption = $attachedDefinition.Canonical
     }
 }
 
@@ -1062,11 +1085,9 @@ function Complete-SedNative {
 
     if (-not $state.EndOfOptions -and $effectiveCurrentToken.StartsWith('-', [System.StringComparison]::Ordinal) -and ($effectiveCurrentToken -ne '-')) {
         if ($effectiveCurrentToken.Length -gt 2) {
-            $shortToken = $effectiveCurrentToken.Substring(0, 2)
-            $definition = Get-SedOptionDefinition -Token $shortToken
-            if ($definition -and $definition.ContainsKey('ShortAllowsAttached') -and $definition.ShortAllowsAttached) {
-                $attachedText = $effectiveCurrentToken.Substring(2)
-                return @(Get-SedValueCompletions -Definition $definition -CurrentWord $attachedText -AttachedPrefix $shortToken)
+            $cluster = Resolve-SedShortCluster -Token $effectiveCurrentToken
+            if ($cluster -and $cluster.Value -and $cluster.Definition.ContainsKey('ShortAllowsAttached') -and $cluster.Definition.ShortAllowsAttached) {
+                return @(Get-SedValueCompletions -Definition $cluster.Definition -CurrentWord $cluster.Value -AttachedPrefix $cluster.Prefix)
             }
         }
 

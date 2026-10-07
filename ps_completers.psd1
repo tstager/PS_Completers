@@ -1107,7 +1107,7 @@
         @{
             Path    = 'sed_completer/sed_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:17C8473F141AC7EBCC1A9477BCCA350CC5CC03F08FFC5E7FAA2A788266EFE86D'
+            Hash    = 'SHA256:6F4910F67F0F7029D5A294465787C40F478C6FD37C986895B835AEC6C6B9FDE6'
             Targets = @(
                 @{ CommandName = 'sed'; Native = $true }
                 @{ CommandName = 'sed.exe'; Native = $true }
