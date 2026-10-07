@@ -749,6 +749,24 @@ function Get-PyVersionSelectorCompletions {
     @(Get-PyUniqueResults -Results $results.ToArray())
 }
 
+function ConvertTo-PyQuotedText {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    # Keep the quote the user opened; quote a bare value only when it would end or split the word.
+    if ([string]::IsNullOrEmpty($Quote) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+        return $Value
+    }
+
+    if ($Quote -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
+}
+
 function Get-PyTagCompletionList {
     param(
         [string]$CurrentWord,
@@ -758,10 +776,21 @@ function Get-PyTagCompletionList {
     $results = New-Object System.Collections.Generic.List[object]
     $catalog = Get-PyRuntimeTagCatalog
 
+    # A '<'/'>' list filter only reaches py quoted, so match on the operand inside an opening quote.
+    $quote = ''
+    $operand = $CurrentWord
+    if ($CurrentWord -match '^(?<q>[''"])(?<body>.*)$') {
+        $quote = $Matches.q
+        $operand = $Matches.body
+        if ($operand.EndsWith($quote, [System.StringComparison]::Ordinal)) {
+            $operand = $operand.Substring(0, $operand.Length - 1)
+        }
+    }
+
     if ($Command -eq 'help') {
         foreach ($commandSpec in @(Get-PyCommandTable)) {
-            if (Test-PyStartsWith -Candidate $commandSpec.Name -Prefix $CurrentWord) {
-                [void]$results.Add((New-PyCompletionResult -CompletionText $commandSpec.Name -ResultType 'ParameterValue' -ToolTip $commandSpec.Description))
+            if (Test-PyStartsWith -Candidate $commandSpec.Name -Prefix $operand) {
+                [void]$results.Add((New-PyCompletionResult -CompletionText (ConvertTo-PyQuotedText -Value $commandSpec.Name -Quote $quote) -ResultType 'ParameterValue' -ToolTip $commandSpec.Description -ListItemText $commandSpec.Name))
             }
         }
 
@@ -779,28 +808,28 @@ function Get-PyTagCompletionList {
     }
 
     $comparisonPrefix = ''
-    $tagWord = $CurrentWord
-    if ($Command -eq 'list' -and $CurrentWord -match '^(?<op><=|>=|<|>)(?<rest>.*)$') {
+    $tagWord = $operand
+    if ($Command -eq 'list' -and $operand -match '^(?<op><=|>=|<|>)(?<rest>.*)$') {
         $comparisonPrefix = $Matches.op
         $tagWord = $Matches.rest
     }
 
     foreach ($tag in @($catalog.Tags)) {
         if (Test-PyStartsWith -Candidate $tag -Prefix $tagWord) {
-            [void]$results.Add((New-PyCompletionResult -CompletionText ($comparisonPrefix + $tag) -ResultType 'ParameterValue' -ToolTip $toolTip))
+            [void]$results.Add((New-PyCompletionResult -CompletionText (ConvertTo-PyQuotedText -Value ($comparisonPrefix + $tag) -Quote $quote) -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText ($comparisonPrefix + $tag)))
         }
     }
 
     foreach ($selector in @($catalog.QualifiedSelectors)) {
         if (Test-PyStartsWith -Candidate $selector -Prefix $tagWord) {
-            [void]$results.Add((New-PyCompletionResult -CompletionText ($comparisonPrefix + $selector) -ResultType 'ParameterValue' -ToolTip $toolTip))
+            [void]$results.Add((New-PyCompletionResult -CompletionText (ConvertTo-PyQuotedText -Value ($comparisonPrefix + $selector) -Quote $quote) -ResultType 'ParameterValue' -ToolTip $toolTip -ListItemText ($comparisonPrefix + $selector)))
         }
     }
 
     if ($Command -eq 'install') {
         foreach ($hint in @('3', '3.14', '3.13', '3.12')) {
             if (Test-PyStartsWith -Candidate $hint -Prefix $tagWord) {
-                [void]$results.Add((New-PyCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip 'PythonCore version to install (latest matching release).'))
+                [void]$results.Add((New-PyCompletionResult -CompletionText (ConvertTo-PyQuotedText -Value $hint -Quote $quote) -ResultType 'ParameterValue' -ToolTip 'PythonCore version to install (latest matching release).' -ListItemText $hint))
             }
         }
     }

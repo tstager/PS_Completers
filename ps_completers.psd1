@@ -925,7 +925,7 @@
         @{
             Path    = 'py_completer/py_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:3FC648222E4569C257A88246C24A16533C8190B3EB44B3E4E25E1FF24B3584F9'
+            Hash    = 'SHA256:8D0F3EA16320A8FF903E8DD3FE0FB293916AA34927BEAF311DC546D368610E60'
             Targets = @(
                 @{ CommandName = 'py'; Native = $true }
                 @{ CommandName = 'py.exe'; Native = $true }
