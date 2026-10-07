@@ -1,5 +1,5 @@
 # du tab completion for PowerShell
-# Help-refreshed native completer for GNU coreutils du with option value hints and directory operand completion.
+# Help-refreshed native completer for GNU and uutils coreutils du with option value hints and file operand completion.
 
 Set-StrictMode -Version 2.0
 
@@ -84,7 +84,7 @@ function ConvertTo-DuQuotedValue {
     }
 
     if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -106,7 +106,7 @@ function Initialize-DuCompletionCatalog {
         @('-c', '--total', 'Produce a grand total.', $null),
         @('-D', '--dereference-args', 'Dereference only symlinks listed on the command line.', $null),
         @('-d', '--max-depth', 'Print the total for a directory only if it is N or fewer levels deep.', 'Levels'),
-        @('', '--files0-from', 'Summarize disk usage of the NUL-terminated file names in file F.', 'File'),
+        @('', '--files0-from', 'Summarize disk usage of the NUL-terminated file names in file F.', 'FileOrStdin'),
         @('-H', '', 'Equivalent to --dereference-args.', $null),
         @('-h', '--human-readable', 'Print sizes in human readable format.', $null),
         @('', '--inodes', 'List inode usage information instead of block usage.', $null),
@@ -143,13 +143,39 @@ function Initialize-DuCompletionCatalog {
         }
     }
 
+    # The installed du's help refreshes descriptions and adds the options the static table lacks
+    # (uutils: -A, -v/--verbose, -V). The placeholder follows the long option as GNU '=SIZE' /
+    # '[=WORD]' or uutils ' <SIZE>' / '[=<WORD>...]'; a bracketed one is an optional value.
+    $placeholderKinds = @{ SIZE = 'Size'; N = 'Levels'; FILE = 'File'; F = 'File'; PATTERN = 'Pattern'; WORD = 'TimeWord'; STYLE = 'TimeStyle' }
     foreach ($line in Invoke-DuHelpText) {
-        if ($line -match '^\s+(?:(-[A-Za-z0-9]),\s+)?(--[a-z0-9-]+)(?:[=\[]\S*)?\s{2,}(.*)$' -or $line -match '^\s+(-[A-Za-z0-9])()\s{2,}(.*)$') {
-            $description = $Matches[3].Trim()
-            foreach ($token in @($Matches[1], $Matches[2])) {
-                if ($token -and $catalog.Contains($token)) {
-                    $catalog[$token].Description = $description
-                }
+        if ($line -cnotmatch '^\s+(?:(?<short>-[A-Za-z0-9]),\s+)?(?<long>--[a-z0-9-]+)(?<placeholder>(?:=|\[=|\s<)\S*)?\s{2,}(?<text>.*)$' -and $line -cnotmatch '^\s+(?<short>-[A-Za-z0-9])\s{2,}(?<text>.*)$') {
+            continue
+        }
+
+        $description = $Matches['text'].Trim()
+        $tokens = @($Matches['short'], $Matches['long'] | Where-Object { $_ })
+        $placeholder = [string]$Matches['placeholder']
+        $known = @($tokens | Where-Object { $catalog.Contains($_) } | ForEach-Object { $catalog[$_] }) | Select-Object -First 1
+        foreach ($token in $tokens) {
+            if ($catalog.Contains($token)) {
+                $catalog[$token].Description = $description
+                continue
+            }
+
+            $valueKind = if ($known) {
+                $known.ValueKind
+            } elseif ($placeholder) {
+                $placeholderName = ($placeholder -replace '[^A-Za-z]', '').ToUpperInvariant()
+                if ($placeholderKinds.ContainsKey($placeholderName)) { $placeholderKinds[$placeholderName] } else { 'Value' }
+            } else {
+                $null
+            }
+
+            $catalog[$token] = [pscustomobject]@{
+                Token       = $token
+                Description = $description
+                TakesValue  = if ($known) { $known.TakesValue } else { $placeholder -and -not $placeholder.StartsWith('[') }
+                ValueKind   = $valueKind
             }
         }
     }
@@ -180,7 +206,7 @@ function Get-DuCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '--[a-z0-9-]+=(?:"[^"]*"?|''[^'']*''?)|"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -341,8 +367,11 @@ function Get-DuShortFlagClusterCompletions {
     )
 }
 
-function Get-DuDirectoryCompletions {
-    param([string]$InputPath)
+function Get-DuPathCompletions {
+    param(
+        [string]$InputPath,
+        [string]$Prefix = ''
+    )
 
     $cleanInput = Remove-DuOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
@@ -363,10 +392,11 @@ function Get-DuDirectoryCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Ignore)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
-    foreach ($item in ($items | Sort-Object -Property Name)) {
+    # du's operands are FILE...: directories first (they invite the next level), then files.
+    foreach ($item in ($items | Sort-Object -Property @{ Expression = { $_ -is [System.IO.FileInfo] } }, Name)) {
         if ($inputIsRooted) {
             $pathText = Join-Path -Path $parent -ChildPath $item.Name
         } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -375,12 +405,16 @@ function Get-DuDirectoryCompletions {
             $pathText = Join-Path -Path $parent -ChildPath $item.Name
         }
 
-        if (-not $pathText.EndsWith('\')) {
+        $isDirectory = $item -is [System.IO.DirectoryInfo]
+        if ($isDirectory -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-DuQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        New-DuCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
+        # Whitespace and argument-mode metacharacters would split or expand a bare word.
+        $needsQuote = $alwaysQuote -or $pathText -match '[\s{}();,|&<>''"`$]' -or ($Prefix -eq '' -and $pathText -match '^[@#]')
+        $quotedPath = ConvertTo-DuQuotedValue -Value $pathText -AlwaysQuote $needsQuote
+        $resultType = if ($isDirectory) { 'ProviderContainer' } else { 'ProviderItem' }
+        New-DuCompletionResult -CompletionText ($Prefix + $quotedPath) -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
 }
 
@@ -390,6 +424,17 @@ function Get-DuValueCompletions {
         [string]$CurrentWord,
         [string]$Prefix = ''
     )
+
+    if ($ValueKind -eq 'File' -or $ValueKind -eq 'FileOrStdin') {
+        $cleanPath = Remove-DuOuterQuotes -Value $CurrentWord
+        return @(
+            if ($ValueKind -eq 'FileOrStdin' -and '-'.StartsWith($cleanPath, [System.StringComparison]::Ordinal)) {
+                New-DuCompletionResult -CompletionText ($Prefix + '-') -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'Read the NUL-terminated file names from standard input.'
+            }
+
+            Get-DuPathCompletions -InputPath $CurrentWord -Prefix $Prefix
+        )
+    }
 
     $values = switch ($ValueKind) {
         'Levels' { @('0', '1', '2', '3', '5', '10') }
@@ -453,7 +498,7 @@ function Complete-Du {
         return @(Get-DuSwitchCompletions -CurrentWord $currentWord -State $state)
     }
 
-    $results = @(Get-DuDirectoryCompletions -InputPath $currentWord)
+    $results = @(Get-DuPathCompletions -InputPath $currentWord)
     if ([string]::IsNullOrEmpty($currentWord)) {
         $results += @(Get-DuSwitchCompletions -CurrentWord '' -State $state)
     }
