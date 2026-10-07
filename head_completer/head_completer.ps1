@@ -216,7 +216,12 @@ function Get-HeadOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
-    } elseif (-not $CurrentWord.StartsWith('-')) {
+    } elseif ($CurrentWord -match '^(?<option>-[cn])(?<value>.+)$') {
+        # head accepts the value glued to the short option (-n5, -c1K).
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option
+    } elseif (-not $CurrentWord.StartsWith('-') -or $CurrentWord -match '^-\d') {
         $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
         if ([string]::IsNullOrEmpty($CurrentWord)) {
             if ($elements.Count -gt 1) {
@@ -258,6 +263,37 @@ function Get-HeadOptionValueCompletions {
     }
 
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
+    if ($prefix -match '^(?<num>-?\d+)(?<suffix>[A-Za-z]*)$') {
+        # A typed number replaces the placeholders: keep it, offer a short
+        # ladder, and the multiplier suffixes head accepts (always for bytes,
+        # once a suffix letter is typed for lines).
+        $num = $Matches['num']
+        $tip = if ($num.StartsWith('-')) { 'All but the last NUM units.' } else { 'First NUM units.' }
+        $values = @(
+            if (-not $Matches['suffix']) {
+                foreach ($text in $num, ($num + '0'), ($num + '00')) {
+                    @{ Text = $text; Tip = $tip }
+                }
+            }
+            if ($option -eq '-c' -or $option -eq '--bytes' -or $Matches['suffix']) {
+                foreach ($suffix in @(
+                        @{ Text = 'b'; Tip = '512' }
+                        @{ Text = 'K'; Tip = '1024' }
+                        @{ Text = 'KiB'; Tip = '1024' }
+                        @{ Text = 'kB'; Tip = '1000' }
+                        @{ Text = 'M'; Tip = '1024*1024' }
+                        @{ Text = 'MiB'; Tip = '1024*1024' }
+                        @{ Text = 'MB'; Tip = '1000*1000' }
+                        @{ Text = 'G'; Tip = '1024^3' }
+                        @{ Text = 'GiB'; Tip = '1024^3' }
+                        @{ Text = 'GB'; Tip = '1000^3' }
+                    )) {
+                    @{ Text = $num + $suffix.Text; Tip = $tip + ' Multiplier ' + $suffix.Text + ' = ' + $suffix.Tip + '.' }
+                }
+            }
+        )
+    }
+
     @(
         foreach ($entry in $values) {
             if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {

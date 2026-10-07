@@ -68,7 +68,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## Option values
 
-- `-c`, `--bytes`, `-n`, `--lines`: `<num>`, `-<num>`
+- `-c`, `--bytes`, `-n`, `--lines`: `<num>`, `-<num>` while the value is empty.
+- Once a number is typed (`head -n 1`, `head -n -1`, `head --bytes=1`), the typed number is kept and a short ladder follows (`1`, `10`, `100`). For `-c`/`--bytes` the multiplier suffixes head accepts are offered too (`b`, `K`, `KiB`, `kB`, `M`, `MiB`, `MB`, `G`, `GiB`, `GB`); for `-n`/`--lines` they appear once a suffix letter is typed (`head -n 3M`).
+- The value may be glued to the short option, as head accepts it: `head -n5` and `head -c1K` complete the value and keep the `-n`/`-c` prefix.
 
 ## Representative validation scenarios
 
@@ -77,6 +79,9 @@ head -
 head --
 head --bytes 
 head --bytes=
+head -n 1
+head -n5
+head --bytes=1K
 ```
 
 Expected behavior:
