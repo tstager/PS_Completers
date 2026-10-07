@@ -26,7 +26,7 @@ function Resolve-SevenZipHelpCommand {
         return $script:SevenZipCompletionCatalog.HelpCommand
     }
 
-    $command = Get-Command -Name 7z.exe, 7z -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name 7z.exe, 7z -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:SevenZipCompletionCatalog.HelpCommand = $command.Name
     }
@@ -268,10 +268,12 @@ function Get-SevenZipSyntaxCandidateList {
     # Walks the grammar against the typed value. Items matched by typed text are consumed; once
     # the typed text is exhausted the walk extends through literals and required groups and
     # emits a candidate when it stops (end of grammar, an optional group, or a placeholder).
+    # Reaching the end of the grammar with the typed text fully consumed is a complete value too
+    # (nothing at all for '-sns[-]', '-' for '-r[-|0]'), so it is emitted as well.
     # $Pending stays untyped: a typed [object[]] binder rejects the nested hashtable arrays.
     $pendingItems = @($Pending)
     if ($pendingItems.Count -eq 0) {
-        if ($Extended -and [string]::IsNullOrEmpty($Typed)) {
+        if ([string]::IsNullOrEmpty($Typed)) {
             [void]$Sink.Add(@{ Kind = 'Value'; Text = $Prefix })
         }
 
@@ -680,6 +682,12 @@ function Get-SevenZipMethodValueCompletionList {
     }
 
     $candidates = New-Object System.Collections.Generic.List[object]
+
+    # '-mx[N]' and '-mmt[N]' are complete without a value; offer the bare switch first.
+    if ($TypedValue -eq '' -and $SwitchToken -ne '-m') {
+        [void]$candidates.Add(@{ Text = $SwitchToken; ToolTip = Get-SevenZipDescription -Token $SwitchToken })
+    }
+
     switch ($SwitchToken.ToLowerInvariant()) {
         '-mx' {
             foreach ($level in $levels) {
@@ -729,9 +737,21 @@ function Get-SevenZipValueHintCompletionList {
     $sink = New-Object System.Collections.Generic.List[object]
     $null = Get-SevenZipSyntaxCandidateList -Pending $script:SevenZipCompletionCatalog.ValueHintsBySwitch[$switchKey] -Prefix '' -Typed $TypedValue -Extended $false -Sink $sink
 
+    # The value exactly as typed (the bare switch when nothing follows it) goes first, so Tab on a
+    # finished '-sns' keeps it instead of inserting the longer, inverted '-sns-'.
+    # 7-Zip's switch table gives '-u' a one-character minimum that its all-optional grammar
+    # ('-u[-][p#]...') does not show: a bare '-u' fails with 'Too short switch'. The other
+    # all-optional switches (-bb, -r, -scrc, -seml, -si, -sfx, -sns, -spf, -ssc, -w) parse bare.
+    $bareRejected = $switchKey -eq '-u'
+    $candidates = @($sink.ToArray() |
+        Where-Object { -not ($bareRejected -and $_.Kind -eq 'Value' -and $_.Text -eq '') } |
+        Sort-Object -Stable -Property {
+            -not ($_.Kind -eq 'Value' -and [string]::Equals($_.Text, $TypedValue, [System.StringComparison]::OrdinalIgnoreCase))
+        })
+
     $description = Get-SevenZipDescription -Token $SwitchToken
     $seen = @{}
-    foreach ($candidate in $sink.ToArray()) {
+    foreach ($candidate in $candidates) {
         if ($candidate.Kind -eq 'File') {
             foreach ($item in @(Get-SevenZipFileCompletionList -InputPath $candidate.Typed -Prefix ($SwitchToken + $candidate.Prefix))) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {

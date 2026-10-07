@@ -4,7 +4,7 @@
         @{
             Path    = '7z_completer/7z_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:8C79893252AD35E8EC764FFCFD018D1373409A93A1AE39F3576FBD8006071753'
+            Hash    = 'SHA256:327DDBFC432D3D1D79D6A746DDB26D0C76B2E30BDF0400965F1442094987A730'
             Targets = @(
                 @{ CommandName = '7z'; Native = $true }
                 @{ CommandName = '7z.exe'; Native = $true }
