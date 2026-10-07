@@ -74,7 +74,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line. The option that owns a value slot is the word before the cursor, not the last word on the line, so `split -b <Tab> in.txt` still offers sizes.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Option values

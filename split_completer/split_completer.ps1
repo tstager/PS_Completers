@@ -12,7 +12,7 @@ function Get-SplitCompletionOptions {
     $fallbackOptions = @('-b', '--bytes', '-C', '--line-bytes', '-l', '--lines', '-n', '--number', '--additional-suffix', '--filter', '-e', '--elide-empty-files', '-d', '--numeric-suffixes', '-x', '--hex-suffixes', '-a', '--suffix-length', '--verbose', '-t', '--separator', '-h', '--help', '-V', '--version', '-s')
     $commandCandidates = @('split.exe', 'split')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -191,7 +191,8 @@ function Get-SplitPathCompletions {
 function Get-SplitOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [int]$CursorPosition
     )
 
     $option = $null
@@ -202,12 +203,12 @@ function Get-SplitOptionValueCompletions {
         $prefix = $Matches['value']
         $attached = $option + '='
     } elseif (-not $CurrentWord.StartsWith('-')) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+        $elements = @($commandAst.CommandElements | Where-Object { $_.Extent.StartOffset -lt $CursorPosition } | ForEach-Object { $_.Extent.Text })
         if ([string]::IsNullOrEmpty($CurrentWord)) {
             if ($elements.Count -gt 1) {
                 $option = $elements[-1]
             }
-        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
+        } elseif ($elements.Count -gt 2 -and $elements[-1].StartsWith($CurrentWord, [System.StringComparison]::Ordinal)) {
             $option = $elements[-2]
         }
     }
@@ -332,7 +333,7 @@ function Complete-Split {
         Get-SplitCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-SplitOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $optionValues = @(Get-SplitOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -CursorPosition $cursorPosition)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }
