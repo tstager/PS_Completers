@@ -283,6 +283,9 @@ function Get-PsShutdownAtFileCompletions {
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
         $leaf = ''
+    } elseif ($cleanInput -match '[\\/]$') {
+        $parent = $cleanInput
+        $leaf = ''
     } else {
         $parent = Split-Path -Path $cleanInput -Parent
         if ([string]::IsNullOrWhiteSpace($parent)) {
@@ -293,7 +296,7 @@ function Get-PsShutdownAtFileCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {

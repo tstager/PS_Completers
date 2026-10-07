@@ -127,7 +127,7 @@ The completer covers the locally confirmed switches:
 
 ### Path-aware `@file` handling
 
-`@file` completion is local-only and uses `Get-ChildItem` to suggest matching files and directories from the current path context. This is purely path completion; it does not inspect the file contents.
+`@file` completion is local-only and uses `Get-ChildItem` to suggest matching files and directories from the current path context. Directory candidates end in a separator, and a word that ends in a separator (`@docs\`, `"@C:\Program Files\`) lists that directory's contents, so repeated Tab descends the tree. This is purely path completion; it does not inspect the file contents.
 
 ### Freeform value suppression
 
