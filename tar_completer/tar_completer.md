@@ -15,7 +15,7 @@ It combines:
 - common and mode-specific short/long options
 - archive and directory path completion for `-f` and `-C`
 - file/directory operand completion in create/append/update modes
-- pattern hints for list/extract modes
+- member names of the archive named by `-f` in list/extract/compare/delete modes, then pattern hints
 - value hints for `--format` and `--mtime`
 
 ## Registration and command names
@@ -92,7 +92,9 @@ In create/append/update modes, non-option operands complete as filesystem paths.
 
 If the current operand starts with `@`, the completer treats it as the documented `@<archive>` form and completes the archive path after the `@`.
 
-In list/extract modes, trailing operands are archive-entry patterns rather than filesystem paths, so the completer switches to wildcard-friendly pattern hints instead of normal path completion.
+In list/extract modes (and GNU tar's `-d`/`--diff` and `--delete`), trailing operands are archive members rather than filesystem paths. When the command line already names an archive with `-f`/`--file` (`-f a.tar`, `-xf a.tar`, `-fa.tar`, `--file=a.tar`, old-style `xf a.tar`), the completer lists it with the resolved tar's own `-t -f`, read-only, and offers the member names first, followed by the wildcard-friendly pattern hints. Members that contain spaces or PowerShell metacharacters are quoted (single quotes by default, double quotes when you opened one).
+
+The listing runs beside the archive with a relative name, because GNU tar reads `C:\...` as a remote `host:path` archive. It is bounded to 5 seconds and 5000 entries, and it is cached per session, keyed by the tar binary, the archive path, its size and its write time, so a changed archive is listed again. A missing archive, a directory, `-f -` (stdin) or an archive the tar cannot read (for example a `.tgz` under GNU tar without `gzip` on `PATH`) falls back to the pattern hints alone.
 
 ## Dependencies or external command expectations
 
@@ -118,5 +120,5 @@ tar -x -f archive.tar <TAB>
 ## Limitations / notes
 
 - Under GNU tar the option surface is only as complete as `tar --help`; options are not mode-gated there, and GNU's `-L` is the numeric `--tape-length`, not bsdtar's `--dereference`.
-- List/extract pattern completion uses generic wildcard hints rather than enumerating archive contents.
+- Archive members are listed only when `-f` names a readable archive on disk; a first Tab on a large or compressed archive pays for one `tar -t` run (cold Tab measured at about 120-150 ms for a small archive and about 0.9 s for a 6000-entry one).
 - The catalog covers the options verified against the installed `bsdtar 3.8.8`; macOS-only options (`--mac-metadata`, `--hfsCompression`, `--nodump`) and `-s` (rejected by this build) are deliberately left out.

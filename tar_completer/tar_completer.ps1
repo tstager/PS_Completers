@@ -27,12 +27,17 @@ if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction Ign
     }
 }
 
+if (-not (Get-Variable -Name TarArchiveMemberCache -Scope Script -ErrorAction Ignore)) {
+    # Member names per archive, keyed by tar binary + archive path + size + write time; failures cache as empty.
+    $script:TarArchiveMemberCache = @{}
+}
+
 function Resolve-TarCommandName {
     if ($script:TarCompletionCatalog.CommandName) {
         return $script:TarCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name tar.exe, tar -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name tar.exe, tar -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:TarCompletionCatalog.CommandName = $command.Name
         $script:TarCompletionCatalog.CommandPath = if ($command.Source) { $command.Source } else { $command.Name }
@@ -1005,9 +1010,11 @@ function Get-TarParsedTokenInfo {
     )
 
     $result = [ordered]@{
-        Mode         = $KnownMode
-        PendingValue = $null
-        IsPositional = $true
+        Mode          = $KnownMode
+        PendingValue  = $null
+        PendingOption = $null
+        ArchiveFile   = $null
+        IsPositional  = $true
     }
 
     if ([string]::IsNullOrWhiteSpace($Token)) {
@@ -1035,6 +1042,11 @@ function Get-TarParsedTokenInfo {
             # An optional value (--occurrence[=NUMBER]) only ever arrives attached, never as the next token.
             if (-not [string]::IsNullOrWhiteSpace($valueKind) -and -not $match.Groups[2].Success -and -not $option.OptionalValue) {
                 $result.PendingValue = $valueKind
+                $result.PendingOption = $option.Canonical
+            }
+
+            if ($option.Canonical -ceq '-f' -and $match.Groups[2].Success) {
+                $result.ArchiveFile = $match.Groups[2].Value
             }
 
             return [pscustomobject]$result
@@ -1057,8 +1069,13 @@ function Get-TarParsedTokenInfo {
             }
 
             if ($script:TarCompletionCatalog.ShortValueByChar.ContainsKey($character)) {
+                $valueOption = $script:TarCompletionCatalog.ShortValueByChar[$character]
                 if ($index -eq ($bundle.Length - 1)) {
-                    $result.PendingValue = $script:TarCompletionCatalog.ShortValueByChar[$character].ValueKind
+                    $result.PendingValue = $valueOption.ValueKind
+                    $result.PendingOption = $valueOption.Canonical
+                }
+                elseif ($valueOption.Canonical -ceq '-f') {
+                    $result.ArchiveFile = $bundle.Substring($index + 1)
                 }
 
                 return [pscustomobject]$result
@@ -1090,6 +1107,7 @@ function Get-TarParsedTokenInfo {
             if ($script:TarCompletionCatalog.ShortValueByChar.ContainsKey($character)) {
                 if ($index -eq ($bundle.Length - 1)) {
                     $result.PendingValue = $script:TarCompletionCatalog.ShortValueByChar[$character].ValueKind
+                    $result.PendingOption = $script:TarCompletionCatalog.ShortValueByChar[$character].Canonical
                 }
 
                 return [pscustomobject]$result
@@ -1115,12 +1133,18 @@ function Get-TarCompletionState {
         Mode             = $null
         PendingValue     = $null
         OptionTerminated = $false
+        ArchiveFile      = $null
         Positionals      = @()
     }
 
+    $pendingOption = $null
     $positionals = New-Object System.Collections.Generic.List[string]
     foreach ($token in $Tokens) {
         if ($state.PendingValue) {
+            if ($pendingOption -ceq '-f') {
+                $state.ArchiveFile = $token
+            }
+
             $state.PendingValue = $null
             continue
         }
@@ -1140,8 +1164,13 @@ function Get-TarCompletionState {
             $state.Mode = $parsed.Mode
         }
 
+        if ($parsed.ArchiveFile) {
+            $state.ArchiveFile = $parsed.ArchiveFile
+        }
+
         if ($parsed.PendingValue) {
             $state.PendingValue = $parsed.PendingValue
+            $pendingOption = $parsed.PendingOption
             continue
         }
 
@@ -1496,21 +1525,145 @@ function Invoke-TarValueCompletion {
     }
 }
 
+function Get-TarArchiveMemberList {
+    # Lists the members of the archive named by -f with the resolved tar's own -t, read-only and
+    # bounded (5 s, 5000 entries); cached until the archive's size or write time changes.
+    param([string]$ArchiveFile)
+
+    $path = Remove-TarOuterQuotes -Value $ArchiveFile
+    if ($ArchiveFile.StartsWith("'", [System.StringComparison]::Ordinal)) {
+        $path = $path.Replace("''", "'")
+    }
+
+    if ([string]::IsNullOrWhiteSpace($path) -or $path -eq '-') {
+        return @()
+    }
+
+    $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+    if (-not $location) {
+        return @()
+    }
+
+    $archive = Get-Item -LiteralPath ([System.IO.Path]::GetFullPath($path, $location.ProviderPath)) -Force -ErrorAction Ignore
+    if (-not $archive -or $archive.PSIsContainer) {
+        return @()
+    }
+
+    $cacheKey = $script:TarCompletionCatalog.CommandPath + '|' + $archive.FullName + '|' + $archive.Length + '|' + $archive.LastWriteTimeUtc.Ticks
+    if ($script:TarArchiveMemberCache.ContainsKey($cacheKey)) {
+        return $script:TarArchiveMemberCache[$cacheKey]
+    }
+
+    $members = @()
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $script:TarCompletionCatalog.CommandPath
+        # GNU tar reads 'C:\...' as a remote host:path archive, so run beside the archive and pass a relative name.
+        $startInfo.WorkingDirectory = $archive.DirectoryName
+        [void]$startInfo.ArgumentList.Add('-tf')
+        [void]$startInfo.ArgumentList.Add('./' + $archive.Name)
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            $timedOut = -not $process.WaitForExit(5000)
+            if ($timedOut) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+            }
+
+            if ($outputTask.Wait(1000)) {
+                $lines = @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n' | Where-Object { $_ -ne '' })
+                if ($timedOut -and $lines.Count -gt 0) {
+                    # The last line of a killed listing may be cut mid-name.
+                    $lines = @($lines | Select-Object -First ($lines.Count - 1))
+                }
+
+                $members = @($lines | Select-Object -First 5000)
+            }
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        Write-Debug "tar -tf probe failed: $($_.Exception.Message)"
+        $members = @()
+    }
+
+    $script:TarArchiveMemberCache[$cacheKey] = $members
+    $members
+}
+
+function ConvertTo-TarMemberCompletionText {
+    # Member names may hold spaces or argument-mode metacharacters; keep the user's quote character.
+    param(
+        [string]$Value,
+        [string]$TypedValue
+    )
+
+    if ($TypedValue.StartsWith('"', [System.StringComparison]::Ordinal)) {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    if ($TypedValue.StartsWith("'", [System.StringComparison]::Ordinal) -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    $Value
+}
+
+function Get-TarArchiveMemberCompletion {
+    param(
+        [string]$ArchiveFile,
+        [string]$CurrentValue
+    )
+
+    # Inlined match and result construction: an archive can hold thousands of members.
+    $cleanCurrent = [string](Remove-TarOuterQuotes -Value $CurrentValue)
+    $typedQuote = $CurrentValue -match '^[''"]'
+    foreach ($member in (Get-TarArchiveMemberList -ArchiveFile $ArchiveFile)) {
+        if ($member.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $completionText = $member
+            if ($typedQuote -or $member -match '[\s{}();,|&<>''"`$]|^[@#]') {
+                $completionText = ConvertTo-TarMemberCompletionText -Value $member -TypedValue $CurrentValue
+            }
+
+            [System.Management.Automation.CompletionResult]::new($completionText, $member, 'ParameterValue', 'Archive member: ' + $member)
+        }
+    }
+}
+
 function Invoke-TarPositionalCompletion {
     param(
         [string]$Mode,
         [string]$CurrentValue,
-        [bool]$IncludeOptions
+        [bool]$IncludeOptions,
+        [string]$ArchiveFile
     )
 
-    $results = @()
+    $results = [System.Collections.Generic.List[object]]::new()
     $seen = @{}
+
+    if ($Mode -in @('t', 'x', 'd', 'delete') -and -not [string]::IsNullOrWhiteSpace($ArchiveFile)) {
+        foreach ($item in (Get-TarArchiveMemberCompletion -ArchiveFile $ArchiveFile -CurrentValue $CurrentValue)) {
+            if (-not $seen.ContainsKey($item.CompletionText)) {
+                $seen[$item.CompletionText] = $true
+                $results.Add($item)
+            }
+        }
+    }
 
     if ($IncludeOptions) {
         foreach ($option in (Get-TarOptionCompletionResults -Mode $Mode -CurrentValue '')) {
             if (-not $seen.ContainsKey($option.CompletionText)) {
                 $seen[$option.CompletionText] = $true
-                $results += $option
+                $results.Add($option)
             }
         }
     }
@@ -1520,7 +1673,7 @@ function Invoke-TarPositionalCompletion {
             foreach ($item in (Get-TarPathCompletionResults -CurrentValue $CurrentValue.Substring(1) -Prefix '@' -ToolTipPrefix 'Source archive')) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {
                     $seen[$item.CompletionText] = $true
-                    $results += $item
+                    $results.Add($item)
                 }
             }
         }
@@ -1528,7 +1681,7 @@ function Invoke-TarPositionalCompletion {
             foreach ($item in (Get-TarPathCompletionResults -CurrentValue $CurrentValue -ToolTipPrefix 'Archive input')) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {
                     $seen[$item.CompletionText] = $true
-                    $results += $item
+                    $results.Add($item)
                 }
             }
         }
@@ -1537,7 +1690,7 @@ function Invoke-TarPositionalCompletion {
         foreach ($item in (Get-TarPatternCompletionResults -CurrentValue $CurrentValue -ToolTipPrefix 'Archive entry pattern')) {
             if (-not $seen.ContainsKey($item.CompletionText)) {
                 $seen[$item.CompletionText] = $true
-                $results += $item
+                $results.Add($item)
             }
         }
     }
@@ -1614,7 +1767,7 @@ function Complete-Tar {
         return
     }
 
-    Invoke-TarPositionalCompletion -Mode $state.Mode -CurrentValue $currentToken -IncludeOptions:((-not $state.OptionTerminated) -and [string]::IsNullOrEmpty($currentToken))
+    Invoke-TarPositionalCompletion -Mode $state.Mode -CurrentValue $currentToken -IncludeOptions:((-not $state.OptionTerminated) -and [string]::IsNullOrEmpty($currentToken)) -ArchiveFile $state.ArchiveFile
 }
 
 Register-ArgumentCompleter -Native -CommandName 'tar', 'tar.exe' -ScriptBlock {
