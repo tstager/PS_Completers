@@ -1278,7 +1278,7 @@
         @{
             Path    = 'takeown_completer/takeown_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:4CB0FE3826FA52C1392BD02D15D12B2B5E228236D6F491111502DC5184D8B859'
+            Hash    = 'SHA256:B022DDFBD5E84DACE3E6785BF3886666E1834A5790C9FC6DCE3528D5A793C031'
             Targets = @(
                 @{ CommandName = 'takeown'; Native = $true }
                 @{ CommandName = 'takeown.exe'; Native = $true }

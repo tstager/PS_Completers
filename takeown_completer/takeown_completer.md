@@ -95,7 +95,8 @@ Value behavior by switch:
 - `/D`
   - enum completion for `Y` and `N`
 - `/F`
-  - local path completion for files and directories
+  - local path completion for files and directories, including hidden and system items such as `C:\ProgramData`, `C:\Program Files\WindowsApps`, and `AppData`
+  - paths containing whitespace or an argument-mode metacharacter (`$ & ( ) ; , ' { } | < >`, or a leading `@`/`#`) are double-quoted with `` ` `` escapes, e.g. ``"C:\`$Recycle.Bin\"``
   - UNC values echo the typed path and add scoped placeholder guidance without enumerating remote shares
   - once `/S` names a remote system, the slot switches to the documented share-relative form (`<share>\<file>`, `<share>\*`, or `share\<file>` after a share segment is typed) instead of listing the local directory
 

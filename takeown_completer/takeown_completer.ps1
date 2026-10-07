@@ -60,8 +60,10 @@ function ConvertTo-TakeownQuotedValue {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+    # Whitespace or an argument-mode metacharacter (hidden items such as C:\$Recycle.Bin and
+    # ~$name.docx lock files included) would otherwise split or expand the path.
+    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -434,7 +436,8 @@ function Get-TakeownPathCompletions {
     }
 
     try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
+        # -Force: hidden and system folders (ProgramData, WindowsApps, AppData) are typical takeown targets.
+        $items = @(Get-ChildItem -LiteralPath $parentPath -Force -ErrorAction Ignore)
     } catch {
         $items = @()
     }
