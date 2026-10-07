@@ -33,7 +33,7 @@ function New-WslcCompletionResult {
 
 function Get-WslcExecutablePath {
     foreach ($candidate in @('wslc', 'wslc.exe')) {
-        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction Ignore |
             Select-Object -First 1
         if ($null -ne $command) {
             return $command.Source
@@ -560,6 +560,29 @@ function Find-WslcOption {
     return $null
 }
 
+function Resolve-WslcOption {
+    param(
+        [object]$Catalog,
+        [string]$Name
+    )
+
+    $option = Find-WslcOption -Catalog $Catalog -Name $Name
+    if ($null -ne $option -or $Name -cnotmatch '^-[A-Za-z0-9?]{2,}$') {
+        return $option
+    }
+
+    # Alias chain (-dp): every letter is a flag and only the last one may take a value.
+    $last = $null
+    for ($i = 1; $i -lt $Name.Length; $i++) {
+        $last = Find-WslcOption -Catalog $Catalog -Name ('-' + $Name[$i])
+        if ($null -eq $last -or ($last.TakesValue -and $i -lt $Name.Length - 1)) {
+            return $null
+        }
+    }
+
+    return $last
+}
+
 function Find-WslcCommand {
     param(
         [object]$Catalog,
@@ -643,7 +666,7 @@ function Get-WslcCompletionContext {
                 $session = $token.Substring('--session='.Length)
             }
             elseif (-not $token.Contains('=')) {
-                $option = Find-WslcOption -Catalog $catalog -Name $token
+                $option = Resolve-WslcOption -Catalog $catalog -Name $token
                 if ($null -ne $option -and $option.TakesValue) {
                     $pendingOption = @($option.Names)[-1]
                 }
@@ -1084,7 +1107,7 @@ function Complete-Wslc {
     }
 
     if ($word -match '^(?<name>--?[A-Za-z0-9?][A-Za-z0-9-]*)=(?<value>.*)$') {
-        $option = Find-WslcOption -Catalog $context.Catalog -Name $Matches.name
+        $option = Resolve-WslcOption -Catalog $context.Catalog -Name $Matches.name
         if ($null -ne $option -and $option.TakesValue) {
             return @(Get-WslcOptionValueCompletions -Option $option -Word $Matches.value -Prefix ($Matches.name + '=') -Session $context.Session)
         }
@@ -1127,7 +1150,7 @@ function Complete-Wslc {
     }
 
     if ($context.Previous.StartsWith('-') -and -not $context.Previous.Contains('=')) {
-        $option = Find-WslcOption -Catalog $context.Catalog -Name $context.Previous
+        $option = Resolve-WslcOption -Catalog $context.Catalog -Name $context.Previous
         if ($null -ne $option -and $option.TakesValue) {
             return @(Get-WslcOptionValueCompletions -Option $option -Word $word -Prefix '' -Session $context.Session)
         }
