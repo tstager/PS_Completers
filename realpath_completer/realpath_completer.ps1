@@ -12,7 +12,7 @@ function Get-RealpathCompletionOptions {
     $fallbackOptions = @('-q', '--quiet', '-s', '--strip', '--no-symlinks', '-z', '--zero', '-L', '--logical', '-P', '--physical', '-E', '--canonicalize', '-e', '--canonicalize-existing', '-m', '--canonicalize-missing', '--relative-to', '--relative-base', '-h', '--help', '-V', '--version')
     $commandCandidates = @('realpath.exe', 'realpath')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -98,16 +98,21 @@ function Remove-RealpathOuterQuotes {
 function ConvertTo-RealpathQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Keep the quote the user opened with; otherwise quote only when the bare word
+    # would be split, expanded or re-parsed by PowerShell's argument mode.
+    if ($QuoteChar -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
     }
 
     $Value
@@ -115,24 +120,18 @@ function ConvertTo-RealpathQuotedValue {
 
 function Get-RealpathCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    # The parser keeps an unterminated quoted path as one element running to the
+    # cursor, so read the word from the element that contains the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($CursorPosition -gt $extent.StartOffset -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
     $Fallback
@@ -142,7 +141,7 @@ function Get-RealpathPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-RealpathOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -163,7 +162,7 @@ function Get-RealpathPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -179,7 +178,7 @@ function Get-RealpathPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-RealpathQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-RealpathQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-RealpathCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -256,11 +255,7 @@ function Complete-Realpath {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-RealpathCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-RealpathCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
 
     $optionValues = @(Get-RealpathOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
