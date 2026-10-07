@@ -67,6 +67,16 @@ function Get-GhCliCompletionInvoker {
         "(?m)^\s*Register-ArgumentCompleter\s+-CommandName\s+'gh'\s+-ScriptBlock\s+\$\{__ghCompleterBlock\}\s*\r?$"
     ), ''
 
+    # With no suggestions $Values is $null, and piping $null still runs the filter and the emitting
+    # ForEach-Object once: the filter assigns .Name on $null for '--flag=' words and the emitter builds a
+    # CompletionResult from a null name, each leaving a record in $Error on such a Tab.
+    $completionScript = $completionScript -replace (
+        '(?m)^(\s*)\$Values = \$Values \| Where-Object \{\s*$'
+    ), '$1$$Values = $$Values | Where-Object { $$null -ne $$_ } | Where-Object {'
+    $completionScript = $completionScript -replace (
+        '(?m)^(\s*)\$Values \| ForEach-Object \{\s*$'
+    ), '$1$$Values | Where-Object { $$null -ne $$_ } | ForEach-Object {'
+
     # gh's block dereferences properties of an empty pipeline when there are no suggestions; run it
     # outside this script's strict mode so those accesses stay silent.
     $completionInvokerSource = @"
@@ -199,6 +209,25 @@ function Get-GhCliLocalBranchList {
     }
 }
 
+function Get-GhCliExtensionList {
+    # Installed extensions are the gh-* entries of gh's data directory, read locally instead of
+    # spawning 'gh extension list'.
+    $dataDirectory = if ($env:XDG_DATA_HOME) {
+        Join-Path -Path $env:XDG_DATA_HOME -ChildPath 'gh'
+    } elseif ($env:LOCALAPPDATA) {
+        Join-Path -Path $env:LOCALAPPDATA -ChildPath 'GitHub CLI'
+    } elseif ($HOME) {
+        Join-Path -Path $HOME -ChildPath '.local\share\gh'
+    }
+
+    if (-not $dataDirectory) {
+        return @()
+    }
+
+    $extensionDirectory = Join-Path -Path $dataDirectory -ChildPath 'extensions'
+    @(Get-ChildItem -LiteralPath $extensionDirectory -Filter 'gh-*' -ErrorAction Ignore | ForEach-Object { $_.Name.Substring(3) })
+}
+
 function Get-GhCliWorkflowFileList {
     $workflowDirectory = Join-Path -Path (Get-Location).Path -ChildPath '.github\workflows'
     @(Get-ChildItem -LiteralPath $workflowDirectory -File -ErrorAction Ignore | Where-Object { $_.Extension -in @('.yml', '.yaml') } | ForEach-Object { $_.Name })
@@ -209,14 +238,16 @@ function ConvertTo-GhCliValueResult {
         [string[]]$Values,
         [string]$CurrentWord,
         [string]$ToolTip,
-        [string]$Placeholder
+        [string]$Placeholder,
+        # Attached option spelling (--method=, -X) kept in front of every completion text.
+        [string]$Prefix
     )
 
     $typed = if ($null -eq $CurrentWord) { '' } else { $CurrentWord.Trim([char[]]@([char]34, [char]39)) }
     $results = @(
         foreach ($value in @($Values)) {
             if (-not [string]::IsNullOrWhiteSpace($value) -and $value.StartsWith($typed, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $completionText = if ($value -match '\s') { '"' + $value + '"' } else { $value }
+                $completionText = if ($value -match '\s') { '"' + $value + '"' } else { $Prefix + $value }
                 [System.Management.Automation.CompletionResult]::new($completionText, $value, 'ParameterValue', $ToolTip)
             }
         }
@@ -265,8 +296,17 @@ function Get-GhCliFallbackCompletion {
         return ConvertTo-GhCliValueResult -Values (Get-GhCliConfiguredHostList) -CurrentWord $currentWord -ToolTip 'GitHub host name.' -Placeholder '<hostname>'
     }
 
-    if ($commandPath -like 'api*' -and $previousToken -in @('-X', '--method')) {
-        return ConvertTo-GhCliValueResult -Values @('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD') -CurrentWord $currentWord -ToolTip 'HTTP method for the request (default GET).'
+    if ($commandPath -like 'api*') {
+        $methods = @('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD')
+        $methodToolTip = 'HTTP method for the request (default GET).'
+        if ($previousToken -in @('-X', '--method')) {
+            return ConvertTo-GhCliValueResult -Values $methods -CurrentWord $currentWord -ToolTip $methodToolTip
+        }
+
+        # Attached spellings, both accepted by gh: --method=POST and -XPOST.
+        if ($currentWord -cmatch '^(?<flag>--method=|-X)(?<value>.+)?$' -and ($Matches['flag'] -eq '--method=' -or $Matches['value'])) {
+            return ConvertTo-GhCliValueResult -Values $methods -CurrentWord ([string]$Matches['value']) -ToolTip $methodToolTip -Prefix $Matches['flag']
+        }
     }
 
     switch -Regex ($commandPath) {
@@ -276,7 +316,7 @@ function Get-GhCliFallbackCompletion {
             }
         }
         '^config (get|set)$' {
-            $keys = @('git_protocol', 'editor', 'prompt', 'prefer_editor_prompt', 'pager', 'http_unix_socket', 'browser', 'color_labels', 'accessible_colors', 'accessible_prompter', 'spinner')
+            $keys = @('api_host', 'git_protocol', 'editor', 'prompt', 'prefer_editor_prompt', 'pager', 'http_unix_socket', 'browser', 'clipboard', 'color_labels', 'accessible_colors', 'accessible_prompter', 'spinner', 'telemetry')
             if ($positionals.Count -eq 0) {
                 return ConvertTo-GhCliValueResult -Values $keys -CurrentWord $currentWord -ToolTip 'gh configuration key.' -Placeholder '<key>'
             }
@@ -286,10 +326,12 @@ function Get-GhCliFallbackCompletion {
                     'git_protocol' { @('https', 'ssh') }
                     'prompt' { @('enabled', 'disabled') }
                     'prefer_editor_prompt' { @('enabled', 'disabled') }
+                    'clipboard' { @('enabled', 'disabled') }
                     'color_labels' { @('enabled', 'disabled') }
                     'accessible_colors' { @('enabled', 'disabled') }
                     'accessible_prompter' { @('enabled', 'disabled') }
                     'spinner' { @('enabled', 'disabled') }
+                    'telemetry' { @('enabled', 'disabled', 'log') }
                     default { @() }
                 }
                 return ConvertTo-GhCliValueResult -Values $values -CurrentWord $currentWord -ToolTip ('Value for ' + $positionals[0] + '.') -Placeholder '<value>'
@@ -310,12 +352,26 @@ function Get-GhCliFallbackCompletion {
                 return ConvertTo-GhCliValueResult -Values (Get-GhCliLocalBranchList) -CurrentWord $currentWord -ToolTip 'Local branch (or a PR number/URL).' -Placeholder '<number|url|branch>'
             }
         }
+        '^(extension|extensions|ext) (remove|uninstall|upgrade)$' {
+            if ($positionals.Count -eq 0) {
+                $extensions = @(Get-GhCliExtensionList)
+                if ($commandPath -like '* upgrade') {
+                    $extensions += '--all'
+                }
+                return ConvertTo-GhCliValueResult -Values $extensions -CurrentWord $currentWord -ToolTip 'Installed gh extension.' -Placeholder '<extension>'
+            }
+        }
         '^(secret|variable) (set|delete|remove)$' {
             if ($positionals.Count -eq 0) {
                 return ConvertTo-GhCliValueResult -Values @() -CurrentWord $currentWord -ToolTip 'Secret or variable name.' -Placeholder '<NAME>'
             }
         }
         '^help' {
+            # 'gh help <topic>' takes one operand; later words belong to a command path.
+            if ($words.Count -gt 1) {
+                return @()
+            }
+
             $topics = @(Get-GhCliHelpTopicList)
             $typed = $currentWord.Trim([char[]]@([char]34, [char]39))
             return @(
@@ -353,17 +409,21 @@ function Invoke-GhCliCompletion {
     }
     $realResults = @($delegated | Where-Object { $_ -is [System.Management.Automation.CompletionResult] })
 
-    if ($realResults.Count -gt 0) {
+    # gh's completion offers commands but not the HELP TOPICS for 'gh help <topic>', so that slot
+    # also consults the (cheap, cached) fallback and appends the topics.
+    $elements = $commandAst.CommandElements
+    $isHelp = $elements.Count -gt 1 -and $elements[1].Extent.Text -eq 'help'
+    if ($realResults.Count -gt 0 -and -not $isHelp) {
         return $realResults
     }
 
     $fallback = @(Get-GhCliFallbackCompletion -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition)
-    if ($fallback.Count -gt 0) {
-        return $fallback
+    if ($realResults.Count -gt 0 -or $fallback.Count -gt 0) {
+        return @($realResults) + @($fallback)
     }
 
-    # Pass through gh's own "" sentinel (ShellCompDirectiveNoFileComp) or nothing (file completion allowed).
-    $delegated
+    # gh's "" sentinel (ShellCompDirectiveNoFileComp) is not passed on: the engine rejects an empty
+    # completion text and records the failure in $Error.
 }
 
 Register-ArgumentCompleter -Native -CommandName @('gh', 'gh.exe') -ScriptBlock {

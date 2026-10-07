@@ -28,22 +28,24 @@ Load it with:
 
 ## How completion works
 1. `Get-GhCliCommandPath` resolves `gh`/`gh.exe` once and caches the path in script scope.
-2. `Get-GhCliCompletionInvoker` runs `gh completion -s powershell` once, compiles the block with `Set-StrictMode -Off` prepended (the upstream block dereferences an empty pipeline when there are no suggestions) and caches it. A failed discovery sets `$script:GhCliCompletionUnavailable`, so later Tabs return immediately; diagnostics go to the verbose stream only.
+2. `Get-GhCliCompletionInvoker` runs `gh completion -s powershell` once, patches the two places where the upstream block pipes a `$null` value list (an empty result would otherwise leave a record in `$Error` on every such Tab), compiles the block with `Set-StrictMode -Off` prepended and caches it. A failed discovery sets `$script:GhCliCompletionUnavailable`, so later Tabs return immediately; diagnostics go to the verbose stream only.
 3. `Invoke-GhCliCompletion` calls the block with `2>$null`. When it yields real `CompletionResult` objects they are returned unchanged.
-4. Otherwise `Get-GhCliFallbackCompletion` consults the value model, and if that has nothing the upstream output (gh's `""` no-file-completion sentinel, or nothing at all) is passed through so file completion behaves as gh intended.
+4. Otherwise `Get-GhCliFallbackCompletion` consults the value model. For `gh help <topic>` the fallback's help topics are appended to gh's own command list.
+5. If neither has anything the completer returns nothing. gh's `""` no-file-completion sentinel is not passed on, because PowerShell rejects an empty completion text (and records the failure in `$Error`); PowerShell's own path completion applies instead.
 
 ## Fallback value model
-Used only when gh returns no suggestions:
+Used when gh returns no suggestions (and, for `gh help `, alongside them):
 
-- `gh api -X ` / `--method ` → `GET POST PUT PATCH DELETE HEAD`
+- `gh api -X ` / `--method ` → `GET POST PUT PATCH DELETE HEAD`, and the attached spellings `--method=P` / `-XP` → `--method=POST` / `-XPOST`
 - `gh api ` → common endpoint paths (`user`, `graphql`, `repos/{owner}/{repo}`, ...) or an `<endpoint>` placeholder
-- `gh config get|set ` → the documented keys; `gh config set <key> ` → the closed value set for enum keys (`git_protocol`, `prompt`, `spinner`, ...)
+- `gh config get|set ` → the documented keys; `gh config set <key> ` → the closed value set for enum keys (`git_protocol`, `prompt`, `clipboard`, `telemetry`, ...)
 - `gh alias delete|set ` → alias names read from the local `config.yml`
 - `--hostname ` → hosts from the local `hosts.yml` plus `github.com`
 - `gh workflow run|view|enable|disable ` → `.github/workflows/*.yml|yaml`
 - `gh pr checkout ` (and the `co` alias) → local and remote branch names from `git for-each-ref`
+- `gh extension remove|upgrade ` (and the `ext`/`extensions`/`uninstall` aliases) → installed extensions from the `gh-*` entries of `%XDG_DATA_HOME%\gh\extensions` or `%LOCALAPPDATA%\GitHub CLI\extensions`, plus `--all` for upgrade, or an `<extension>` placeholder
 - `gh secret|variable set ` → a `<NAME>` placeholder
-- `gh help ` → the HELP TOPICS parsed once from `gh --help`
+- `gh help ` → the HELP TOPICS parsed once from `gh --help`, added to the commands gh offers for that slot
 
 ## Dependencies or external command expectations
 - Requires `gh` in `PATH` for delegated completion; without it every Tab returns nothing, silently.

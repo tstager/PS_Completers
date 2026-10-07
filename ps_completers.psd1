@@ -428,7 +428,7 @@
         @{
             Path    = 'gh_cli_completer/gh_cli_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:C3DE04270F762CC3879E6B6F60ABCA0579A7466444C1EBB24789F14ECE733FB6'
+            Hash    = 'SHA256:AC14ECFA48E446C46F1BF571AD3B81FFD52401701F4EDCB00D66112FFDC6F6BD'
             Targets = @(
                 @{ CommandName = 'gh'; Native = $true }
                 @{ CommandName = 'gh.exe'; Native = $true }
