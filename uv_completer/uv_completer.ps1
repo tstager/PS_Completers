@@ -468,16 +468,34 @@ function Get-UvDataDirectory {
 }
 
 function Get-UvInstalledTool {
+    param([switch]$Executables)
+
     # Every installed tool is a directory holding a uv-receipt.toml; the
     # directory listing is passive, so it stays current without a cache.
+    # The directory is the package name (upgrade/uninstall); `tool run`/uvx
+    # take a command name, which the receipt lists under `entrypoints`.
     $toolDirectory = Get-UvDataDirectory -Kind 'tool'
     if (-not $toolDirectory) {
         return @()
     }
 
-    @(Get-ChildItem -LiteralPath $toolDirectory -Directory -ErrorAction Ignore |
-        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'uv-receipt.toml') -PathType Leaf } |
-        ForEach-Object Name)
+    $receipts = @(Get-ChildItem -LiteralPath $toolDirectory -Directory -ErrorAction Ignore |
+        ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'uv-receipt.toml') -ErrorAction Ignore } |
+        Where-Object { -not $_.PSIsContainer })
+    if (-not $Executables) {
+        return @($receipts | ForEach-Object { $_.Directory.Name })
+    }
+
+    $names = foreach ($receipt in $receipts) {
+        $text = Get-Content -LiteralPath $receipt.FullName -Raw -ErrorAction Ignore
+        $entrypoints = [regex]::Match([string]$text, '(?m)^\s*entrypoints\s*=\s*\[((?:[^\[\]"]|"[^"]*")*)\]')
+        if ($entrypoints.Success) {
+            [regex]::Matches($entrypoints.Groups[1].Value, '(?<=[{,])\s*name\s*=\s*"([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value }
+        }
+    }
+
+    Get-UvUniqueStrings -Items $names
 }
 
 function Get-UvPythonVersion {
@@ -793,7 +811,7 @@ function Get-UvOperandValue {
     # Single-operand slots stop once an operand is typed; list slots
     # (`tool uninstall a b`, `remove x y`) keep offering.
     $values = switch (Get-UvCacheKey -Path $Path) {
-        'tool run' { if (-not $OperandSeen) { Get-UvInstalledTool } }
+        'tool run' { if (-not $OperandSeen) { Get-UvInstalledTool -Executables } }
         'tool upgrade' { Get-UvInstalledTool }
         'tool uninstall' { Get-UvInstalledTool }
         'python pin' { if (-not $OperandSeen) { Get-UvPythonVersion } }

@@ -106,7 +106,8 @@ These are read only inside the registered script block, never at load:
 
 | Slot | Source |
 | --- | --- |
-| `uv tool run` / `uvx` (first operand), `uv tool upgrade`, `uv tool uninstall` | directories holding a `uv-receipt.toml` under `uv tool dir` |
+| `uv tool run` / `uvx` (first operand) | executable names from each installed tool's `uv-receipt.toml` `entrypoints` (a package such as `specify-cli` provides `specify`; run it by package with `--from`) |
+| `uv tool upgrade`, `uv tool uninstall` | package names: directories holding a `uv-receipt.toml` under `uv tool dir` |
 | `--python` / `-p` (separate and `--python=` forms), `uv python pin` / `find` (first operand) | `uv python list --only-installed --offline --output-format json`; each minor request (`3.13`) is offered ahead of the exact versions |
 | `uv python uninstall` | uv-managed installs under `uv python dir` (directory listing) |
 | `--extra`, `--optional` | `[project.optional-dependencies]` of the nearest `pyproject.toml` |
