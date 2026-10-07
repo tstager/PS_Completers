@@ -32,7 +32,7 @@ Both names share the same completer scriptblock.
 
 ### Top-level commands
 
-`agents` · `attach` · `auth` · `auto-mode` · `doctor` · `gateway` · `import` · `install` · `logs` · `mcp` · `plugin` · `project` · `respawn` · `rm` · `setup-token` · `stop` · `ultrareview` · `update`
+`agents` · `attach` · `auth` · `auto-mode` · `doctor` · `gateway` · `import` · `install` · `logs` · `mcp` · `plugin` · `purge` · `respawn` · `rm` · `setup-token` · `stop` · `ultrareview` · `update`
 
 Command aliases are normalised when routing context:
 
@@ -54,9 +54,8 @@ Command aliases are normalised when routing context:
 | `auth`      | `login` · `logout` · `status` · `help` |
 | `auto-mode` | `config` · `critique` · `defaults` · `reset` · `help` |
 | `mcp`       | `add` · `add-json` · `add-from-claude-desktop` · `get` · `list` · `login` · `logout` · `remove` · `reset-project-choices` · `serve` · `help` |
-| `plugin`    | `details` · `disable` · `enable` · `eval` · `init` · `install` · `list` · `marketplace` · `prune` · `tag` · `uninstall` · `update` · `validate` · `help` |
-| `project`   | `purge` · `help` |
-| `agents` / `attach` / `doctor` / `gateway` / `import` / `install` / `logs` / `respawn` / `rm` / `setup-token` / `stop` / `ultrareview` / `update` | *(no L2 subcommands; own options/positionals)* |
+| `plugin`    | `configure` · `details` · `disable` · `enable` · `eval` · `init` · `install` · `list` · `marketplace` · `prune` · `tag` · `test` · `uninstall` · `update` · `validate` · `help` |
+| `agents` / `attach` / `doctor` / `gateway` / `import` / `install` / `logs` / `purge` / `respawn` / `rm` / `setup-token` / `stop` / `ultrareview` / `update` | *(no L2 subcommands; own options/positionals)* |
 
 ### Level-3 subcommands
 
@@ -99,16 +98,23 @@ All global flags from the CLI surface are offered at the root command only. Comm
 | `mcp remove` | `--scope` (`-s`) |
 | `mcp serve` | `--debug` (`-d`) · `--verbose` |
 | `install` | `--force` |
+| `plugin configure` | `--json` · `--values-stdin` |
 | `plugin disable` | `--all` (`-a`) · `--json` · `--scope` (`-s`, user\|project\|local) |
-| `plugin enable` | `--scope` (`-s`) |
+| `plugin enable` | `--json` · `--scope` (`-s`) |
 | `plugin eval` | `--ablation` (none\|with-without) · `--allow-real-servers` · `--allow-tools` · `--case` · `--concurrency` (`-j`) · `--eval-dir` · `--json` · `--judge-model` · `--keep-temp` · `--max-cost-usd` · `--mocks` (record\|off) · `--model` · `--no-publish` · `--no-scaffold` · `--output-dir` · `--publish-report` · `--report` · `--runs` · `--scaffold` · `--tag` · `--threshold` · `--trust-plugin` · `--verbose` |
 | `plugin init` | `--author` · `--author-email` · `--description` · `--force` (`-f`) · `--with` |
-| `plugin install` | `--config` · `--json` · `--scope` (`-s`) · `--yes` (`-y`) |
-| `plugin list` | `--available` · `--json` |
+| `plugin install` | `--accept-command` · `--config` · `--json` · `--marketplace` · `--registry` · `--scope` (`-s`) · `--yes` (`-y`) |
+| `plugin list` | `--available` · `--data-size` (optional value, never consumes the next word) · `--json` |
 | `plugin prune` | `--dry-run` · `--scope` (`-s`) · `--yes` (`-y`) |
 | `plugin tag` | `--dry-run` · `--force` (`-f`) · `--message` (`-m`) · `--push` · `--remote` |
+| `plugin uninstall` | `--json` · `--keep-data` · `--prune` · `--scope` (`-s`, user\|project\|local) · `--yes` (`-y`) |
+| `plugin update` | `--accept-command` · `--json` · `--scope` (`-s`, user\|project\|local\|managed) · `--yes` (`-y`) |
 | `plugin validate` | `--json` · `--strict` |
-| `project purge` | `--all` · `--dry-run` · `--interactive` (`-i`) · `--yes` (`-y`) |
+| `plugin marketplace add` | `--claudeai` · `--json` · `--scope` (user\|project\|local) · `--sparse` |
+| `plugin marketplace list` | `--json` |
+| `plugin marketplace remove` | `--json` · `--scope` (user\|project\|local) |
+| `plugin marketplace update` | `--json` |
+| `purge` | `--all` · `--dry-run` · `--interactive` (`-i`) · `--yes` (`-y`) |
 | `respawn` | `--all` |
 | `rm` | `--discard-unpushed` · `--force-remove-worktree` |
 | `ultrareview` | `--json` · `--no-post` · `--post` · `--timeout` |
@@ -136,9 +142,10 @@ All global flags from the CLI surface are offered at the root command only. Comm
 | `mcp add <name> <commandOrUrl> [args...]` | `<name>` · `<commandOrUrl>` · `<arg>` placeholders |
 | `mcp add-json <name> <json>` | `<name>` · `<json>` placeholders |
 | `mcp get` / `mcp login` / `mcp logout` / `mcp remove <name>` | `<name>` placeholder |
-| `plugin details/disable/enable/install/uninstall/update <plugin>` | `<plugin>` / `<name>` placeholder |
+| `plugin configure/details/disable/enable/install/uninstall/update <plugin>` | `<plugin>` / `<name>` placeholder |
 | `plugin eval [target]` / `plugin init <name>` | `<target>` / `<name>` placeholder |
-| `plugin tag [path]` / `plugin validate <path>` / `project purge [path]` | First positional → `CompleteFilename` |
+| `plugin tag [path]` / `plugin validate <path>` | First positional → `CompleteFilename` |
+| `plugin test [dir]` / `purge [path]` | First positional → `CompleteFilename` filtered to directories |
 | `plugin marketplace add <source>` | `<source>` placeholder |
 | `plugin marketplace remove/update <name>` | `<name>` placeholder |
 
@@ -206,6 +213,11 @@ the same scriptblock so completion works regardless of how the command is typed.
 # plugin tree and marketplace L3
 (TabExpansion2 'claude plugin ' 14).CompletionMatches.CompletionText
 (TabExpansion2 'claude plugin marketplace ' 26).CompletionMatches.CompletionText
+(TabExpansion2 'claude plugin marketplace add --' 32).CompletionMatches.CompletionText
+(TabExpansion2 'claude plugin update --scope ' 29).CompletionMatches.CompletionText
+
+# purge options
+(TabExpansion2 'claude purge --' 15).CompletionMatches.CompletionText
 
 # Path/dir flag value
 (TabExpansion2 'claude --add-dir ' 17).CompletionMatches | Select-Object CompletionText, ResultType
