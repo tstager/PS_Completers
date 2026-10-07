@@ -327,8 +327,10 @@ function ConvertTo-SchtasksQuotedValue {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value + '"'
+    # Quote on whitespace or any argument-mode metacharacter ('{' would open a
+    # script block, '$' would expand), escaping ` " $ inside the double quotes.
+    if ($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
     }
 
     $Value

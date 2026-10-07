@@ -126,7 +126,7 @@ A per-subcommand value-slot table (`Get-SchtasksValueOptionTable`) decides how e
 
 ### Quoting behavior
 
-Path and task-name suggestions are quoted when needed for spaces, or when the current input already started with a quote.
+Path and task-name suggestions are double-quoted when they contain whitespace or a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " $` or a backtick, or a leading `@`/`#`), or when the current input already started with a `"`. Inside the quotes a backtick, `"` or `$` is escaped with a backtick, so a task such as `\SoftLanding\...Task-{60e0b626-...}` or a folder such as `x$y` reaches `schtasks` unchanged.
 
 Value hints (`/SC`, `/RU`, ...) match the typed prefix past an opening `"` or `'`, so `/RU N`, `/RU "NT` and `/RU 'NT` all reach the `NT AUTHORITY\...` accounts. A hint is quoted with the quote character you typed, or with double quotes when it contains whitespace and you typed none.
 
