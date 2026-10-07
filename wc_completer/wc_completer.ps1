@@ -57,7 +57,7 @@ function Resolve-WcCommandName {
         return $catalog.CommandName
     }
 
-    $command = Get-Command -Name wc.exe, wc -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name wc.exe, wc -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $catalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -211,8 +211,10 @@ function ConvertFrom-WcOptionSpecLine {
     # Separate the option synopsis from any inline description. Both GNU and clap help
     # put the description after a run of two or more spaces, so cut at the first such gap.
     $specPart = ($Line -replace '^\s+', '')
-    if ($specPart -match '^(?<spec>.*?\S)\s{2,}\S') {
+    $description = ''
+    if ($specPart -match '^(?<spec>.*?\S)\s{2,}(?<desc>\S.*)$') {
         $specPart = $matches['spec']
+        $description = $matches['desc'].Trim()
     }
     $specPart = $specPart.TrimEnd()
 
@@ -233,6 +235,7 @@ function ConvertFrom-WcOptionSpecLine {
                     Token       = $matches['token']
                     DisplayText = $shortPart
                     Placeholder = $matches['value']
+                    Description = $description
                 })
         }
 
@@ -241,6 +244,7 @@ function ConvertFrom-WcOptionSpecLine {
                     Token       = $matches['token']
                     DisplayText = $longPart
                     Placeholder = $matches['value']
+                    Description = $description
                 })
         }
     } elseif ($specLine -match '^(?<token>--[A-Za-z0-9][A-Za-z0-9\-]*)(?:\[?[= ]\<?(?<value>[^\]\s>]+)\>?\]?)?$') {
@@ -248,6 +252,7 @@ function ConvertFrom-WcOptionSpecLine {
                 Token       = $matches['token']
                 DisplayText = $specLine
                 Placeholder = $matches['value']
+                Description = $description
             })
     } elseif ($specLine -match '^(?<token>-[A-Za-z0-9])(?:[= ]\[?(?<value>[^\]\s]+)\]?)?$') {
         # Short-only option line.
@@ -255,6 +260,7 @@ function ConvertFrom-WcOptionSpecLine {
                 Token       = $matches['token']
                 DisplayText = $specLine
                 Placeholder = $matches['value']
+                Description = $description
             })
     }
 
@@ -313,7 +319,7 @@ function Initialize-WcCompletionCatalog {
                 $currentKeys = @()
 
                 foreach ($spec in $parsed) {
-                    Add-WcOptionSpec -Token $spec.Token -DisplayText $spec.DisplayText -Description $spec.DisplayText -Placeholder $spec.Placeholder
+                    Add-WcOptionSpec -Token $spec.Token -DisplayText $spec.DisplayText -Description $spec.Description -Placeholder $spec.Placeholder
                     $currentKeys += Get-WcCanonicalOptionKey -Token $spec.Token
                 }
 
@@ -325,9 +331,9 @@ function Initialize-WcCompletionCatalog {
             $continuation = $matches['text'].Trim()
             foreach ($key in $currentKeys) {
                 $option = $catalog.OptionByToken[$key]
-                if ([string]::IsNullOrWhiteSpace($option.Description) -or $option.Description -eq $option.DisplayText) {
+                if ([string]::IsNullOrWhiteSpace($option.Description)) {
                     $option.Description = $continuation
-                } elseif (-not $option.Description.EndsWith($continuation, [System.StringComparison]::OrdinalIgnoreCase)) {
+                } else {
                     $option.Description += ' ' + $continuation
                 }
             }
@@ -368,15 +374,17 @@ function Get-WcPathCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
     foreach ($item in $items) {
-        $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
+        $completionText = if (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
             if ($parent -eq '.') {
-                $item.Name
+                # A bare name that starts with '-', '@' or '#' would read as an option,
+                # a splat or a comment, so anchor it to the current directory.
+                if ($item.Name -match '^[-@#]') { '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name } else { $item.Name }
             } else {
                 Join-Path -Path $parent -ChildPath $item.Name
             }

@@ -100,7 +100,7 @@ All help capture, parsing, and command resolution happen lazily from helper func
 
 ### Help-driven option catalog
 
-Initialization captures `wc --help` and parses the option synopsis lines into a cached option catalog. That gives the completer a local view of the installed `wc` build without hard-coding the entire flag set. The parser separates each option synopsis from its inline description and understands short pairs (`-c, --bytes`), long-only lines (`    --total <WHEN>`), and short-only lines. It resolves both the GNU-style `--option=PLACEHOLDER` and the clap-style `--option <PLACEHOLDER>` synopsis forms, so the same completer adapts to whichever `wc.exe` is first on `PATH`.
+Initialization captures `wc --help` and parses the option synopsis lines into a cached option catalog. That gives the completer a local view of the installed `wc` build without hard-coding the entire flag set. The parser separates each option synopsis from its inline description, keeps that description (plus any wrapped continuation lines) as the option's tooltip, and understands short pairs (`-c, --bytes`), long-only lines (`    --total <WHEN>`), and short-only lines. It resolves both the GNU-style `--option=PLACEHOLDER` and the clap-style `--option <PLACEHOLDER>` synopsis forms, so the same completer adapts to whichever `wc.exe` is first on `PATH`.
 
 ### Option coverage
 
@@ -128,6 +128,8 @@ Only two options consume a value, and both always do (neither is optional-value)
 ### Operand file completion
 
 `wc` operands are uniformly file paths (unlike `grep`, there is no pattern-first operand), so every positional slot offers real filesystem path completion plus the stdin `-` sentinel. This holds at the first operand and at every later operand, and after an explicit `--` end-of-options marker.
+
+An empty slot lists the current directory as relative names, the same as a typed relative prefix; a name that starts with `-`, `@` or `#` is emitted as `.\name` so neither `wc` nor PowerShell misreads it as an option, splat or comment. Absolute paths are emitted only when the typed path is rooted.
 
 ### Placeholder and anti-fallback behavior
 
