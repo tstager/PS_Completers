@@ -294,7 +294,7 @@
         @{
             Path    = 'dism_completer/dism_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:0E049FEC1AE72BC266069A6FD6EA6A9F81AF3E2193BCE5AD3726268C63653658'
+            Hash    = 'SHA256:C93110BB3D29847FF43B5FF4C9CC4B097A4E84EB7E662D627006A993CE1D065B'
             Targets = @(
                 @{ CommandName = 'dism'; Native = $true }
             )

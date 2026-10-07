@@ -93,6 +93,15 @@ function Get-DismStaticCatalog {
         Driver               = New-DismSwitchSpec -Token '/Driver:' -Description 'Path to a driver .inf file or a folder of drivers.' -Kind 'File' -Extensions @('.inf')
         Distribution         = New-DismSwitchSpec -Token '/Distribution:' -Description 'Path to the distribution share.' -Kind 'Directory'
         CustomDataPath       = New-DismSwitchSpec -Token '/CustomDataPath:' -Description 'Custom data file added to the app package as Custom.dat.' -Kind 'File'
+        WimFile              = New-DismSwitchSpec -Token '/WimFile:' -Description 'Path to the WIM file.' -Kind 'File' -Extensions @('.wim')
+        ReadOnly             = New-DismSwitchSpec -Token '/ReadOnly' -Description 'Mounts the image with read-only permissions.'
+        Commit               = New-DismSwitchSpec -Token '/Commit' -Description 'Saves the changes made to the mounted image.'
+        Discard              = New-DismSwitchSpec -Token '/Discard' -Description 'Discards the changes made to the mounted image.'
+        ProductCode          = New-DismSwitchSpec -Token '/ProductCode:' -Description 'Product code GUID of an installed MSI application (see /Get-Apps).' -Kind 'Value' -Placeholder '<product-code-GUID>'
+        PatchCode            = New-DismSwitchSpec -Token '/PatchCode:' -Description 'Patch code GUID of an installed MSP patch (see /Get-AppPatches).' -Kind 'Value' -Placeholder '<patch-code-GUID>'
+        LanguageName         = New-DismSwitchSpec -Token '/LanguageName:' -Description 'Name of the language (repeatable).' -Kind 'Value' -Placeholder '<language>'
+        SupportPath          = New-DismSwitchSpec -Token '/SupportPath:' -Description 'Directory holding the Edge support files.' -Kind 'Directory'
+        ClassId              = New-DismSwitchSpec -Token '/Class-ID:' -Description 'CLSID of the COM class implementing the recovery management plugin.' -Kind 'Value' -Placeholder '<clsid>'
     }
 
     $globals = @(
@@ -168,6 +177,13 @@ function Get-DismStaticCatalog {
             (New-DismSwitchSpec -Token '/Path:' -Description 'Disk volume of the WIMBoot configuration.' -Kind 'Directory'),
             (New-DismSwitchSpec -Token '/DataSourceID:' -Description 'Data source id as displayed by /Get-WIMBootEntry.' -Kind 'Value' -Placeholder '<data-source-id>'),
             $s.ImageFile)
+        New-DismCommandSpec -Token '/Mount-Wim' -Description 'Mounts an image from a WIM file.' -Switches @($s.WimFile, $s.Index, $s.Name, $s.MountDir, $s.ReadOnly, $s.EA)
+        New-DismCommandSpec -Token '/Unmount-Wim' -Description 'Unmounts a mounted WIM image.' -Switches @($s.MountDir, $s.Commit, $s.Discard, $s.EA)
+        New-DismCommandSpec -Token '/Get-WimInfo' -Description 'Displays information about images in a WIM file.' -Switches @($s.WimFile, $s.Index, $s.Name)
+        New-DismCommandSpec -Token '/Get-MountedWimInfo' -Description 'Displays information about mounted WIM images.'
+        New-DismCommandSpec -Token '/Commit-Wim' -Description 'Saves changes to a mounted WIM image.' -Switches @($s.MountDir, $s.EA)
+        New-DismCommandSpec -Token '/Remount-Wim' -Description 'Recovers an orphaned WIM mount directory.' -Switches @($s.MountDir)
+        New-DismCommandSpec -Token '/Cleanup-Wim' -Description 'Deletes resources associated with mounted WIM images that are corrupted.'
         # OS package servicing
         New-DismCommandSpec -Token '/Get-Packages' -Description 'Displays basic information about all packages in the image.' -Switches @($s.Format)
         New-DismCommandSpec -Token '/Get-PackageInfo' -Description 'Displays detailed information about a package (.cab).' -Switches @($s.PackageName, $s.PackagePath)
@@ -193,6 +209,8 @@ function Get-DismStaticCatalog {
             (New-DismSwitchSpec -Token '/HideSP' -Description 'Prevents the service pack from being listed in Installed Updates (with /SPSuperseded).'),
             (New-DismSwitchSpec -Token '/AnalyzeComponentStore' -Description 'Creates a report of the component store.'),
             (New-DismSwitchSpec -Token '/RevertPendingActions' -Description 'Reverts all pending actions from previous servicing operations (offline recovery only).'))
+        New-DismCommandSpec -Token '/Add-Language' -Description 'Adds the best-matched package(s) for the given language(s).' -Switches @($s.LanguageName, $s.Source, $s.LimitAccess)
+        New-DismCommandSpec -Token '/Remove-Language' -Description 'Removes the best-matched package(s) for the given language(s).' -Switches @($s.LanguageName)
         # Capabilities
         New-DismCommandSpec -Token '/Get-Capabilities' -Description 'Displays the capabilities in the image.' -Switches @($s.Format, $s.Source, $s.LimitAccess)
         New-DismCommandSpec -Token '/Get-CapabilityInfo' -Description 'Displays detailed information about a capability.' -Switches @($s.CapabilityName, $s.Source, $s.LimitAccess)
@@ -239,8 +257,40 @@ function Get-DismStaticCatalog {
         New-DismCommandSpec -Token '/Export-DefaultAppAssociations:' -Description 'Exports the default application associations to an XML file.' -Kind 'File' -Placeholder '<path.xml>'
         New-DismCommandSpec -Token '/Import-DefaultAppAssociations:' -Description 'Imports default application associations from an XML file.' -Kind 'File' -Placeholder '<path.xml>'
         New-DismCommandSpec -Token '/Remove-DefaultAppAssociations' -Description 'Removes the default application associations from the image.'
+        New-DismCommandSpec -Token '/Set-NonRemovableAppPolicy' -Description 'Sets a policy that prevents users from removing the app packages of a package family.' -Switches @(
+            (New-DismSwitchSpec -Token '/PackageFamily:' -Description 'Package family name the policy applies to.' -Kind 'Value' -Placeholder '<package-family-name>'),
+            (New-DismSwitchSpec -Token '/NonRemovable:' -Description '1 makes the package family nonremovable; 0 removes the policy.' -Kind 'Enum' -Values @('0', '1')))
+        New-DismCommandSpec -Token '/Get-NonRemovableAppPolicy' -Description 'Lists the package families configured to be nonremovable by enterprise policy.'
+        # Provisioning packages
+        New-DismCommandSpec -Token '/Add-ProvisioningPackage' -Description 'Adds the applicable payload of a provisioning package to the image.' -Switches @(
+            (New-DismSwitchSpec -Token '/PackagePath:' -Description 'Path to the provisioning package (.ppkg).' -Kind 'File' -Extensions @('.ppkg')),
+            (New-DismSwitchSpec -Token '/CatalogPath:' -Description 'Path to the catalog file of the provisioning package.' -Kind 'File' -Extensions @('.cat')))
+        New-DismCommandSpec -Token '/Get-ProvisioningPackageInfo' -Description 'Displays information about a provisioning package.' -Switches @(
+            (New-DismSwitchSpec -Token '/PackagePath:' -Description 'Path to the provisioning package (.ppkg).' -Kind 'File' -Extensions @('.ppkg')))
+        # Application (MSI/MSP) servicing - offline images only
+        New-DismCommandSpec -Token '/Get-Apps' -Description 'Displays information about all installed MSI applications.' -Switches @($s.Format)
+        New-DismCommandSpec -Token '/Get-AppInfo' -Description 'Displays information about a specific installed MSI application.' -Switches @($s.Format, $s.ProductCode)
+        New-DismCommandSpec -Token '/Get-AppPatches' -Description 'Displays information about all applied MSP patches for all installed applications.' -Switches @($s.Format, $s.ProductCode)
+        New-DismCommandSpec -Token '/Get-AppPatchInfo' -Description 'Displays information about installed MSP patches.' -Switches @($s.Format, $s.PatchCode, $s.ProductCode)
+        New-DismCommandSpec -Token '/Check-AppPatch' -Description 'Displays whether MSP patches are applicable to the mounted image.' -Switches @(
+            (New-DismSwitchSpec -Token '/PatchLocation:' -Description 'Path to an MSP patch file (repeatable).' -Kind 'File' -Extensions @('.msp')),
+            $s.Format)
+        New-DismCommandSpec -Token '/Add-App' -Description 'Installs an MSI application into the offline image.' -Switches @(
+            (New-DismSwitchSpec -Token '/AppPath:' -Description 'Path to the MSI application.' -Kind 'File' -Extensions @('.msi')))
+        New-DismCommandSpec -Token '/Remove-App' -Description 'Uninstalls an MSI application from the offline image.' -Switches @($s.ProductCode)
+        New-DismCommandSpec -Token '/Add-AppPatch' -Description 'Installs an MSP patch into the offline image.' -Switches @(
+            (New-DismSwitchSpec -Token '/AppPatchPath:' -Description 'Path to the MSP patch.' -Kind 'File' -Extensions @('.msp')))
+        New-DismCommandSpec -Token '/Remove-AppPatch' -Description 'Uninstalls an MSP patch from the offline image.' -Switches @($s.PatchCode)
+        # Edge servicing
+        New-DismCommandSpec -Token '/Add-Edge' -Description 'Adds Edge to the image.' -Switches @($s.SupportPath)
+        New-DismCommandSpec -Token '/Add-EdgeBrowser' -Description 'Adds the Edge browser to the image.' -Switches @($s.SupportPath)
+        New-DismCommandSpec -Token '/Add-EdgeWebView' -Description 'Adds Edge WebView to the image.' -Switches @($s.SupportPath)
+        New-DismCommandSpec -Token '/Remove-Edge' -Description 'Removes Edge from the image.'
+        New-DismCommandSpec -Token '/Remove-EdgeBrowser' -Description 'Removes the Edge browser from the image.'
+        New-DismCommandSpec -Token '/Remove-EdgeWebView' -Description 'Removes Edge WebView from the image.'
         # International servicing
         New-DismCommandSpec -Token '/Get-Intl' -Description 'Displays information about the international settings and languages.' -Switches @($s.Distribution)
+        New-DismCommandSpec -Token '/Set-SysUILang:' -Description 'Sets the system UI language of an offline image (/Set-SysUILang:<language>).' -Kind 'Value' -Placeholder '<language>'
         New-DismCommandSpec -Token '/Set-UILang:' -Description 'Sets the default system UI language (/Set-UILang:<language>).' -Kind 'Value' -Placeholder '<language>'
         New-DismCommandSpec -Token '/Set-UILangFallback:' -Description 'Sets the fallback system UI language (/Set-UILangFallback:<language>).' -Kind 'Value' -Placeholder '<language>'
         New-DismCommandSpec -Token '/Set-SysLocale:' -Description 'Sets the language for non-Unicode programs (/Set-SysLocale:<locale>).' -Kind 'Value' -Placeholder '<locale>'
@@ -265,6 +315,32 @@ function Get-DismStaticCatalog {
         New-DismCommandSpec -Token '/Get-ReservedStorageState' -Description 'Displays whether reserved storage is enabled.'
         New-DismCommandSpec -Token '/Set-ReservedStorageState' -Description 'Enables or disables reserved storage.' -Switches @(
             (New-DismSwitchSpec -Token '/State:' -Description 'Reserved storage state.' -Kind 'Enum' -Values @('Enabled', 'Disabled')))
+        New-DismCommandSpec -Token '/Enable-ReservedStorage' -Description 'Enables reserved storage.'
+        New-DismCommandSpec -Token '/Disable-ReservedStorage' -Description 'Disables reserved storage.'
+        # OS uninstall
+        New-DismCommandSpec -Token '/Initiate-OSUninstall' -Description 'Initiates the OS uninstall to go back to the previous version of Windows.'
+        New-DismCommandSpec -Token '/Remove-OSUninstall' -Description 'Removes the OS uninstall capability from the computer.'
+        New-DismCommandSpec -Token '/Get-OSUninstallWindow' -Description 'Displays the number of days after upgrade during which OS uninstall can be performed.'
+        New-DismCommandSpec -Token '/Set-OSUninstallWindow' -Description 'Sets the number of days after upgrade during which OS uninstall can be performed.' -Switches @(
+            (New-DismSwitchSpec -Token '/Value:' -Description 'Number of days.' -Kind 'Value' -Placeholder '<days>'))
+        # Recovery management
+        New-DismCommandSpec -Token '/Get-RemoteManagementStatus' -Description 'Shows whether Recovery Remote Management Plugins (RRMPs) are enabled.'
+        New-DismCommandSpec -Token '/Set-RemoteManagementStatus' -Description 'Enables or disables Recovery Remote Management Plugins (RRMPs).' -Switches @(
+            (New-DismSwitchSpec -Token '/Status:' -Description 'Enable or disable RRMPs.' -Kind 'Enum' -Values @('Enable', 'Disable')))
+        New-DismCommandSpec -Token '/Register-RRMP' -Description 'Registers a Recovery Remote Management Plugin (RRMP).' -Switches @(
+            (New-DismSwitchSpec -Token '/Binary-Location:' -Description 'Full path of the plugin DLL under System32, as the booted target OS sees it.' -Kind 'Value' -Placeholder '<dll-path>'),
+            $s.ClassId,
+            (New-DismSwitchSpec -Token '/Capabilities-Required:' -Description 'Capability bitmask that must be satisfied: 0x1 offline OS, 0x2 network, 0x4 internet.' -Kind 'Value' -Placeholder '<mask>'),
+            (New-DismSwitchSpec -Token '/Capabilities-Desired:' -Description 'Capability bitmask the plugin would like (defaults to /Capabilities-Required).' -Kind 'Value' -Placeholder '<mask>'),
+            (New-DismSwitchSpec -Token '/Threading-Model:' -Description 'COM threading model (default Apartment).' -Kind 'Enum' -Values @('Apartment', 'Free', 'Both')),
+            (New-DismSwitchSpec -Token '/Exception-Handling:' -Description 'Exception handling mode (default Default).' -Kind 'Enum' -Values @('Default', 'All', 'Fatal', 'None')))
+        New-DismCommandSpec -Token '/Unregister-RRMP' -Description 'Unregisters a Recovery Remote Management Plugin (RRMP).' -Switches @($s.ClassId)
+        New-DismCommandSpec -Token '/Get-RRMPInfo' -Description 'Shows the details of a registered Recovery Remote Management Plugin (RRMP).' -Switches @($s.ClassId)
+        New-DismCommandSpec -Token '/Get-RRMPs' -Description 'Lists all registered Recovery Remote Management Plugins (RRMPs).'
+        New-DismCommandSpec -Token '/Get-RRMPAltitude' -Description 'Shows the altitude of a Recovery Remote Management Plugin (RRMP).' -Switches @($s.ClassId)
+        New-DismCommandSpec -Token '/Set-RRMPAltitude' -Description 'Sets the altitude of a Recovery Remote Management Plugin (RRMP).' -Switches @($s.ClassId,
+            (New-DismSwitchSpec -Token '/Altitude:' -Description 'Altitude value (unsigned integer); lower altitudes have higher priority.' -Kind 'Value' -Placeholder '<value>'))
+        New-DismCommandSpec -Token '/Remove-RRMPAltitude' -Description 'Removes the altitude of a Recovery Remote Management Plugin (RRMP).' -Switches @($s.ClassId)
     )
 
     [pscustomobject]@{
