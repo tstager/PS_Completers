@@ -64,8 +64,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
-- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- Operand slots use filesystem path completion, with wildcard characters in the typed text escaped. A word of `.`, `..` or `~` (or one ending in a `..` segment) lists that directory's entries with the typed prefix kept, such as `..\name`; a trailing `.` after a separator is a name prefix, so `.\.` lists the dotfiles. Completions keep the quote the user typed (single quotes by default, with `'` doubled; double quotes escape `` ` ``, `"` and `$` with a backtick), and a bare word is quoted only when it holds whitespace or a PowerShell metacharacter such as `$`, `'` or `;`. A `~` path that has to be quoted is emitted with the home directory spelled out, because PowerShell expands `~` only in an unquoted argument.
+- The current word is the command element under the cursor, so an unterminated quoted word holding spaces (`'sp a`) stays one word, and completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios
@@ -73,12 +73,13 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ```powershell
 sha384sum -
 sha384sum --
+sha384sum ..
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
-- operand slots offer filesystem completion
+- operand slots offer filesystem completion, and `..` lists the parent directory as `..\name`
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes

@@ -12,7 +12,7 @@ function Get-Sha384sumCompletionOptions {
     $fallbackOptions = @('-b', '--binary', '-c', '--check', '-w', '--warn', '--status', '--quiet', '--strict', '--ignore-missing', '--tag', '-t', '--text', '-z', '--zero', '-h', '--help', '-V', '--version')
     $commandCandidates = @('sha384sum.exe', 'sha384sum')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,78 +84,102 @@ function New-Sha384sumCompletionResult {
     )
 }
 
-function Remove-Sha384sumOuterQuotes {
+function ConvertFrom-Sha384sumTypedWord {
+    # Splits the word typed so far into its value and the opening quote the user
+    # typed ('' when bare), undoing that quote style's escapes.
+    param([string]$Text)
+
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    }
+
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
+}
+
+function Test-Sha384sumArgumentNeedsQuote {
+    # Whitespace and argument-mode metacharacters (including the typographic
+    # quotes PowerShell treats as quotes) end or split a bare word; a leading
+    # '@' or '#' would start a splat or a comment.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]'
 }
 
-function ConvertTo-Sha384sumQuotedValue {
+function ConvertTo-Sha384sumArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was
+    # typed, otherwise in the typed quote style (single by default).
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
+    if (-not $Quote) {
+        if (-not (Test-Sha384sumArgumentNeedsQuote -Value $Value)) {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
-    $Value
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
-function Get-Sha384sumCurrentToken {
+function Get-Sha384sumCurrentWord {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running past the cursor, so
+    # the element under the cursor is the whole word even when it holds spaces.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
+    # Between words, where PowerShell's own word is empty too.
     $Fallback
 }
 
 function Get-Sha384sumPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-Sha384sumOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $typed = ConvertFrom-Sha384sumTypedWord -Text $InputPath
+    $cleanInput = $typed.Value
 
+    # Bare names are emitted only when the user typed no directory part. A lone '.', '~' or a
+    # trailing '..' segment names a directory itself; any other trailing segment, '.' included,
+    # is a name prefix, so '.\.' lists the dotfiles here. The text is split by hand because
+    # Split-Path resolves '.' and '..' segments to real folder names.
+    $bareNames = $false
+    $separator = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
         $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
+        $bareNames = $true
+    } elseif ($cleanInput -match '(?:^|[\\/])\.\.$' -or $cleanInput -in @('.', '~')) {
         $parent = $cleanInput
         $leaf = ''
+    } elseif ($separator -lt 0) {
+        $parent = '.'
+        $leaf = $cleanInput
+        $bareNames = $true
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $parent = $cleanInput.Substring(0, $separator + 1)
+        $leaf = $cleanInput.Substring($separator + 1)
     }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
@@ -166,10 +190,8 @@ function Get-Sha384sumPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $pathText = if ($bareNames) {
             $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
         } else {
             Join-Path -Path $parent -ChildPath $item.Name
         }
@@ -178,7 +200,13 @@ function Get-Sha384sumPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-Sha384sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        # PowerShell expands a leading '~' in a bare native argument but not inside quotes.
+        $argumentText = $pathText
+        if (($typed.Quote -or (Test-Sha384sumArgumentNeedsQuote -Value $pathText)) -and $pathText -match '^~[\\/]') {
+            $argumentText = $HOME + $pathText.Substring(1)
+        }
+
+        $quotedPath = ConvertTo-Sha384sumArgument -Value $argumentText -Quote $typed.Quote
         if ($item.PSIsContainer) {
             New-Sha384sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -205,11 +233,7 @@ function Complete-Sha384sum {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-Sha384sumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-Sha384sumCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
