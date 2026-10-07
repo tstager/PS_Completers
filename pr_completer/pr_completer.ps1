@@ -280,6 +280,11 @@ function Get-PrOptionValueCompletions {
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $table['--pages'] = @(
+        @{ Text = '1'; Tip = 'Start at page 1.' }
+        @{ Text = '1:2'; Tip = 'Pages 1 through 2.' }
+        @{ Text = '<first>[:<last>]'; Tip = 'Page range, colon-separated.' }
+    )
     $table['--columns'] = @(
         @{ Text = '<n>'; Tip = 'Number of columns.' }
     )

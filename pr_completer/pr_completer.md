@@ -103,6 +103,7 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 
 ## Option values
 
+- `--pages`: `1`, `1:2`, `<first>[:<last>]` (`FIRST_PAGE[:LAST_PAGE]`, separate or attached form)
 - `--columns`: `<n>`
 - `-D`, `--date-format`: `<format>`
 - `-e`, `--expand-tabs`, `-i`, `--output-tabs`, `-s`, `--separator`: `<char>`
