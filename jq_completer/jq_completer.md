@@ -9,9 +9,10 @@ The completer is help-driven with a static fallback: option names come from `jq 
 It covers:
 
 - option-name suggestions for jq's short and long flags
-- an arity table for options that take one or two arguments: `--arg NAME VALUE`, `--argjson NAME JSON`, `--rawfile NAME FILE`, `--slurpfile NAME FILE`, `-f`/`--from-file FILE`, `-L`/`--library-path DIR` (directories only), `--indent N` (the literal values `0`-`7`, since jq caps indentation at 7)
+- an arity table for options that take one or two arguments: `--arg NAME VALUE`, `--argjson NAME JSON`, `--rawfile NAME FILE`, `--slurpfile NAME FILE`, `-L`/`--library-path DIR` (directories only), `--indent N` (the literal values `0`-`7`, since jq caps indentation at 7)
 - a starter set for the filter operand: `.`, `.[]`, `keys`, `length`, `type`, `to_entries`, `map(`, `select(`, `sort_by(`, `group_by(`, `has(`, `del(`, `split(`, `join(`, `test(` and others
 - path completion for input-file operands after the filter
+- `-f`/`--from-file` as the flag jq treats it as (no value of its own, also inside a bundle such as `-rf`): it makes the first operand the program file, so every operand becomes a path slot and no filter starters are offered
 
 ## Registration and command names
 
@@ -46,6 +47,7 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 - A word starting with `-` lists the parsed options, filtered ordinally.
 - With no operand seen yet, the word is the filter and the starter set is offered, filtered by the typed prefix (`jq to` offers `to_entries`, `tostring`, `tonumber`).
 - After the filter, operands are input files and use path completion.
+- With `-f`/`--from-file` anywhere before the cursor, the first operand is the program file and the rest are input files, so every operand slot uses path completion (`jq -f -r ` and `jq -f prog.jq ` both offer paths, matching `jq -f -r prog.jq data.json`).
 
 ## Representative validation scenarios
 
@@ -57,6 +59,7 @@ jq to
 jq --rawfile
 jq --rawfile name
 jq . 
+jq -f prog.jq 
 ```
 
 Expected behavior:
@@ -65,6 +68,7 @@ Expected behavior:
 - the bare command lists the filter starters
 - `--rawfile ` offers `<name>`; `--rawfile name ` offers files
 - `jq . ` offers files for the input operand
+- `jq -f prog.jq ` offers files, not filter starters
 
 ## Notes
 

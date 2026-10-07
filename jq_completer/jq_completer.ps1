@@ -5,7 +5,7 @@ Set-StrictMode -Version 2.0
 
 function Get-JqCommandPath {
     foreach ($candidate in @('jq', 'jq.exe')) {
-        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name $candidate -CommandType Application -ErrorAction Ignore |
             Select-Object -First 1
 
         if ($null -ne $command) {
@@ -246,14 +246,13 @@ function Complete-Jq {
     $arity['--argjson'] = @('<name>', '<json>')
     $arity['--rawfile'] = @('<name>', 'path')
     $arity['--slurpfile'] = @('<name>', 'path')
-    $arity['-f'] = @('path')
-    $arity['--from-file'] = @('path')
     $arity['-L'] = @('dir')
     $arity['--library-path'] = @('dir')
     $arity['--indent'] = @(, @('0', '1', '2', '3', '4', '5', '6', '7'))
 
     $pending = @()
     $operands = 0
+    $fromFile = $false
     foreach ($token in ($tokens | Select-Object -Skip 1)) {
         if ($pending.Count -gt 0) {
             $pending = @($pending | Select-Object -Skip 1)
@@ -266,6 +265,12 @@ function Complete-Jq {
         }
 
         if ($token.StartsWith('-') -and $token.Length -gt 1) {
+            # -f/--from-file takes no value: it makes the first operand the program file, and
+            # it also counts inside a short-flag bundle (-rf). '-Lf' is -L with the attached dir 'f'.
+            if ($token -ceq '--from-file' -or ($token -cmatch '^-[A-Za-z]+$' -and -not $token.StartsWith('-L', [System.StringComparison]::Ordinal) -and $token.Contains('f'))) {
+                $fromFile = $true
+            }
+
             continue
         }
 
@@ -311,7 +316,7 @@ function Complete-Jq {
         )
     }
 
-    if ($operands -eq 0) {
+    if ($operands -eq 0 -and -not $fromFile) {
         $starters = @('.', '.[]', 'keys', 'keys_unsorted', 'length', 'type', 'to_entries', 'from_entries', 'with_entries(', 'map(', 'select(', 'add', 'sort_by(', 'group_by(', 'unique', 'has(', 'del(', 'paths', 'tostring', 'tonumber', 'split(', 'join(', 'test(')
         return @(
             foreach ($starter in $starters) {
