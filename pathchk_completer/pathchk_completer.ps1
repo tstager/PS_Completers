@@ -12,7 +12,7 @@ function Get-PathchkCompletionOptions {
     $fallbackOptions = @('-p', '--portability', '--help', '--version')
     $commandCandidates = @('pathchk.exe', 'pathchk')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,78 +84,93 @@ function New-PathchkCompletionResult {
     )
 }
 
-function Remove-PathchkOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
 function ConvertTo-PathchkQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Quote when the user opened a quote, or when the bare word would be split,
+    # expanded or rejected in argument mode: whitespace, the argument-mode
+    # metacharacters (including the typographic quotes PowerShell treats as quotes)
+    # and a leading @ or #.
+    if ($Quote -eq '' -and $Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        return $Value
     }
 
-    $Value
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '[`"$\u201C-\u201E]', '`$0') + '"'
+    }
+
+    "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
 }
 
 function Get-PathchkCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser already resolved quoting and escapes: take the argument element
+    # that holds the cursor (an unterminated quote is one element running to the
+    # cursor) and report its unescaped text plus the quote the user typed.
+    $elements = @($CommandAst.CommandElements)
+    for ($index = 1; $index -lt $elements.Count; $index++) {
+        $element = $elements[$index]
+        if ($element.Extent.StartOffset -ge $CursorPosition -or $element.Extent.EndOffset -lt $CursorPosition) {
+            continue
+        }
+
+        # A word the parser split at a paren or sub-expression ('p(1)\' is 'p', '(1)', '\') is
+        # not a path: the fragment under the cursor touches the element before or after it.
+        if ($element.Extent.StartOffset -eq $elements[$index - 1].Extent.EndOffset -or
+            ($index + 1 -lt $elements.Count -and $elements[$index + 1].Extent.StartOffset -eq $element.Extent.EndOffset)) {
+            return [pscustomobject]@{ Text = $element.Extent.Text; Quote = ''; Fragment = $true }
+        }
+
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+            $quote = switch ($element.StringConstantType) {
+                'SingleQuoted' { "'" }
+                'DoubleQuoted' { '"' }
+                default { '' }
+            }
+            return [pscustomobject]@{ Text = $element.Value; Quote = $quote; Fragment = $false }
+        }
+
+        if ($element -is [System.Management.Automation.Language.CommandParameterAst]) {
+            return [pscustomobject]@{ Text = $element.Extent.Text; Quote = ''; Fragment = $false }
+        }
+
+        # A paren, sub-expression, variable or array element is not a path either.
+        break
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    [pscustomobject]@{ Text = ''; Quote = ''; Fragment = $false }
 }
 
 function Get-PathchkPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [string]$Quote = ''
+    )
 
-    $cleanInput = Remove-PathchkOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
+    if ([string]::IsNullOrWhiteSpace($InputPath)) {
         $parent = '.'
         $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
+    } elseif ($InputPath -match '[\\/]+$') {
+        $parent = $InputPath
         $leaf = ''
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
+        $parent = Split-Path -Path $InputPath -Parent
         if ([string]::IsNullOrWhiteSpace($parent)) {
             $parent = '.'
         }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $leaf = Split-Path -Path $InputPath -Leaf
     }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
@@ -166,9 +181,9 @@ function Get-PathchkPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($InputPath)) {
             $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
+        } elseif ([System.IO.Path]::IsPathRooted($InputPath)) {
             Join-Path -Path $parent -ChildPath $item.Name
         } else {
             Join-Path -Path $parent -ChildPath $item.Name
@@ -178,7 +193,7 @@ function Get-PathchkPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-PathchkQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-PathchkQuotedValue -Value $pathText -Quote $Quote
         if ($item.PSIsContainer) {
             New-PathchkCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -199,23 +214,27 @@ function Get-PathchkOptionDescription {
 }
 
 function Complete-Pathchk {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is read from the CommandAst element at the cursor; wordToComplete re-wraps an open quote without its escapes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-PathchkCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $token = Get-PathchkCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
+    $currentWord = $token.Text
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
     }
 
-    if ($currentWord.StartsWith('-')) {
+    # PowerShell completes file names itself when a native completer returns nothing, and would
+    # replace the fragment with unrelated paths; offer the fragment unchanged so Tab is a no-op.
+    if ($token.Fragment) {
+        return @(New-PathchkCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'PowerShell splits an unquoted word at ( ) and $( ); quote the path to complete it.')
+    }
+
+    if ($token.Quote -eq '' -and $currentWord.StartsWith('-')) {
         return @(
             foreach ($option in Get-PathchkCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
@@ -225,7 +244,7 @@ function Complete-Pathchk {
         )
     }
 
-    Get-PathchkPathCompletions -InputPath $currentWord
+    Get-PathchkPathCompletions -InputPath $currentWord -Quote $token.Quote
 }
 
 Register-ArgumentCompleter -Native -CommandName 'pathchk', 'pathchk.exe' -ScriptBlock {

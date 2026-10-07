@@ -703,7 +703,7 @@
         @{
             Path    = 'pathchk_completer/pathchk_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:F52BBDF843DB3872ACA2251975749CFDEA9711852A4D744F07215F5CD6A13CC8'
+            Hash    = 'SHA256:164C4FC1A13A265BE103F2320D09562C29DF368ECA4E7D2B0DDB561130F939D1'
             Targets = @(
                 @{ CommandName = 'pathchk'; Native = $true }
                 @{ CommandName = 'pathchk.exe'; Native = $true }
