@@ -31,28 +31,58 @@ All three share the same completer scriptblock.
 
 ## Coverage
 
+### Command tree source
+
+Modelled from QwenLM/qwen-code `main` at commit
+`8003d280420da32ddff4f9b0ef9a7b0aff42a8bc` (2026-10-07): `packages/cli/src/config/config.ts`
+and the yargs builders under `packages/cli/src/commands/`.
+
 ### Top-level commands
 
-`mcp` · `extensions` · `hooks` · `hook` · `channel`
+`mcp` · `extensions` · `hooks` · `hook` · `channel` · `board` · `serve` · `sessions` ·
+`batch` · `update` · `sandbox` · `review`
 
-`auth` is not offered: upstream replaced it with a stub that only prints
-"qwen auth has been removed." (configure providers with `/auth` instead).
+`review` is registered lazily upstream (only when argv contains `review`), so it is
+always reachable as typed.
+
+### Hidden commands (parsed, never offered)
+
+| Command | Why |
+| --- | --- |
+| `auth` and its legacy `status` · `coding-plan` · `openrouter` · `requesty` · `api-key` · `qwen-oauth` | Upstream stub that only prints "qwen auth has been removed." (configure providers with `/auth` instead) |
+| `channel daemon-worker` (`--channel`) | Internal worker, declared with `describe: false` |
 
 ### Level-2 subcommands
 
 | Command | Subcommands |
 | --- | --- |
-| `mcp`        | `add` · `remove` · `list` · `reconnect` |
-| `extensions` | `install` · `uninstall` · `list` · `update` · `disable` · `enable` · `link` · `new` · `settings` |
-| `channel`    | `start` · `stop` · `status` · `pairing` · `configure-weixin` |
-| `hooks` / `hook` | *(no subcommands; see quirks)* |
+| `mcp`        | `add` · `remove` · `list` · `reconnect` · `approve` · `reject` |
+| `extensions` | `install` · `uninstall` · `list` · `update` · `disable` · `enable` · `link` · `new` · `settings` · `sources` |
+| `channel`    | `start` · `stop` · `status` · `reload` · `set` · `pairing` · `configure-weixin` |
+| `board`      | `show` · `task` · `claim` · `done` · `ask` · `answer` · `decline` · `prune` |
+| `sessions`   | `list` · `ps` · `controllers` |
+| `batch`      | `run` · `collect` · `retry` · `cancel` · `list` · `check` · `clean` |
+| `review`     | `run` plus the 42 `/review` skill helpers: `parse-args` · `match-remote` · `meta` · `issue-context` · `fetch-diff` · `comment-body` · `fetch-pr` · `capture-local` · `capture-tui` · `plan-diff` · `cache-commit` · `repo-context` · `pr-context` · `comment-status` · `load-rules` · `agent-prompt` · `emit-workflow` · `build-test` · `base-tree` · `scratch-tree` · `test-delta` · `fix-delta` · `drive` · `ab-drive` · `mock-provider` · `extract-step` · `script-lint` · `dedup-candidates` · `revert-hunk` · `resolve-anchors` · `check-coverage` · `cost-ledger` · `presubmit` · `test-efficacy` · `test-plan` · `findings` · `recover-findings` · `publish-assets` · `compose-review` · `save-artifact` · `submit` · `cleanup` |
+| `hooks` / `hook` · `serve` · `update` · `sandbox` | *(no subcommands)* |
 
 ### Level-3 subcommands
 
 | Path | Subcommands |
 | --- | --- |
-| `extensions settings` | `set` · `list` |
-| `channel pairing`     | `list` · `approve` |
+| `extensions settings`  | `set` · `list` |
+| `extensions sources`   | `add` · `remove` · `list` · `update` |
+| `channel pairing`      | `list` · `approve` |
+| `sessions controllers` | `add` · `list` · `remove` |
+
+### Unknown words
+
+A command name only counts before the current level's first positional, and a word
+that is not a subcommand where one is due ends completion: `qwen zzz `,
+`qwen batch zzz ` and `qwen extensions sources zzz ` return nothing (PowerShell's own
+fallback applies) instead of re-offering a command list, and in `qwen fix mcp ` the
+`mcp` is prompt text, not the `mcp` command.  Command names are case-sensitive, as
+in yargs.  After `--` every word is passed through (`qwen sandbox -- ls -la`), so
+nothing is offered.
 
 ### Global flags (selected)
 
@@ -65,7 +95,7 @@ are included, plus `--help`, `--version` and the `--add-dir` alias.  Enum choice
 | `--approval-mode` | `plan` · `default` · `auto` · `auto-edit` · `yolo` |
 | `--auth-type` | `openai` · `openai-responses` · `anthropic` · `qwen-oauth` · `gemini` · `vertex-ai` |
 | `--channel` | `VSCode` · `ACP` · `SDK` · `CI` · `desktop` · `daemon` |
-| `--sandbox` / `-s` | `true` · `false` · `docker` · `podman` · `sandbox-exec` *(a string option since 2026-10; yargs takes the next word as its value unless it starts with `-`; declared by the default command only, so it is neither offered nor read as `--sandbox` after a subcommand such as `extensions install`)* |
+| `--sandbox` / `-s` | `true` · `false` · `docker` · `podman` · `sandbox-exec` *(a string option since 2026-10; yargs takes the next word as its value unless it starts with `-`; declared by the default command and by `sandbox` only, so it is neither offered nor read as `--sandbox` after another subcommand such as `extensions install`)* |
 | `--input-format` | `text` · `stream-json` |
 | `--output-format` / `-o` | `text` · `json` · `stream-json` |
 | `--telemetry-target` | `local` · `gcp` |
@@ -77,15 +107,36 @@ are not offered.
 
 ### Context-specific flags
 
+A command's options also apply to its subcommands (yargs options are global), and a
+command's own declaration shadows a global flag of the same name: `review run --resume`
+is a switch, `serve --channel` takes free-form names, not the global `--channel` choices.
+
 | Context | Extra flags |
 | --- | --- |
 | `mcp add` | `--scope` (user\|project) · `--transport` (stdio\|sse\|http) · `--env` · `--header` · `--timeout` · `--trust` · `--description` · `--include-tools` · `--exclude-tools` · `--oauth-client-id` · `--oauth-client-secret` · `--oauth-redirect-uri` · `--oauth-authorization-url` · `--oauth-token-url` · `--oauth-scopes` |
-| `mcp reconnect` | `--all` |
+| `mcp reconnect` · `mcp approve` · `mcp reject` | `--all` |
 | `extensions install` | `--ref` · `--auto-update` · `--pre-release` · `--registry` · `--consent` · `--scope` (user\|project\|workspace) |
 | `extensions update` | `--all` |
 | `extensions disable` | `--scope` *(free-form string, default "User")* |
 | `extensions enable` | `--scope` *(free-form string)* |
 | `extensions settings set` | `--scope` (user\|workspace) |
+| `channel reload` · `channel set` | `--daemon-url` · `--token` · `--timeout` |
+| `board` *(and every board subcommand)* | `--board` · `--as` · `--json` |
+| `board task` / `done` / `ask` / `prune` | `--owner` / `--note` / `--about` · `--wait` · `--timeout` · `--ttl` / `--older-than` |
+| `sessions list` | `--json` · `--limit` |
+| `sessions ps` · `sessions controllers list` | `--json` |
+| `sessions controllers add` | `--label` · `--json` |
+| `batch run` | `--dry-run` · `--expect` |
+| `batch collect` | `--wait` · `--timeout` |
+| `batch retry` | `--max-output-tokens` |
+| `batch clean` | `--force` |
+| `sandbox` | `--verify` · `--sandbox` / `-s` (true\|false\|docker\|podman\|sandbox-exec) |
+| `serve` | All 66 options of the `serve` builder, e.g. `--port` · `--hostname` · `--token` · `--workspace` · `--channel` · `--web` · `--open` · `--require-auth`; choices for `--profile` (default\|hosted-harness) · `--memory-project-scope` (git-root\|workspace) · `--memory-pressure-mode` (off\|observe) · `--child-heap-mode` (off\|observe\|admit\|enforce) · `--mcp-budget-mode` (enforce\|warn\|off) · `--external-tool-guard-mode` (off\|required) |
+| `review run` | `--effort` (low\|medium\|high) · `--comment` · `--resume` · `--json` · `--fail-on` (none\|request-changes) · `--timeout-minutes` · `--approval-mode` (plan\|default\|auto\|auto-edit\|yolo) · `--quiet` |
+| `review <helper>` | Each helper's own options; choices for `--effort` (`capture-local` · `fetch-pr` · `plan-diff`: low\|medium\|high; `save-artifact`: medium\|high), `comment-body --kind` (review\|inline\|issue) and `agent-prompt --role` (the 26 brief ids) |
+
+Context flags without a hand-written description show their kind in the tooltip
+(`[boolean]`, the choice list, or `[value]`).
 
 ### Value slot completion
 
@@ -111,6 +162,14 @@ are not offered.
 | `extensions settings set <name> <setting>` / `list <name>` | Positional placeholders |
 | `channel start [name]` / `channel pairing list <name>` / `approve <name> <code>` | Positional placeholders |
 | `channel configure-weixin [action]` | First positional → `clear` |
+| `channel set <names..>` | `all` plus `<name>` |
+| `mcp approve|reject [name]` / `extensions sources add <source>` / `remove|update <name>` | Positional placeholders |
+| `board task|claim|done|ask|answer|decline` / `sessions controllers remove <id>` | Positional placeholders |
+| `batch run <plan>` | First positional → `CompleteFilename` (plan JSON file) |
+| `batch collect|retry|cancel|clean <task-id>` | `<task-id>` placeholder |
+| `sandbox [cmd...]` | `<cmd>` placeholder |
+| `review plan-diff <diff_path>` / `review test-efficacy <report>` | First positional → `CompleteFilename` |
+| `review run [target]` and the other review helpers' positionals | Placeholders named after the upstream positional (`<pr_number>`, `<owner_repo>`, ...) |
 
 ## Inline `--flag=value` syntax
 
@@ -143,7 +202,10 @@ they would otherwise conflict with global aliases:
 - `qwen mcp add -e` → `--env`
 - `qwen mcp add -H` → `--header`
 - `qwen mcp reconnect -a` → `--all`
+- `qwen sandbox -s` → `--sandbox` (the `sandbox` builder re-declares it)
 - `qwen extensions install|update|disable|enable -s` → no meaning (the extensions builders declare no `-s`), so it is not taken as `--sandbox` and its next word completes as a positional
+
+Short aliases are matched ordinally, so `qwen mcp add -h` is `--help`, not `-H` (`--header`).
 
 ## Implementation style
 
@@ -155,7 +217,9 @@ they would otherwise conflict with global aliases:
   This avoids latency on every keystroke and is resilient to broken help
   commands (`extensions new`, `hooks`).
 - **Three command levels** tracked in the state machine (`$sub`, `$subsub`,
-  `$sub3`), covering the deepest paths in the CLI tree.
+  `$sub3`), covering the deepest paths in the CLI tree.  Context tables are keyed by
+  the command path (`serve`, `mcp.add`, `sessions.controllers.add`) and looked up
+  deepest first.
 - **Engine word and cursor**: the word under the cursor is the engine's
   `$wordToComplete`, and only the command elements that end before the cursor
   are treated as committed, so Tab in an empty slot in the middle of a line, or
@@ -199,4 +263,13 @@ they would otherwise conflict with global aliases:
 
 # Path flag value
 (TabExpansion2 'qwen --telemetry-outfile ' 25).CompletionMatches | Select-Object CompletionText, ResultType
+
+# Newer top-level commands and their subcommands
+(TabExpansion2 'qwen sessions ' 14).CompletionMatches.CompletionText     # list ps controllers
+(TabExpansion2 'qwen batch ' 11).CompletionMatches.CompletionText        # run collect retry cancel list check clean
+(TabExpansion2 'qwen review run --effort ' 25).CompletionMatches.CompletionText
+(TabExpansion2 'qwen serve --profile ' 21).CompletionMatches.CompletionText
+
+# Unknown word in a subcommand slot: nothing (PowerShell fallback), not a command list
+(TabExpansion2 'qwen batch zzz ' 15).CompletionMatches.CompletionText
 ```

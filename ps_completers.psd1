@@ -943,7 +943,7 @@
         @{
             Path    = 'qwen_completer/qwen_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:66A01B61458E11C02BF426616DA9E9D0179321A04A3E268A4F5BB3E28A69335D'
+            Hash    = 'SHA256:987646822BCBEF03219AC0BE8D8A27926561A162CAAAAB4833FE9E44997B97B3'
             Targets = @(
                 @{ CommandName = 'qwen'; Native = $true }
                 @{ CommandName = 'qwen.cmd'; Native = $true }
