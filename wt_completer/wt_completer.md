@@ -4,7 +4,7 @@
 
 `wt_completer.ps1` registers a native PowerShell completer for Windows Terminal (`wt` / `wt.exe`).
 
-The option and subcommand tables are defined in the script. Profile names and color scheme names are read from the Windows Terminal settings file at completion time, so `-p`/`--profile` and `--colorScheme` complete the entries that exist on the machine.
+The option and subcommand tables are defined in the script. Profile names are read from the Windows Terminal settings file at completion time. `--colorScheme` completes the built-in schemes shipped with Windows Terminal, the settings `schemes` array, and every scheme a profile (or `profiles.defaults`) references, including both halves of a `{ "light", "dark" }` pair.
 
 ## Registration and command names
 
@@ -29,14 +29,14 @@ The script defines top-level options, `new-tab` options, `split-pane` extras, `f
 
 ### 2. Tokenizing and context
 
-The cursor is rebased to the command's start offset, so completion works when `wt` is not the first statement on the line. The completed tokens are scanned to find the active subcommand and whether the previous token expects a value. A `;` or `` `; `` token, or a token ending in `;`, resets the subcommand context, so in `wt nt `; sp -` the options offered belong to `split-pane`.
+Words come from the parser's command elements, not a whitespace split: a quoted value such as `"Windows PowerShell"` is one word, and the element that contains the cursor (cut at the cursor) is the word being completed, so completion works mid-line and when `wt` is not the first statement on the line. An unterminated quote runs to the cursor; its opening quote is stripped before matching. The completed tokens are scanned to find the active subcommand and whether the previous token expects a value. A `;` or `` `; `` token, or a token ending in `;`, resets the subcommand context, so in `wt nt `; sp -` the options offered belong to `split-pane`.
 
 ### 3. Output by context
 
 - No subcommand: top-level options plus the `new-tab` options (which `wt` accepts before any subcommand) plus subcommand names.
 - `move-focus` / `swap-pane`: direction values.
 - Other subcommands: that subcommand's options.
-- A value slot after `-p`/`--profile` lists profile names; after `--colorScheme` it lists scheme names; names containing spaces are quoted. Other value slots return nothing so PowerShell's default completion applies.
+- A value slot after `-p`/`--profile` lists profile names; after `--colorScheme` it lists scheme names. The attached form `--option=value` completes the value for the same options and keeps `--option=` in the inserted text. A name containing whitespace or an argument-mode metacharacter is quoted: in the quote the user typed, or single quotes when none was typed. Other value slots return nothing so PowerShell's default completion applies.
 
 ## Key completion behaviors / supported values
 
@@ -51,6 +51,8 @@ The cursor is rebased to the command's start offset, so completion works when `w
 
 ```powershell
 wt -p
+wt -p "Windows Pow
+wt --profile=Win
 wt nt --colorScheme
 wt nt `; sp -
 Set-Location C:\; wt ft
@@ -59,8 +61,8 @@ wt move-focus
 
 Expected behavior:
 
-- `-p ` lists the profiles from settings.json, quoting names with spaces
-- `nt --colorScheme ` lists the color schemes from settings.json
+- `-p ` lists the profiles from settings.json, quoting names with spaces; `-p "Windows Pow` completes to `"Windows PowerShell"`; `--profile=Win` completes to `--profile='Windows PowerShell'`
+- `nt --colorScheme ` lists the built-in schemes plus the schemes defined or referenced in settings.json
 - after `` `; `` the `split-pane` options are offered
 - `ft` completes when `wt` follows another statement on the line
 - `move-focus ` lists the direction values
@@ -68,7 +70,7 @@ Expected behavior:
 ## Dependencies or external command expectations
 
 - `wt.exe` or `wt` on `PATH`
-- `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json` and the Preview equivalent for profile and scheme names; both are read once per session and unioned
+- `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json` and the Preview equivalent for profile and scheme names; both are read once per session and unioned. The built-in scheme names are a static list taken from the 1.25/1.26 package `defaults.json`
 
 ## Limitations / notes
 

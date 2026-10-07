@@ -8,7 +8,16 @@ function Get-WtSettingsNames {
 
     $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script -ErrorAction Ignore
     if ($null -eq $cache -or $null -eq $cache.Value) {
-        $names = @{ profiles = @(); schemes = @() }
+        # Built-in schemes shipped in the package's defaults.json (1.25/1.26); they never
+        # appear in the user's settings.json 'schemes' array.
+        $names = @{
+            profiles = @()
+            schemes = @(
+                'Campbell', 'Campbell Powershell', 'Vintage', 'One Half Dark', 'One Half Light',
+                'Solarized Dark', 'Solarized Light', 'Tango Dark', 'Tango Light', 'Dark+',
+                'VSCode Dark Modern', 'VSCode Light Modern', 'CGA', 'IBM 5153', 'Dimidium', 'Ottosson'
+            )
+        }
         foreach ($package in 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe') {
             $settingsPath = Join-Path -Path $env:LOCALAPPDATA -ChildPath "Packages\$package\LocalState\settings.json"
             if (-not (Test-Path -LiteralPath $settingsPath)) {
@@ -28,10 +37,33 @@ function Get-WtSettingsNames {
             if ($settings.PSObject.Properties['schemes']) {
                 $names.schemes += @($settings.schemes | ForEach-Object { $_.name } | Where-Object { $_ })
             }
+
+            # Schemes referenced by profiles: a plain name or a { light, dark } pair.
+            if ($settings.PSObject.Properties['profiles']) {
+                $profileEntries = @()
+                if ($settings.profiles.PSObject.Properties['defaults']) { $profileEntries += $settings.profiles.defaults }
+                if ($settings.profiles.PSObject.Properties['list']) { $profileEntries += @($settings.profiles.list) }
+                foreach ($entry in $profileEntries) {
+                    if ($null -eq $entry -or -not $entry.PSObject.Properties['colorScheme']) {
+                        continue
+                    }
+
+                    $scheme = $entry.colorScheme
+                    if ($scheme -is [string]) {
+                        $names.schemes += $scheme
+                    } elseif ($null -ne $scheme) {
+                        foreach ($variant in 'light', 'dark') {
+                            if ($scheme.PSObject.Properties[$variant] -and $scheme.$variant -is [string]) {
+                                $names.schemes += $scheme.$variant
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         $names.profiles = @($names.profiles | Sort-Object -Unique)
-        $names.schemes = @($names.schemes | Sort-Object -Unique)
+        $names.schemes = @($names.schemes | Where-Object { $_ } | Sort-Object -Unique)
         Set-Variable -Name 'WtSettingsNames' -Value $names -Scope Script
         $cache = Get-Variable -Name 'WtSettingsNames' -Scope Script
     }
@@ -49,17 +81,45 @@ function Get-WtValueCompletionData {
 
     @(
         foreach ($name in Get-WtSettingsNames -Kind $kind) {
-            $text = if ($name -match '\s') { '"' + $name + '"' } else { $name }
-            @{ Text = $text; Display = $name; Type = 'ParameterValue'; Tooltip = "Windows Terminal $kind entry" }
+            @{ Text = $name; Display = $name; Type = 'ParameterValue'; Tooltip = "Windows Terminal $kind entry" }
         }
     )
 }
 
+function ConvertTo-WtQuotedValue {
+    param([string]$Value, [string]$Quote)
+
+    if ($Quote -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Get-WtUnquotedWord {
+    param([string]$Text)
+
+    # An unterminated quote runs to the cursor; strip the opening quote (and a matching
+    # closing one) and report which quote character the user typed.
+    if ($Text.Length -gt 0 -and ($Text[0] -eq [char]"'" -or $Text[0] -eq [char]'"')) {
+        $quote = [string]$Text[0]
+        $inner = $Text.Substring(1)
+        if ($inner.Length -gt 0 -and $inner.EndsWith($quote)) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+
+        return @{ Word = $inner; Quote = $quote }
+    }
+
+    @{ Word = $Text; Quote = '' }
+}
+
 function Complete-WtNative {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete drops quotes and ignores the cursor.')]
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue) -and
-        -not (Get-Command wt -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command wt.exe -ErrorAction Ignore) -and
+        -not (Get-Command wt -ErrorAction Ignore)) {
         return
     }
 
@@ -202,50 +262,31 @@ function Complete-WtNative {
         'x-save' = @()
     }
 
-    $line = $commandAst.ToString()
-    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
-    $prefixLength = [Math]::Max(0, [Math]::Min($relativeCursor, $line.Length))
-    $linePrefix = $line.Substring(0, $prefixLength)
-    $tokens = @([regex]::Matches($linePrefix, '\S+') | ForEach-Object { $_.Value })
-    $hasTrailingSpace = ($linePrefix -match '\s$') -or ($relativeCursor -gt $line.Length)
-    $matchPrefix = if ((-not $hasTrailingSpace) -and $tokens.Count -gt 0 -and $tokens[-1] -like '-*') {
-        $tokens[-1]
-    }
-    elseif ($wordToComplete) {
-        $wordToComplete
-    }
-    else {
-        if ($hasTrailingSpace -or $tokens.Count -eq 0) { '' } else { $tokens[-1] }
-    }
-    $previousToken = if ($hasTrailingSpace) {
-        if ($tokens.Count -gt 0) { $tokens[-1] } else { '' }
-    }
-    elseif ($tokens.Count -gt 1) {
-        $tokens[-2]
-    }
-    else {
-        ''
+    # Read words from the parser: quoted values stay one element, and the element that
+    # contains the cursor (cut at the cursor) is the word being completed.
+    $currentText = ''
+    $argumentTokens = New-Object System.Collections.Generic.List[string]
+    foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+        $start = $element.Extent.StartOffset
+        if ($start -gt $cursorPosition) {
+            break
+        }
+
+        if ($element.Extent.EndOffset -ge $cursorPosition) {
+            $currentText = $element.Extent.Text.Substring(0, $cursorPosition - $start)
+            break
+        }
+
+        $argumentTokens.Add($(if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $element.Value } else { $element.Extent.Text }))
     }
 
-    [object[]]$argumentTokens = if ($tokens.Count -gt 1) {
-        @($tokens[1..($tokens.Count - 1)])
-    }
-    else {
-        @()
-    }
-
-    [object[]]$completedTokens = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    }
-    elseif ($argumentTokens.Count -gt 0) {
-        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
-    }
-    else {
-        @()
-    }
+    $currentWord = Get-WtUnquotedWord -Text $currentText
+    $matchPrefix = $currentWord.Word
+    $outerQuote = $currentWord.Quote
+    $previousToken = if ($argumentTokens.Count -gt 0) { $argumentTokens[$argumentTokens.Count - 1] } else { '' }
 
     $expandedTokens = New-Object System.Collections.Generic.List[string]
-    foreach ($token in $completedTokens) {
+    foreach ($token in $argumentTokens) {
         if ($token -eq ';' -or $token -eq '`;') {
             $expandedTokens.Add(';')
             continue
@@ -294,6 +335,18 @@ function Complete-WtNative {
         }
     }
 
+    # Attached --opt=value: the option selects the value slot, the rest is the prefix.
+    $attachedPrefix = ''
+    $valueQuote = ''
+    $slotValueOptions = if ($selectedSubcommand) { $subcommandValueOptions[$selectedSubcommand] } else { $topLevelValueOptions + $newTerminalValueOptions }
+    if (-not $expectingValueOption -and $matchPrefix -match '^(--[^=]+)=(.*)$' -and $slotValueOptions -ccontains $Matches[1]) {
+        $previousToken = $Matches[1]
+        $attachedPrefix = $Matches[1] + '='
+        $attachedValue = Get-WtUnquotedWord -Text $Matches[2]
+        $matchPrefix = $attachedValue.Word
+        $valueQuote = $attachedValue.Quote
+    }
+
     [object[]]$completionData = @()
     if (-not $selectedSubcommand) {
         if (($topLevelValueOptions + $newTerminalValueOptions) -contains $previousToken) {
@@ -338,13 +391,30 @@ function Complete-WtNative {
         }
     }
 
+    # Whitespace or an argument-mode metacharacter would split or end a bare word.
+    $quotePattern = '[\s{}();,|&<>''"`$]|^[@#]'
     foreach ($item in $completionData) {
         if ($item.Text -notlike "$matchPrefix*" -and $item.Display -notlike "$matchPrefix*") {
             continue
         }
 
+        $completionText = [string]$item.Text
+        if ($attachedPrefix -and -not $outerQuote) {
+            if ($valueQuote -or $completionText -match $quotePattern) {
+                $completionText = ConvertTo-WtQuotedValue -Value $completionText -Quote $valueQuote
+            }
+
+            $completionText = $attachedPrefix + $completionText
+        }
+        else {
+            $completionText = $attachedPrefix + $completionText
+            if ($outerQuote -or $completionText -match $quotePattern) {
+                $completionText = ConvertTo-WtQuotedValue -Value $completionText -Quote $outerQuote
+            }
+        }
+
         [System.Management.Automation.CompletionResult]::new(
-            $item.Text,
+            $completionText,
             $item.Display,
             [System.Management.Automation.CompletionResultType]::$($item.Type),
             $item.Tooltip
