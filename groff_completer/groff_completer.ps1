@@ -222,7 +222,7 @@ function Get-GroffExecutablePath {
     }
 
     foreach ($candidate in @('groff.exe', 'groff')) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if (-not $command) {
             continue
         }
@@ -438,11 +438,12 @@ function Get-GroffFontFamilyList {
         }
 
         $styles = @()
+        $candidates = New-Object System.Collections.Generic.List[string]
         foreach ($line in @(Get-Content -LiteralPath $descPath -ErrorAction SilentlyContinue)) {
             if ($line -match '^styles\s+(?<styles>.+)$') {
                 $styles = @($Matches['styles'].Trim() -split '\s+')
             } elseif ($line -match '^family\s+(?<family>\S+)') {
-                [void]$families.Add($Matches['family'])
+                [void]$candidates.Add($Matches['family'])
             }
         }
 
@@ -450,17 +451,27 @@ function Get-GroffFontFamilyList {
             continue
         }
 
+        $fontNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
         foreach ($file in @(Get-ChildItem -LiteralPath $deviceDirectory -File -ErrorAction SilentlyContinue)) {
             $name = $file.Name
             if ($name -eq 'DESC' -or $name.Contains('.')) {
                 continue
             }
 
+            [void]$fontNames.Add($name)
             foreach ($style in ($styles | Sort-Object -Property Length -Descending)) {
                 if ($name.Length -gt $style.Length -and $name.EndsWith($style, [System.StringComparison]::Ordinal)) {
-                    [void]$families.Add($name.Substring(0, $name.Length - $style.Length))
+                    [void]$candidates.Add($name.Substring(0, $name.Length - $style.Length))
                     break
                 }
+            }
+        }
+
+        # troff mounts <family><first style> (R) when the family is selected and exits fatally
+        # ("invalid default family") without it, so lone specials such as ZCMI or MI are not families.
+        foreach ($candidate in $candidates) {
+            if ($fontNames.Contains($candidate + $styles[0])) {
+                [void]$families.Add($candidate)
             }
         }
     }

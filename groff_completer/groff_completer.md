@@ -193,7 +193,7 @@ groff -- -<TAB>
 
 - The completer intentionally keeps the long-option surface narrow: only `--help` and `--version` are suggested.
 - `-d`, `-r`, `-o`, `-n`, `-L`, and `-P` use placeholder-style value handling rather than deep semantic validation.
-- `-f` completes font families (not font names): the device selected by an earlier `-T` (default `ps`) has its `DESC` `styles` line read and the style suffixes stripped from the font file names, so `devps` yields `A BM C H HN N P T ZCM`; the classic list is the fallback.
+- `-f` completes font families (not font names): the device selected by an earlier `-T` (default `ps`) has its `DESC` `styles` line read and the style suffixes stripped from the font file names, keeping only families that have a font for the first style (`<family>R`, which troff needs or it exits fatally), so `devps` yields `A BM C H HN N P T ZD` and `devdvi` yields `H T`; the classic list is the fallback.
 - Directory-only slots (`-F`, `-I`, `-M`) fall back to a `<directory>` placeholder when nothing matches, so PowerShell never offers files there.
 - The empty operand slot lists the current directory; an all-flag cluster such as `-ab` is offered as typed plus every one-flag extension.
 - Words are rebuilt from the command element extents and the word under the cursor is completed, so editing an earlier token (`groff -T ut|f8 file.ms`) works.
