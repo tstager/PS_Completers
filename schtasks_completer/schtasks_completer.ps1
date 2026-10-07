@@ -408,20 +408,15 @@ function Update-SchtasksTaskNameCache {
         }
     }
 
-    $csvLines = @($null | & schtasks.exe /Query /FO CSV 2>$null)
-    if (-not $csvLines -or $csvLines.Count -lt 2) {
+    # /NH drops the header row that schtasks otherwise repeats once per task folder.
+    $csvLines = @($null | & schtasks.exe /Query /FO CSV /NH 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
+    if ($csvLines.Count -eq 0) {
         $script:SchtasksCompletionCatalog.TaskNameCache = @()
         $script:SchtasksCompletionCatalog.TaskNameCacheUpdated = Get-Date
         return
     }
 
-    $rows = @($csvLines | ConvertFrom-Csv)
-    $taskNames = foreach ($row in $rows) {
-        $firstProperty = $row.PSObject.Properties | Select-Object -First 1
-        if ($firstProperty) {
-            $firstProperty.Value
-        }
-    }
+    $taskNames = $csvLines | ConvertFrom-Csv -Header TaskName, NextRunTime, Status | ForEach-Object { $_.TaskName }
 
     $script:SchtasksCompletionCatalog.TaskNameCache = @($taskNames | Where-Object { $_ } | Sort-Object -Unique)
     $script:SchtasksCompletionCatalog.TaskNameCacheUpdated = Get-Date

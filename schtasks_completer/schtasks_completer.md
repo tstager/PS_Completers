@@ -153,10 +153,10 @@ The script provides explicit value suggestions for these options:
 For `/TN`, the script runs:
 
 ```powershell
-schtasks.exe /Query /FO CSV
+schtasks.exe /Query /FO CSV /NH
 ```
 
-It extracts the first CSV column as task names, sorts them uniquely, and caches them for 60 seconds.
+`/NH` suppresses the header row that schtasks otherwise repeats for every task folder. It takes the task names from the first (`TaskName`) column, sorts them uniquely, and caches them for 60 seconds.
 
 Task-name suggestions are only returned for `/TN` when the active subcommand is **not** `/Create`. A typed prefix matches with or without the leading `\` (`Mic` finds `\Microsoft\...`).
 
@@ -179,7 +179,7 @@ This completer expects:
 
 - `schtasks.exe` to be available, otherwise completion is empty
 - access to `schtasks.exe /?` and `schtasks.exe <subcommand> /?` for initialization
-- access to `schtasks.exe /Query /FO CSV` for task-name completion
+- access to `schtasks.exe /Query /FO CSV /NH` for task-name completion
 - local filesystem access for `/TR` and `/XML` path suggestions
 
 ## Usage / loading example
