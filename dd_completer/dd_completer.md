@@ -59,8 +59,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - `if`, `of`: filesystem paths
 - `bs`, `ibs`, `obs`, `cbs`: `<size>`, `1K`, `1M`, `1G`
 - `count`, `skip`, `seek`: `<blocks>`
-- `conv`: `ascii`, `ebcdic`, `block`, `unblock`, `lcase`, `ucase`, `sparse`, `swab`, `sync`, `excl`, `nocreat`, `notrunc`, `noerror`, `fdatasync`, `fsync`
-- `iflag`, `oflag`: `append`, `direct`, `directory`, `dsync`, `sync`, `fullblock`, `nonblock`, `noatime`, `nocache`, `noctty`, `nofollow`
+- `conv`: `ascii`, `ebcdic`, `ibm`, `block`, `unblock`, `lcase`, `ucase`, `sparse`, `swab`, `sync`, `excl`, `nocreat`, `notrunc`, `noerror`, `fdatasync`, `fsync`
+- `iflag`, `oflag`: `append`, `direct`, `directory`, `dsync`, `sync`, `nonblock`, `noatime`, `nocache`, `noctty`, `nofollow`, `binary`, `text`
+- `iflag` only: `fullblock`, `count_bytes`, `skip_bytes`
+- `oflag` only: `seek_bytes`
 - `status`: `none`, `noxfer`, `progress`
 
 `conv`, `iflag` and `oflag` take a comma-separated symbol list. Completion continues after each comma (`dd conv=sync,no` offers `nocreat`, `notrunc`, `noerror`), and symbols already in the list are not offered again. PowerShell parses the unquoted list as an array literal and replaces only the word after the last comma, so the completion text is just the symbol; PowerShell passes the list to `dd` joined with commas.

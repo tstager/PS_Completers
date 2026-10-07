@@ -251,6 +251,7 @@ function Get-DdOptionValueCompletions {
     $table['conv'] = @(
         @{ Text = 'ascii'; Tip = 'EBCDIC to ASCII.' }
         @{ Text = 'ebcdic'; Tip = 'ASCII to EBCDIC.' }
+        @{ Text = 'ibm'; Tip = 'ASCII to alternate EBCDIC.' }
         @{ Text = 'block'; Tip = 'Pad newline-terminated records.' }
         @{ Text = 'unblock'; Tip = 'Replace trailing spaces with newline.' }
         @{ Text = 'lcase'; Tip = 'Upper to lower case.' }
@@ -277,6 +278,10 @@ function Get-DdOptionValueCompletions {
         @{ Text = 'nocache'; Tip = 'Request to drop cache.' }
         @{ Text = 'noctty'; Tip = 'Do not assign a controlling terminal.' }
         @{ Text = 'nofollow'; Tip = 'Do not follow symlinks.' }
+        @{ Text = 'binary'; Tip = 'Binary I/O.' }
+        @{ Text = 'text'; Tip = 'Text I/O.' }
+        @{ Text = 'count_bytes'; Tip = 'Treat count=N as a byte count.' }
+        @{ Text = 'skip_bytes'; Tip = 'Treat skip=N as a byte count.' }
     )
     $table['oflag'] = @(
         @{ Text = 'append'; Tip = 'Append mode.' }
@@ -284,12 +289,14 @@ function Get-DdOptionValueCompletions {
         @{ Text = 'directory'; Tip = 'Fail unless a directory.' }
         @{ Text = 'dsync'; Tip = 'Synchronized data I/O.' }
         @{ Text = 'sync'; Tip = 'Synchronized I/O.' }
-        @{ Text = 'fullblock'; Tip = 'Accumulate full input blocks.' }
         @{ Text = 'nonblock'; Tip = 'Non-blocking I/O.' }
         @{ Text = 'noatime'; Tip = 'Do not update access time.' }
         @{ Text = 'nocache'; Tip = 'Request to drop cache.' }
         @{ Text = 'noctty'; Tip = 'Do not assign a controlling terminal.' }
         @{ Text = 'nofollow'; Tip = 'Do not follow symlinks.' }
+        @{ Text = 'binary'; Tip = 'Binary I/O.' }
+        @{ Text = 'text'; Tip = 'Text I/O.' }
+        @{ Text = 'seek_bytes'; Tip = 'Treat seek=N as a byte count.' }
     )
     $table['status'] = @(
         @{ Text = 'none'; Tip = 'Suppress everything but errors.' }
