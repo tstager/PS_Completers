@@ -505,12 +505,13 @@ function Get-GrokPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        # Keep the quote the user opened; otherwise double-quote paths with whitespace.
+        # Keep the quote the user opened; otherwise single-quote paths that
+        # hold whitespace or an argument-mode metacharacter, as the engine does.
         $quotedPath = $pathText
-        if ($QuoteChar -eq "'") {
-            $quotedPath = "'" + $pathText.Replace("'", "''") + "'"
-        } elseif ($QuoteChar -eq '"' -or $pathText -match '\s') {
+        if ($QuoteChar -eq '"') {
             $quotedPath = '"' + $pathText.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+        } elseif ($QuoteChar -eq "'" -or $pathText -match '[\s{}();,|&<>''"`$]' -or $pathText -match '^[@#]') {
+            $quotedPath = "'" + $pathText.Replace("'", "''") + "'"
         }
 
         if ($item.PSIsContainer) {

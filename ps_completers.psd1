@@ -473,7 +473,7 @@
         @{
             Path    = 'grok_completer/grok_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:593B95146B94C5E1C5FC4B721CD350C875605940D809B82B6B65065FD797C826'
+            Hash    = 'SHA256:DB644A60AC7E4A3BFB451A6B4276137B755EF904E88598D6662D0B0F65AFEE41'
             Targets = @(
                 @{ CommandName = 'grok'; Native = $true }
                 @{ CommandName = 'grok.exe'; Native = $true }
