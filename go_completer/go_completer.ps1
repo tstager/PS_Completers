@@ -390,10 +390,16 @@ function ConvertFrom-GoHelpText {
         }
     }
 
-    # Prose: "The -n flag prints commands that would be executed."
-    foreach ($group in [regex]::Matches($Text, '(?<!\S)-{1,2}(?<name>[a-z][a-z0-9_-]*)(?:=(?<value>\S+?))?\s+flag')) {
-        $valueName = if ($group.Groups['value'].Success) { $group.Groups['value'].Value } else { '' }
-        Add-GoHelpFlag -Flags $flags -Name ('-' + $group.Groups['name'].Value) -ValueName $valueName -Authoritative $false
+    # Prose: "The -n flag prints commands that would be executed." and lists such
+    # as "The -require=path@version and -droprequire=path flags", where every
+    # option in the list is a flag, not only the one next to the word.
+    $proseOption = '-{1,2}[a-z][a-z0-9_-]*(?:=\S+?)?'
+    $proseSeparator = '(?:,\s+(?:and\s+|or\s+)?|\s+(?:and|or)\s+)'
+    foreach ($list in [regex]::Matches($Text, "(?<!\S)(?<list>$proseOption(?:$proseSeparator$proseOption)*)\s+flag")) {
+        foreach ($group in [regex]::Matches($list.Groups['list'].Value, '(?<!\S)-{1,2}(?<name>[a-z][a-z0-9_-]*)(?:=(?<value>\S+?))?(?=,?(?:\s|$))')) {
+            $valueName = if ($group.Groups['value'].Success) { $group.Groups['value'].Value } else { '' }
+            Add-GoHelpFlag -Flags $flags -Name ('-' + $group.Groups['name'].Value) -ValueName $valueName -Authoritative $false
+        }
     }
 
     [pscustomobject]@{
@@ -1250,6 +1256,15 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
         return
     }
 
+    # go parses a command's flags only up to its first operand; later dashed
+    # words are operands ('malformed import path "-race"'), and go run hands
+    # them to the program. go test reads flags anywhere, and help and tool
+    # operands are a topic or a tool name.
+    $flagsClosed = $context.OperandCount -gt 0 -and @('test', 'help', 'tool') -notcontains $context.Command
+    if ($flagsClosed -and $context.Command -eq 'run') {
+        return
+    }
+
     if ($currentWord -like '-*=*') {
         $equalsIndex = $currentWord.IndexOf('=')
         $flagPart = Get-GoOptionBaseName -Token $currentWord.Substring(0, $equalsIndex)
@@ -1326,7 +1341,7 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
         return
     }
 
-    if ($currentWord -like '-*') {
+    if ($currentWord -like '-*' -and -not $flagsClosed) {
         Get-GoOptionCompletions -FlagModel $context.FlagModel -WordToComplete $currentWord | Get-GoUniqueCompletions
         return
     }
@@ -1374,7 +1389,7 @@ Register-ArgumentCompleter -Native -CommandName @('go', 'go.exe') -ScriptBlock {
         [void]$tailResults.Add($item)
     }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
+    if ([string]::IsNullOrEmpty($currentWord) -and -not $flagsClosed) {
         foreach ($item in @(Get-GoOptionCompletions -FlagModel $context.FlagModel -WordToComplete $currentWord)) {
             [void]$tailResults.Add($item)
         }

@@ -20,7 +20,9 @@ reads all four parts of it:
 - the indented flag definitions in the body (`\t-p n`, `\t-covermode set,count,atomic`,
   `  -c int`), which is where `go help build` documents the shared build-flag
   block and where `go help doc` and `go help vet` document their own
-- the prose flag sentences go uses elsewhere (`The -n flag prints commands ...`)
+- the prose flag sentences go uses elsewhere (`The -n flag prints commands ...`),
+  including every option of a list such as
+  `The -require=path@version and -droprequire=path flags`
 - the `The commands are:` and `Additional help topics:` tables, for root
   commands, help topics and nested commands
 
@@ -57,6 +59,10 @@ reads all four parts of it:
   fallback list.
 - `go test -args` passthrough detection so the completer stops interpreting the
   remainder of the command line.
+- Flags stop at the first operand, as they do in go's flag parsing:
+  `go build . -` offers nothing (go would read `-race` as an import path), and
+  everything after `go run`'s package belongs to the program. `go test` is the
+  exception and keeps offering its flags after packages.
 
 ## Runtime notes
 
