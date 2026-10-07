@@ -12,7 +12,7 @@ function Get-Sha1sumCompletionOptions {
     $fallbackOptions = @('-b', '--binary', '-c', '--check', '-w', '--warn', '--status', '--quiet', '--strict', '--ignore-missing', '--tag', '-t', '--text', '-z', '--zero', '-h', '--help', '-V', '--version')
     $commandCandidates = @('sha1sum.exe', 'sha1sum')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -198,6 +198,36 @@ function Get-Sha1sumOptionDescription {
     'Option for sha1sum.'
 }
 
+function Complete-Sha1sumShortFlagCluster {
+    param([string]$CurrentWord)
+
+    # Every sha1sum option is a boolean switch, so '-cw' is '-c -w'; extend a cluster of known
+    # short flags with each flag not yet in it.
+    if ($CurrentWord -notmatch '^-[A-Za-z]{2,}$') {
+        return @()
+    }
+
+    $shortFlags = @(Get-Sha1sumCompletionOptions | Where-Object { $_ -cmatch '^-[A-Za-z]$' })
+    $usedLetters = @($CurrentWord.Substring(1).ToCharArray() | ForEach-Object { [string]$_ })
+    foreach ($letter in $usedLetters) {
+        if (('-' + $letter) -cnotin $shortFlags) {
+            return @()
+        }
+    }
+
+    @(
+        foreach ($flag in $shortFlags) {
+            $letter = $flag.Substring(1)
+            if ($letter -cin $usedLetters) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $letter
+            New-Sha1sumCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $flag, (Get-Sha1sumOptionDescription -Option $flag))
+        }
+    )
+}
+
 function Complete-Sha1sum {
     param(
         [string]$wordToComplete,
@@ -216,13 +246,18 @@ function Complete-Sha1sum {
     }
 
     if ($currentWord.StartsWith('-')) {
-        return @(
+        $optionMatches = @(
             foreach ($option in Get-Sha1sumCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-Sha1sumCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-Sha1sumOptionDescription -Option $option)
                 }
             }
         )
+        if ($optionMatches.Count -gt 0) {
+            return $optionMatches
+        }
+
+        return Complete-Sha1sumShortFlagCluster -CurrentWord $currentWord
     }
 
     Get-Sha1sumPathCompletions -InputPath $currentWord
