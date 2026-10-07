@@ -638,7 +638,7 @@
         @{
             Path    = 'numfmt_completer/numfmt_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:988A5E194C54ED8CC94034DC199D6EC609220F1EF870B2D3E9554F47473468D2'
+            Hash    = 'SHA256:8EC141B061D4349B940E8C5A99F438DCBF428FC77181AC0FE74CF2682A0FF1D4'
             Targets = @(
                 @{ CommandName = 'numfmt'; Native = $true }
                 @{ CommandName = 'numfmt.exe'; Native = $true }

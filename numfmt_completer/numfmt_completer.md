@@ -32,12 +32,9 @@ Representative options include (parsed from the installed build's `--help`):
 - `--to-unit`
 - `-z`
 - `--zero-terminated`
-- `--help`
-- `--version`
-- `-M`
-- `-B1`
-- `-l`
-- `-lh`
+- `--unit-separator` (uutils)
+- `-h`, `--help`
+- `-V`, `--version`
 
 ## Registration and command names
 
@@ -67,7 +64,7 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 
 ## How completion works
 
-- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. Parsing stops at the first unindented line after the option table (`UNIT options:` in both the GNU and uutils help), so the field-range prose (`-M`) and GNU's examples (`-B1`, `-lh`) are not offered as options. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value sets are the full enumerations from the GNU 8.32 and uutils 0.11.0 help: `--round` up/down/from-zero/towards-zero/nearest, `--invalid` abort/fail/warn/ignore, `--from` none/auto/si/iec/iec-i, `--to` none/si/iec/iec-i (both builds reject `--to=auto`), `--format` `%f`, `%'f`, `%10f`, `%010f`, `%-10f`, `%.1f`, and `--field` in the N, N-, N-M, -M and - shapes. `-d` is mapped to `--delimiter`, and `--header[=N]` only takes its value attached, so `--header ` is followed by the operand placeholders.
 - Tokens are taken from the raw command text up to the cursor because the PowerShell parser drops a bare `,` (`numfmt -d , `) from `CommandElements`; quoted values are matched on their bare text and re-quoted.

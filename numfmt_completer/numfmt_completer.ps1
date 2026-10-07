@@ -30,6 +30,12 @@ function Get-NumfmtCompletionOptions {
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            # The option table ends at the first unindented line after it ('UNIT options:');
+            # the prose below it lists field ranges such as '-M' that are not options.
+            if ($options.Count -gt 0 -and $line -match '^\S') {
+                break
+            }
+
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
