@@ -72,12 +72,23 @@ The script provides:
 - filename completion for path-shaped options (`--config`, `--file`,
   `--env-file`, `--tlscacert`, `--project-directory`, ...) and for any
   path-shaped word, so `docker compose -f .\<TAB>` still walks the filesystem
-- a `<type>` placeholder for a value slot with no enum and no path meaning, so
-  the slot does not silently fill with unrelated file names
-- operand placeholders taken from the `Usage:` line (`docker logs <TAB>` offers
-  `<CONTAINER>`, `docker network create <TAB>` offers `<NETWORK>`); operands
-  named `PATH`, `URL`, `FILE` or `DIR` are left to the engine's own path
-  completion
+- live object names in operand and option-value slots, taken from the CLI's
+  own cobra completion (`docker __complete <settled words> ""`): containers for
+  `docker logs <TAB>` / `docker exec <TAB>`, images for `docker run <TAB>` /
+  `docker rmi <TAB>`, networks for `docker run --network <TAB>` (and
+  `--network=b<TAB>`), volumes, and Compose service names for
+  `docker compose up <TAB>` in a project directory. The partial word is filtered
+  locally, so one query serves every keystroke; a name that needs quoting, or a
+  word the user opened with a quote, is emitted quoted
+- context names for `docker -c <TAB>`, `docker --context=<TAB>` and the
+  `CONTEXT` operand of `docker context use|rm|inspect|export|update`, read
+  passively from `<config>/contexts/meta/*/meta.json` plus `default` (only the
+  name and the docker endpoint, shown as the tooltip, are read)
+- a `<type>` placeholder for a value slot with no enum, no path meaning and no
+  live values, so the slot does not silently fill with unrelated file names
+- operand placeholders taken from the `Usage:` line when no live names exist
+  (`docker network create <TAB>` offers `<NETWORK>`); operands named `PATH`,
+  `URL`, `FILE` or `DIR` are left to the engine's own path completion
 
 Because completion is based on live help output, it remains aligned with the
 installed Docker version rather than a stale, manually-maintained static table.
@@ -90,8 +101,19 @@ installed Docker version rather than a stale, manually-maintained static table.
 - A catalog that comes back empty is treated as a transient failure and retried
   after thirty seconds rather than being cached for the rest of the session
 - Does not make any destructive or state-changing calls while completing
-- Does not enumerate containers, images, volumes or contexts; those slots get a
-  placeholder instead of a daemon round-trip
+- `docker __complete` runs through the same bounded child (stdin closed,
+  four-second budget, ANSI stripped). Its answer, including an empty one, is
+  cached for 15 seconds per working directory, `DOCKER_HOST`, `DOCKER_CONTEXT`,
+  `DOCKER_CONFIG`, `COMPOSE_FILE`, `COMPOSE_PROFILES` and settled words
+- Daemon-backed queries run only when the effective endpoint (resolved like the
+  CLI: `--context`, `-H/--host`, `DOCKER_HOST`, `DOCKER_CONTEXT`, the store's
+  `currentContext`) is a local `npipe://` pipe that already exists or a local
+  `unix://` socket. A remote endpoint (`tcp://`, `ssh://`), an unknown context,
+  or a stopped engine keeps the placeholder: completion never makes a network
+  call and never starts Docker Desktop
+- Compose service completion reads the project files and needs no daemon, so it
+  is not gated on the engine. Other CLI plugins (`scout`, `buildx`, `model`,
+  `debug`, ...) are never asked, because their completion may reach the network
 
 ## Usage / loading example
 ```powershell
@@ -122,6 +144,14 @@ installed Docker version rather than a stale, manually-maintained static table.
   `docker build .\` and `docker compose -f .\` unchanged at path completion,
   `$x = 1; docker ps -` identical to the same input at the start of a line
 - `$Error` did not grow across the probe set
+- Live names (Docker 29.8.2, Desktop running): `docker logs ` (12 -> 24, 13
+  containers replace `<CONTAINER>`), `docker run ` (115 -> 174 images),
+  `docker compose up ` in a project (38 -> 52 services), `docker -c ` and
+  `docker context use ` (`desktop-linux`, `default`),
+  `docker run --network=b` (0 -> `--network=bridge`),
+  `docker logs 'ai_memory-d` (0 -> quoted container names). `docker -H tcp://...
+  logs `, `docker --context nosuchctx logs ` and `docker buildx use ` start no
+  process and keep their placeholders. Cold Tab 0.5-0.7 s, warm about 25 ms
 
 ## Limitations / notes
 - This script does not implement every Docker plugin surface as a static custom grammar.

@@ -53,13 +53,60 @@ function Get-DockerCatalogCache {
     return (Get-Variable -Name 'DockerCatalogCache' -Scope Script).Value
 }
 
-function Get-DockerHelpText {
-    param([string[]]$Segments)
+function Invoke-DockerProcess {
+    param(
+        [string[]]$Arguments,
+        [string]$WorkingDirectory = ''
+    )
 
     $commandPath = Get-DockerExecutablePath
     if ([string]::IsNullOrWhiteSpace($commandPath)) {
-        return ''
+        return $null
     }
+
+    # A CLI plugin that hangs must not hang the prompt: standard input is closed
+    # immediately and the child is killed if it outlives the budget.
+    $output = $null
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($commandPath)
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        if (-not [string]::IsNullOrEmpty($WorkingDirectory)) {
+            $process.StartInfo.WorkingDirectory = $WorkingDirectory
+        }
+
+        foreach ($argument in @($Arguments)) {
+            [void]$process.StartInfo.ArgumentList.Add($argument)
+        }
+
+        [void]$process.Start()
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+
+        if ($process.WaitForExit(4000)) {
+            $output = [pscustomobject]@{
+                StdOut = ($stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+                StdErr = ($stderr.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+            }
+        } else {
+            $process.Kill($true)
+        }
+    } catch {
+        $output = $null
+    } finally {
+        $process.Dispose()
+    }
+
+    return $output
+}
+
+function Get-DockerHelpText {
+    param([string[]]$Segments)
 
     $arguments = New-Object System.Collections.Generic.List[string]
     foreach ($segment in @($Segments)) {
@@ -70,38 +117,319 @@ function Get-DockerHelpText {
 
     [void]$arguments.Add('--help')
 
-    # A CLI plugin that hangs must not hang the prompt: standard input is closed
-    # immediately and the child is killed if it outlives the budget.
-    $helpText = ''
-    $process = [System.Diagnostics.Process]::new()
-    try {
-        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($commandPath)
-        $process.StartInfo.UseShellExecute = $false
-        $process.StartInfo.CreateNoWindow = $true
-        $process.StartInfo.RedirectStandardInput = $true
-        $process.StartInfo.RedirectStandardOutput = $true
-        $process.StartInfo.RedirectStandardError = $true
-        foreach ($argument in $arguments) {
-            [void]$process.StartInfo.ArgumentList.Add($argument)
-        }
-
-        [void]$process.Start()
-        $process.StandardInput.Close()
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-
-        if ($process.WaitForExit(4000)) {
-            $helpText = ($stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') + "`n" + ($stderr.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
-        } else {
-            $process.Kill($true)
-        }
-    } catch {
-        $helpText = ''
-    } finally {
-        $process.Dispose()
+    $output = Invoke-DockerProcess -Arguments $arguments.ToArray()
+    if ($null -eq $output) {
+        return ''
     }
 
-    return $helpText
+    return $output.StdOut + "`n" + $output.StdErr
+}
+
+function ConvertFrom-DockerQuotedToken {
+    param([string]$Token)
+
+    if ($Token.Length -ge 2 -and $Token[0] -eq "'" -and $Token[$Token.Length - 1] -eq "'") {
+        return $Token.Substring(1, $Token.Length - 2).Replace("''", "'")
+    }
+
+    if ($Token.Length -ge 2 -and $Token[0] -eq '"' -and $Token[$Token.Length - 1] -eq '"') {
+        return $Token.Substring(1, $Token.Length - 2)
+    }
+
+    return $Token
+}
+
+function Get-DockerRootSetting {
+    param([string[]]$Tokens)
+
+    # Global options sit before the first command word: -H/--host, -c/--context
+    # and --config decide which daemon and which context store a query would use.
+    $setting = @{ Host = ''; Context = ''; Config = '' }
+    $rootCatalog = Get-DockerCommandCatalog -Segments @()
+    $tokenList = @($Tokens)
+
+    for ($index = 0; $index -lt $tokenList.Count; $index++) {
+        $token = $tokenList[$index]
+        if (-not $token.StartsWith('-')) {
+            break
+        }
+
+        $name = $token
+        $value = $null
+        if ($token -match '^(?<name>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
+            $name = $Matches.name
+            $value = $Matches.value
+        } else {
+            $option = Find-DockerOption -Catalog $rootCatalog -Name $token
+            if ($null -ne $option -and $option.TakesValue -and $index + 1 -lt $tokenList.Count) {
+                $index++
+                $value = $tokenList[$index]
+            }
+        }
+
+        if ($null -eq $value) {
+            continue
+        }
+
+        $value = ConvertFrom-DockerQuotedToken -Token $value
+        if ($name -ceq '-H' -or $name -ceq '--host') {
+            $setting.Host = $value
+        } elseif ($name -ceq '-c' -or $name -ceq '--context') {
+            $setting.Context = $value
+        } elseif ($name -ceq '--config') {
+            $setting.Config = $value
+        }
+    }
+
+    return $setting
+}
+
+function Get-DockerDefaultHost {
+    if (-not [string]::IsNullOrWhiteSpace($env:DOCKER_HOST)) {
+        return $env:DOCKER_HOST
+    }
+
+    if ($IsWindows) {
+        return 'npipe:////./pipe/docker_engine'
+    }
+
+    return 'unix:///var/run/docker.sock'
+}
+
+function Get-DockerContextEntry {
+    param([hashtable]$Setting)
+
+    # Contexts live in <config>/contexts/meta/<digest>/meta.json. Reading them is a
+    # passive file read; only the name and the docker endpoint are taken, never
+    # TLS material or anything else the store holds.
+    $configDirectory = $Setting.Config
+    if ([string]::IsNullOrWhiteSpace($configDirectory)) {
+        $configDirectory = if ([string]::IsNullOrWhiteSpace($env:DOCKER_CONFIG)) { [System.IO.Path]::Combine($HOME, '.docker') } else { $env:DOCKER_CONFIG }
+    }
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    $metaRoot = [System.IO.Path]::Combine($configDirectory, 'contexts', 'meta')
+    if ([System.IO.Directory]::Exists($metaRoot)) {
+        foreach ($directory in [System.IO.Directory]::GetDirectories($metaRoot)) {
+            $metaFile = [System.IO.Path]::Combine($directory, 'meta.json')
+            if (-not [System.IO.File]::Exists($metaFile)) {
+                continue
+            }
+
+            $text = [System.IO.File]::ReadAllText($metaFile)
+            if ($text -notmatch '"Name"\s*:\s*"(?<name>[^"\\]+)"') {
+                continue
+            }
+
+            $name = $Matches.name
+            $endpoint = if ($text -match '"docker"\s*:\s*\{[^{}]*?"Host"\s*:\s*"(?<host>[^"]*)"') { $Matches.host } else { '' }
+            [void]$entries.Add([pscustomobject]@{ Name = $name; Description = $endpoint })
+        }
+    }
+
+    [void]$entries.Add([pscustomobject]@{ Name = 'default'; Description = (Get-DockerDefaultHost) })
+
+    $current = ''
+    $configFile = [System.IO.Path]::Combine($configDirectory, 'config.json')
+    if ([System.IO.File]::Exists($configFile) -and [System.IO.File]::ReadAllText($configFile) -match '"currentContext"\s*:\s*"(?<name>[^"]*)"') {
+        $current = $Matches.name
+    }
+
+    return [pscustomobject]@{
+        Entries = @($entries.ToArray())
+        Current = $current
+    }
+}
+
+function Test-DockerLocalDaemon {
+    param([string[]]$Tokens)
+
+    # Same precedence as the CLI: --context, then --host, then DOCKER_HOST, then
+    # DOCKER_CONTEXT, then the store's current context.
+    $setting = Get-DockerRootSetting -Tokens $Tokens
+    $endpoint = ''
+    $contextName = ''
+
+    if (-not [string]::IsNullOrWhiteSpace($setting.Context)) {
+        $contextName = $setting.Context
+    } elseif (-not [string]::IsNullOrWhiteSpace($setting.Host)) {
+        $endpoint = $setting.Host
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:DOCKER_HOST)) {
+        $endpoint = $env:DOCKER_HOST
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:DOCKER_CONTEXT)) {
+        $contextName = $env:DOCKER_CONTEXT
+    } else {
+        $contextName = (Get-DockerContextEntry -Setting $setting).Current
+    }
+
+    if ([string]::IsNullOrEmpty($endpoint)) {
+        if ([string]::IsNullOrEmpty($contextName) -or $contextName -ceq 'default') {
+            $endpoint = Get-DockerDefaultHost
+        } else {
+            foreach ($entry in @((Get-DockerContextEntry -Setting $setting).Entries)) {
+                if ($entry.Name -ceq $contextName) {
+                    $endpoint = $entry.Description
+                    break
+                }
+            }
+        }
+    }
+
+    # Only a daemon on this machine that is already listening may be asked: a
+    # remote endpoint is a network call, and a missing pipe means the engine is
+    # not running, which completion must never try to change.
+    if ($endpoint -match '^npipe:/{2,4}\./pipe/(?<pipe>[^/\\]+)$') {
+        $pipePath = '\\.\pipe\' + $Matches.pipe
+        foreach ($existing in [System.IO.Directory]::GetFiles('\\.\pipe\')) {
+            if ([string]::Equals($existing, $pipePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+
+        return $false
+    }
+
+    if ($endpoint -match '^unix://(?<path>/.+)$') {
+        return [System.IO.File]::Exists($Matches.path)
+    }
+
+    return $false
+}
+
+function Get-DockerLiveCache {
+    $cache = Get-Variable -Name 'DockerLiveCache' -Scope Script -ErrorAction Ignore
+    if ($null -eq $cache -or $null -eq $cache.Value) {
+        Set-Variable -Name 'DockerLiveCache' -Value ([System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)) -Scope Script
+    }
+
+    return (Get-Variable -Name 'DockerLiveCache' -Scope Script).Value
+}
+
+function Get-DockerLiveCandidate {
+    param(
+        [object]$Context,
+        [string[]]$Arguments,
+        [switch]$Operand
+    )
+
+    $path = @($Context.Path)
+    $argumentList = @($Arguments)
+
+    # Context names come straight from the context store, without a process:
+    # the root -c/--context value, and the CONTEXT operand of every
+    # 'docker context' verb that takes an existing context.
+    $contextOption = (-not $Operand -and $path.Count -eq 0 -and $argumentList.Count -gt 0 -and $argumentList[$argumentList.Count - 1] -cin @('-c', '--context'))
+    $contextOperand = ($Operand -and $path.Count -eq 2 -and $path[0] -ceq 'context' -and $path[1] -cnotin @('create', 'import'))
+    if ($contextOption -or $contextOperand) {
+        return @((Get-DockerContextEntry -Setting (Get-DockerRootSetting -Tokens $Context.Tokens)).Entries)
+    }
+
+    $workingDirectory = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath
+    $processArguments = New-Object System.Collections.Generic.List[string]
+    [void]$processArguments.Add('__complete')
+    foreach ($argument in $argumentList) {
+        [void]$processArguments.Add((ConvertFrom-DockerQuotedToken -Token $argument))
+    }
+
+    # The partial word is filtered here, so one query serves every keystroke.
+    [void]$processArguments.Add('')
+
+    $key = @(
+        $workingDirectory, $env:DOCKER_HOST, $env:DOCKER_CONTEXT, $env:DOCKER_CONFIG,
+        $env:COMPOSE_FILE, $env:COMPOSE_PROFILES, ($processArguments.ToArray() -join "`0")
+    ) -join "`n"
+
+    $cache = Get-DockerLiveCache
+    if ($cache.ContainsKey($key) -and $cache[$key].Stopwatch.Elapsed.TotalSeconds -lt 15) {
+        return $cache[$key].Candidates
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+
+    # Compose reads its project files and needs no daemon. Core commands ask the
+    # local daemon; other CLI plugins are skipped because their completion may
+    # reach the network.
+    $allowed = $true
+    if ($path.Count -gt 0 -and $path[0] -cne 'compose') {
+        foreach ($command in @((Get-DockerCommandCatalog -Segments @()).Commands)) {
+            if ($command.Name -ceq $path[0] -and $command.IsPlugin) {
+                $allowed = $false
+                break
+            }
+        }
+    }
+
+    if ($allowed -and ($path.Count -eq 0 -or $path[0] -cne 'compose')) {
+        $allowed = Test-DockerLocalDaemon -Tokens $Context.Tokens
+    }
+
+    $output = if ($allowed) { Invoke-DockerProcess -Arguments $processArguments.ToArray() -WorkingDirectory $workingDirectory } else { $null }
+    if ($null -ne $output) {
+        # cobra prints one candidate per line ("name<TAB>description") and ends
+        # with ":<directive>"; directive bit 1 means the completion failed.
+        $lines = @([regex]::Split($output.StdOut.TrimEnd(), '\r?\n'))
+        $last = $lines[$lines.Count - 1]
+        if ($last -match '^:(?<directive>\d+)$' -and ([int]$Matches.directive -band 1) -eq 0) {
+            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            foreach ($line in @($lines | Select-Object -First ($lines.Count - 1))) {
+                if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('_activeHelp_')) {
+                    continue
+                }
+
+                $parts = $line.Split("`t", 2)
+                $name = $parts[0].Trim()
+                if ($name.Length -gt 0 -and $seen.Add($name)) {
+                    $description = if ($parts.Count -gt 1) { $parts[1].Trim() } else { '' }
+                    [void]$candidates.Add([pscustomobject]@{ Name = $name; Description = $description })
+                }
+            }
+        }
+    }
+
+    $cache[$key] = [pscustomobject]@{
+        Candidates = @($candidates.ToArray())
+        Stopwatch  = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+
+    return @($candidates.ToArray())
+}
+
+function Add-DockerLiveResult {
+    param(
+        [System.Collections.Generic.List[object]]$Results,
+        [object[]]$Candidates,
+        [string]$WordToComplete,
+        [string]$Prefix,
+        [string]$ToolTip
+    )
+
+    # An opening quote the user typed is kept; the parser hands it over closed.
+    $quote = ''
+    $word = $WordToComplete
+    if ($word.Length -gt 0 -and ($word[0] -eq "'" -or $word[0] -eq '"')) {
+        $quote = [string]$word[0]
+        $word = $word.Substring(1)
+        if ($word.EndsWith($quote)) {
+            $word = $word.Substring(0, $word.Length - 1)
+        }
+    }
+
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($word) + '*'
+    foreach ($candidate in @($Candidates)) {
+        if ($candidate.Name -notlike $pattern) {
+            continue
+        }
+
+        $text = $candidate.Name
+        if ($quote -eq '"') {
+            $text = '"' + ($text -replace '([`"$])', '`$1') + '"'
+        } elseif ($quote -eq "'" -or $text -match '[\s{}();,|&<>''"`$]|^[@#]') {
+            $text = "'" + $text.Replace("'", "''") + "'"
+        }
+
+        $candidateTip = if ([string]::IsNullOrWhiteSpace($candidate.Description)) { $ToolTip } else { $candidate.Description }
+        [void]$Results.Add((New-DockerCompletionResult -CompletionText ($Prefix + $text) -ResultType 'ParameterValue' -ToolTip $candidateTip -ListItemText $candidate.Name))
+    }
 }
 
 function Get-DockerOptionValueType {
@@ -208,11 +536,12 @@ function ConvertFrom-DockerHelp {
         }
 
         if ($section -eq 'Commands') {
-            if ($indent -ge 2 -and $indent -le 6 -and $line -match '^\s{2,}(?<name>[A-Za-z0-9][A-Za-z0-9_-]*)\*?(?:\s{2,}(?<description>\S.*))?$') {
+            if ($indent -ge 2 -and $indent -le 6 -and $line -match '^\s{2,}(?<name>[A-Za-z0-9][A-Za-z0-9_-]*)(?<plugin>\*)?(?:\s{2,}(?<description>\S.*))?$') {
                 $name = $Matches.name
+                $isPlugin = $Matches.ContainsKey('plugin')
                 $description = if ($Matches.ContainsKey('description')) { $Matches.description } else { '' }
                 if ($commandSeen.Add($name)) {
-                    [void]$commands.Add([pscustomobject]@{ Name = $name; Description = $description })
+                    [void]$commands.Add([pscustomobject]@{ Name = $name; Description = $description; IsPlugin = $isPlugin })
                 }
             }
 
@@ -487,7 +816,9 @@ function Get-DockerOptionValueCompletion {
     param(
         [object]$Option,
         [string]$WordToComplete,
-        [string]$Prefix
+        [string]$Prefix,
+        [object]$Context,
+        [string[]]$Arguments
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -510,6 +841,14 @@ function Get-DockerOptionValueCompletion {
         }
 
         return @()
+    }
+
+    # Live values (contexts, networks, ...) replace the placeholder when the
+    # CLI's own completion has any; otherwise the placeholder stays.
+    $candidates = @(Get-DockerLiveCandidate -Context $Context -Arguments $Arguments)
+    if ($candidates.Count -gt 0) {
+        Add-DockerLiveResult -Results $results -Candidates $candidates -WordToComplete $WordToComplete -Prefix $Prefix -ToolTip $Option.Description
+        return [object[]]$results
     }
 
     if ([string]::IsNullOrEmpty($WordToComplete)) {
@@ -540,7 +879,7 @@ function Complete-DockerCommand {
     if ($prefix -match '^(?<name>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
         $option = Find-DockerOption -Catalog $context.Catalog -Name $Matches.name
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $Matches.value -Prefix "$($Matches.name)=")
+            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $Matches.value -Prefix "$($Matches.name)=" -Context $context -Arguments @(@($context.Tokens) + @($Matches.name)))
         }
 
         return @()
@@ -562,7 +901,7 @@ function Complete-DockerCommand {
     if ($context.Previous.StartsWith('-') -and -not $context.Previous.Contains('=')) {
         $option = Find-DockerOption -Catalog $context.Catalog -Name $context.Previous
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $prefix -Prefix '')
+            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $prefix -Prefix '' -Context $context -Arguments @($context.Tokens))
         }
     }
 
@@ -579,12 +918,17 @@ function Complete-DockerCommand {
     }
 
     # Operand slot. A path-shaped operand is left to the engine; anything else gets
-    # a placeholder so the slot does not silently fill with unrelated file names.
-    if ([string]::IsNullOrEmpty($prefix)) {
-        $operands = @($context.Catalog.Operands)
-        if ($context.OperandCount -lt $operands.Count) {
-            $operand = $operands[$context.OperandCount]
-            if (-not $operand.IsPath) {
+    # the CLI's own live names (containers, images, services, contexts, ...), or a
+    # placeholder when there are none, so the slot does not silently fill with
+    # unrelated file names.
+    $operands = @($context.Catalog.Operands)
+    if ($context.OperandCount -lt $operands.Count) {
+        $operand = $operands[$context.OperandCount]
+        if (-not $operand.IsPath) {
+            $candidates = @(Get-DockerLiveCandidate -Context $context -Arguments @($context.Tokens) -Operand)
+            if ($candidates.Count -gt 0) {
+                Add-DockerLiveResult -Results $results -Candidates $candidates -WordToComplete $prefix -Prefix '' -ToolTip "$($operand.Name) operand"
+            } elseif ([string]::IsNullOrEmpty($prefix)) {
                 [void]$results.Add((New-DockerCompletionResult -CompletionText "<$($operand.Name)>" -ResultType 'ParameterValue' -ToolTip "$($operand.Name) operand" -ListItemText "<$($operand.Name)>"))
             }
         }
