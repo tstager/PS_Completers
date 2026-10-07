@@ -754,7 +754,7 @@
         @{
             Path    = 'pr_completer/pr_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:92380C5DDA48A4B43B5E6522D713A64E5B7CC4D87ADC79C7D46D466FBFA3B5B8'
+            Hash    = 'SHA256:D88DFB4185C38C7F1F696044D37E394A6E95A470450E6CC9DD34ECEA2ABEAE8A'
             Targets = @(
                 @{ CommandName = 'pr'; Native = $true }
                 @{ CommandName = 'pr.exe'; Native = $true }

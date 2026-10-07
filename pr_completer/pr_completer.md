@@ -114,6 +114,8 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 - `-S`, `--sep-string`: `<string>`
 - `-w`, `--width`, `-W`, `--page-width`: `72`, `<cols>`
 
+Optional-argument options are build-aware. When the installed `pr` documents an option's argument as attached-only (GNU coreutils: `-s[CHAR], --separator[=CHAR]`, likewise `-e`/`--expand-tabs`, `-i`/`--output-tabs`, `-n`/`--number-lines`, `-S`/`--sep-string`), its values are offered only in the attached form (`--separator=`), because GNU `pr` parses a separate word as a FILE. In that slot the completer returns nothing, so the usual file completion applies. uutils coreutils documents them as `--separator [<char>]` and consumes a separate word as the value, so the separate form keeps its value hints there. The attached-only set is read from the same `--help` pass as the option names.
+
 ## Representative validation scenarios
 
 ```powershell

@@ -12,7 +12,7 @@ function Get-PrCompletionOptions {
     $fallbackOptions = @('-a', '--across', '-c', '--show-control-chars', '-d', '--double-space', '-e', '--expand-tabs', '-f', '--form-feed', '-h', '--header', '-i', '--indent', '-l', '--length', '-m', '--merge', '-n', '--number-lines', '-o', '--output-tabs', '-r', '--no-file-warnings', '-s', '--separator', '-t', '--omit-header', '-T', '--omit-pagination', '-v', '--show-all', '-w', '--width', '-F', '--page-range', '--help', '--version')
     $commandCandidates = @('pr.exe', 'pr')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -29,7 +29,13 @@ function Get-PrCompletionOptions {
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        $attachedOnly = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            # GNU spells optional arguments attached ('-s[CHAR], --separator[=CHAR]'): a separate word is a FILE.
+            foreach ($match in [regex]::Matches($line, '(?<=^\s*(?:-\S*,\s+)*)(--?[A-Za-z0-9][A-Za-z0-9-]*)\[')) {
+                [void]$attachedOnly.Add($match.Groups[1].Value)
+            }
+
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
@@ -52,6 +58,7 @@ function Get-PrCompletionOptions {
         if ($options.Count -gt 0) {
             Set-Variable -Name 'PrCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
             Set-Variable -Name 'PrCompletionDescriptions' -Value $descriptions -Scope Script
+            Set-Variable -Name 'PrAttachedOnlyOptions' -Value $attachedOnly -Scope Script
             return (Get-Variable -Name 'PrCompletionOptions' -Scope Script).Value
         }
     }
@@ -188,9 +195,6 @@ function Get-PrValueCompletions {
         '--width' { return @(
             New-PrCompletionResult -CompletionText '72' -ListItemText '72' -ResultType 'ParameterValue' -ToolTip 'Standard page width.'
             New-PrCompletionResult -CompletionText '<width>' -ListItemText '<width>' -ResultType 'ParameterValue' -ToolTip 'Page width.'
-        ) }
-        '--separator' { return @(
-            New-PrCompletionResult -CompletionText '<separator>' -ListItemText '<separator>' -ResultType 'ParameterValue' -ToolTip 'Column separator.'
         ) }
         '--page-range' { return @(
             New-PrCompletionResult -CompletionText '1-2' -ListItemText '1-2' -ResultType 'ParameterValue' -ToolTip 'Page range.'
@@ -359,6 +363,14 @@ function Get-PrOptionValueCompletions {
     )
     if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
         return @()
+    }
+
+    if ([string]::IsNullOrEmpty($attached)) {
+        [void](Get-PrCompletionOptions)
+        $attachedOnly = Get-Variable -Name 'PrAttachedOnlyOptions' -Scope Script -ErrorAction Ignore
+        if ($null -ne $attachedOnly -and $attachedOnly.Value.Contains($option)) {
+            return @()
+        }
     }
 
     $spec = $table[$option]
