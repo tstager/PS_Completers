@@ -12,7 +12,7 @@ function Get-OdCompletionOptions {
     $fallbackOptions = @('-A', '--address-radix', '-j', '--skip-bytes', '-N', '--read-bytes', '-S', '--strings', '-t', '--format', '-v', '--output-duplicates', '-An', '-w', '--width', '-x', '--hex', '-b', '--byte', '-c', '--char', '-d', '--decimal', '-o', '--octal', '-f', '--float', '--help', '--version')
     $commandCandidates = @('od.exe', 'od')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -187,13 +187,6 @@ function Get-OdValueCompletions {
         '--read-bytes' { return @(
             New-OdCompletionResult -CompletionText '<bytes>' -ListItemText '<bytes>' -ResultType 'ParameterValue' -ToolTip 'Number of bytes to read.'
         ) }
-        '--strings' { return @(
-            New-OdCompletionResult -CompletionText '<bytes>' -ListItemText '<bytes>' -ResultType 'ParameterValue' -ToolTip 'Minimum string length.'
-        ) }
-        '--width' { return @(
-            New-OdCompletionResult -CompletionText '16' -ListItemText '16' -ResultType 'ParameterValue' -ToolTip '16-byte output width.'
-            New-OdCompletionResult -CompletionText '<width>' -ListItemText '<width>' -ResultType 'ParameterValue' -ToolTip 'Output width.'
-        ) }
     }
 
     return @()
@@ -262,6 +255,11 @@ function Get-OdOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
+    } elseif ($CurrentWord -cmatch '^-(?<flags>[abcdfilosvx]*)(?<option>[AjNStw])(?<value>.+)$') {
+        # Short options take their value attached (-Ad, -tx1, -w32), after any bundled no-value flags.
+        $option = '-' + $Matches['option']
+        $prefix = $Matches['value']
+        $attached = '-' + $Matches['flags'] + $Matches['option']
     } elseif (-not $CurrentWord.StartsWith('-')) {
         $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
         if ([string]::IsNullOrEmpty($CurrentWord)) {
@@ -270,6 +268,12 @@ function Get-OdOptionValueCompletions {
             }
         } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
             $option = $elements[-2]
+        }
+
+        # -w, --width and --strings take an optional value that od only reads when attached
+        # (-w32, --width=32, --strings=3), so the next word is never their value.
+        if ($option -cin @('-w', '--width', '--strings')) {
+            $option = $null
         }
     }
 

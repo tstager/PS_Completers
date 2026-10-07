@@ -75,6 +75,8 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
+- Short options also complete an attached value once at least one character of it is typed (`-Ad`, `-tx` -> `-tx1`/`-tx2`/..., `-w3` -> `-w32`), including after bundled no-value flags (`-vtx` -> `-vtx1`). The typed prefix stays in the completion text.
+- `-w`/`--width` and `--strings` take an optional value that GNU od only reads when attached, so their values are offered only as `-w16`, `--width=32` or `--strings=<bytes>`; the word after a bare `-w`, `--width` or `--strings` is treated as an operand (`od -w 4 file` would make od open a file named `4`). `-S` still takes a separate value.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
@@ -84,8 +86,8 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 - `-A`, `--address-radix`: `d`, `o`, `x`, `n`
 - `-t`, `--format`: `a`, `c`, `d1`, `d2`, `d4`, `d8`, `o1`, `o2`, `o4`, `o8`, `u1`, `u2`, `u4`, `u8`, `x1`, `x2`, `x4`, `x8`, `f4`, `f8`
 - `--endian`: `big`, `little`
-- `-j`, `--skip-bytes`, `-N`, `--read-bytes`, `-S`, `--strings`: `<bytes>`
-- `-w`, `--width`: `16`, `32`, `<bytes>`
+- `-j`, `--skip-bytes`, `-N`, `--read-bytes`, `-S`, `--strings`: `<bytes>` (`--strings` attached only: `--strings=<bytes>`)
+- `-w`, `--width`: `16`, `32`, `<bytes>` (attached only: `-w32`, `--width=32`)
 
 ## Representative validation scenarios
 
@@ -94,11 +96,15 @@ od -
 od --
 od --address-radix 
 od --address-radix=
+od -tx
+od -w3
+od --width=
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--address-radix` shows its documented values in both the separate and the attached form
+- `-tx` offers `-tx1`, `-tx2`, `-tx4`, `-tx8`; `-w3` offers `-w32`; `--width=` offers `--width=16`, `--width=32`, `--width=<bytes>`
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
