@@ -145,6 +145,8 @@ once a partial path has been typed, the directories to walk into.
   FileSystem`), not the directory pwsh was started in, which `Set-Location` never
   updates, and the cache is keyed by that directory. Project-aware answers such as
   `dotnet build --framework <TAB>` therefore come from the project you are in.
+  When that location has been deleted, the child keeps the inherited directory,
+  so value slots still answer and no error is recorded.
 - With no `dotnet` on `PATH` the completer still works from the vendored table
   alone.
 

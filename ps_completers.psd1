@@ -311,7 +311,7 @@
         @{
             Path    = 'dotnet_completer/dotnet_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:8BE4082E87CE991C89CBF0BFA66EF9DE8288883F7219DB6156A59A4119ADB564'
+            Hash    = 'SHA256:3A9C35D88368BE1D77BF615F29C7689B07C8F44779D306E3668F3038B190AC6B'
             Targets = @(
                 @{ CommandName = 'dotnet'; Native = $true }
             )

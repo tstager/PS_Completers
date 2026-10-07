@@ -40,9 +40,11 @@ function Get-DotnetLiveCompletion {
     # A child inherits the process start directory, which Set-Location never
     # updates; run it in the session's filesystem location, and key the cache by
     # that directory, because project-aware answers (--framework, ...) depend on it.
+    # A location that no longer exists cannot start a child, so it is left to the
+    # inherited directory.
     $directory = ''
     $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
-    if ($location) {
+    if ($location -and [System.IO.Directory]::Exists($location.ProviderPath)) {
         $directory = $location.ProviderPath
     }
 
