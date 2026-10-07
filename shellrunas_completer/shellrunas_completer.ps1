@@ -81,7 +81,7 @@ function Get-ShellRunasProgramCompletions {
             $leaf = Split-Path -Path $trimmed -Leaf
             $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
         }
-        foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)) {
             $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
                 Join-Path -Path $parent -ChildPath $item.Name
             } elseif ($parent -eq '.') {
@@ -95,7 +95,15 @@ function Get-ShellRunasProgramCompletions {
             [void]$results.Add((New-ShellRunasCompletionResult -CompletionText (ConvertTo-ShellRunasQuotedValue -Value $completionPath -AlwaysQuote:$alwaysQuote) -ResultType $(if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }) -ToolTip $item.FullName))
         }
     } else {
-        foreach ($command in @(Get-Command -Name "$trimmed*" -CommandType Application -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
+        # A '[' or ']' in the word is part of a file name, not a wildcard range: an unmatched '[' makes
+        # Get-Command throw, so look up the text before the first bracket and match the rest literally.
+        $bracketAt = $trimmed.IndexOfAny([char[]]'[]')
+        $namePattern = if ($bracketAt -ge 0) { $trimmed.Substring(0, $bracketAt) + '*' } else { "$trimmed*" }
+        $applications = @(Get-Command -Name $namePattern -CommandType Application -ErrorAction Ignore)
+        if ($bracketAt -ge 0) {
+            $applications = @($applications | Where-Object { $_.Name.StartsWith($trimmed, [System.StringComparison]::OrdinalIgnoreCase) })
+        }
+        foreach ($command in @($applications | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
             [void]$results.Add((New-ShellRunasCompletionResult -CompletionText $command.Name -ResultType 'ParameterValue' -ToolTip $command.Name))
         }
     }
