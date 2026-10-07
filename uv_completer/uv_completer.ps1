@@ -15,6 +15,13 @@ if (-not (Get-Variable -Name UvCompletionCache -Scope Script -ErrorAction Ignore
             'cache'     = @('clean', 'prune', 'dir', 'size')
             'self'      = @('update', 'version')
         }
+        # `uv tool dir` / `uv python dir`, keyed by binary, verb and the env override.
+        Directories     = @{}
+        # `uv python list --only-installed` versions, keyed by binary and install dir.
+        PythonVersions  = @{}
+        PythonTtlSeconds = 300
+        # Parsed pyproject.toml files, keyed by path and invalidated by write time.
+        Pyprojects      = @{}
     }
 }
 
@@ -375,11 +382,6 @@ function Invoke-UvHelp {
         [string[]]$Path
     )
 
-    $uvPath = Get-UvExecutablePath -CommandName $CommandName
-    if (-not $uvPath) {
-        return @()
-    }
-
     $pathItems = @($Path)
     if ($null -eq $Path) {
         $pathItems = @()
@@ -392,10 +394,27 @@ function Invoke-UvHelp {
     }
     $arguments += '--help'
 
+    Invoke-UvCommand -CommandName $CommandName -Arguments $arguments
+}
+
+function Invoke-UvCommand {
+    param(
+        [string]$CommandName = 'uv',
+        [string[]]$Arguments
+    )
+
+    # Only read-only verbs (`--help`, `tool dir`, `python dir`, `python list
+    # --only-installed`) come through here: stdin closed, both streams drained,
+    # killed after 5 s, ANSI stripped.
+    $uvPath = Get-UvExecutablePath -CommandName $CommandName
+    if (-not $uvPath) {
+        return @()
+    }
+
     try {
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $uvPath
-        foreach ($argument in $arguments) {
+        foreach ($argument in $Arguments) {
             [void]$startInfo.ArgumentList.Add($argument)
         }
         $startInfo.UseShellExecute = $false
@@ -426,6 +445,373 @@ function Invoke-UvHelp {
     } catch {
         @()
     }
+}
+
+function Get-UvDataDirectory {
+    param([ValidateSet('tool', 'python')][string]$Kind)
+
+    $uvPath = Get-UvExecutablePath -CommandName 'uv'
+    if (-not $uvPath) {
+        return $null
+    }
+
+    $override = if ($Kind -eq 'tool') { $env:UV_TOOL_DIR } else { $env:UV_PYTHON_INSTALL_DIR }
+    $key = '{0}|{1}|{2}' -f $uvPath, $Kind, $override
+    if (-not $script:UvCompletionCache.Directories.ContainsKey($key)) {
+        $directory = @(Invoke-UvCommand -CommandName 'uv' -Arguments @($Kind, 'dir') |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -First 1)
+        $script:UvCompletionCache.Directories[$key] = if ($directory.Count -gt 0) { $directory[0].Trim() } else { $null }
+    }
+
+    $script:UvCompletionCache.Directories[$key]
+}
+
+function Get-UvInstalledTool {
+    # Every installed tool is a directory holding a uv-receipt.toml; the
+    # directory listing is passive, so it stays current without a cache.
+    $toolDirectory = Get-UvDataDirectory -Kind 'tool'
+    if (-not $toolDirectory) {
+        return @()
+    }
+
+    @(Get-ChildItem -LiteralPath $toolDirectory -Directory -ErrorAction Ignore |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'uv-receipt.toml') -PathType Leaf } |
+        ForEach-Object Name)
+}
+
+function Get-UvPythonVersion {
+    param([switch]$Managed)
+
+    if ($Managed) {
+        # Only uv-managed interpreters can be uninstalled. Full installs are
+        # <impl>-<x.y.z...>-<os>-...; the minor-version junctions repeat them.
+        $pythonDirectory = Get-UvDataDirectory -Kind 'python'
+        if (-not $pythonDirectory) {
+            return @()
+        }
+
+        $versions = @(Get-ChildItem -LiteralPath $pythonDirectory -Directory -ErrorAction Ignore |
+            Where-Object { $_.Name -match '^[a-z]+-\d+\.\d+\.\d+[^-]*-' } |
+            ForEach-Object { ($_.Name -split '-')[1] } |
+            Sort-Object -Descending -Property { [version]($_ -replace '^(\d+\.\d+\.\d+).*$', '$1') })
+    } else {
+        $uvPath = Get-UvExecutablePath -CommandName 'uv'
+        if (-not $uvPath) {
+            return @()
+        }
+
+        $key = '{0}|{1}' -f $uvPath, $env:UV_PYTHON_INSTALL_DIR
+        $entry = $script:UvCompletionCache.PythonVersions[$key]
+        if ($null -eq $entry -or $entry.Expires -lt [datetime]::UtcNow) {
+            # --only-installed and --offline keep uv off the download index; the
+            # versions are read with a regex so malformed output cannot throw.
+            $json = @(Invoke-UvCommand -CommandName 'uv' -Arguments @('python', 'list', '--only-installed', '--offline', '--output-format', 'json')) -join "`n"
+            $entry = @{
+                Expires  = [datetime]::UtcNow.AddSeconds($script:UvCompletionCache.PythonTtlSeconds)
+                Versions = @([regex]::Matches($json, '"version"\s*:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+            }
+            $script:UvCompletionCache.PythonVersions[$key] = $entry
+        }
+
+        $versions = $entry.Versions
+    }
+
+    # Offer each minor request (3.13) ahead of the exact versions it covers.
+    $requests = foreach ($version in @($versions)) {
+        if ($version -match '^(\d+\.\d+)') {
+            $matches[1]
+        }
+        $version
+    }
+
+    Get-UvUniqueStrings -Items $requests
+}
+
+function Get-UvTomlString {
+    param([string]$Text)
+
+    # Inline tables ({ include-group = "lint" }) are not entries of their array.
+    $arrayText = $Text -replace '\{[^{}]*\}', ''
+    foreach ($match in [regex]::Matches($arrayText, '"((?:[^"\\]|\\.)*)"|''([^'']*)''')) {
+        if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    }
+}
+
+function Read-UvPyprojectFile {
+    param([string]$Path)
+
+    $file = Get-Item -LiteralPath $Path -ErrorAction Ignore
+    if (-not $file -or $file.PSIsContainer) {
+        return $null
+    }
+
+    $stamp = '{0}|{1}' -f $file.LastWriteTimeUtc.Ticks, $file.Length
+    $cached = $script:UvCompletionCache.Pyprojects[$file.FullName]
+    if ($cached -and $cached.Stamp -eq $stamp) {
+        return $cached.Data
+    }
+
+    # A line-based reader for the few tables uv completion needs; anything it
+    # does not recognise is skipped rather than parsed.
+    $data = @{
+        Name         = $null
+        Requirements = @()
+        Extras       = @()
+        Groups       = @()
+        Scripts      = @()
+        IsWorkspace  = $false
+        Members      = @()
+        Exclude      = @()
+    }
+    $table = ''
+    $key = $null
+    $value = ''
+
+    foreach ($rawLine in @(Get-Content -LiteralPath $file.FullName -ErrorAction Ignore)) {
+        $line = [regex]::Replace($rawLine, '("(?:[^"\\]|\\.)*"|''[^'']*'')|#.*$', '$1')
+        if ($null -eq $key) {
+            if ($line -match '^\s*\[\[') {
+                $table = ''
+                continue
+            }
+
+            if ($line -match '^\s*\[([^\]]+)\]\s*$') {
+                $table = $matches[1] -replace '["''\s]', ''
+                if ($table -eq 'tool.uv.workspace') {
+                    $data.IsWorkspace = $true
+                }
+                continue
+            }
+
+            if ($line -notmatch '^\s*(?:"([^"]+)"|''([^'']+)''|([A-Za-z0-9_-]+))\s*=\s*(.*)$') {
+                continue
+            }
+
+            $key = @($matches[1], $matches[2], $matches[3]) | Where-Object { $_ } | Select-Object -First 1
+            $value = $matches[4]
+        } else {
+            $value += "`n" + $line
+        }
+
+        # A multi-line array is complete once its brackets balance outside strings.
+        $bare = $value -replace '"(?:[^"\\]|\\.)*"|''[^'']*''', ''
+        if ([regex]::Matches($bare, '\[').Count -gt [regex]::Matches($bare, '\]').Count) {
+            continue
+        }
+
+        $strings = @(Get-UvTomlString -Text $value)
+        switch ($table) {
+            'project' {
+                if ($key -eq 'name' -and $strings.Count -gt 0) { $data.Name = $strings[0] }
+                elseif ($key -eq 'dependencies') { $data.Requirements += $strings }
+            }
+            'project.optional-dependencies' {
+                $data.Extras += $key
+                $data.Requirements += $strings
+            }
+            'dependency-groups' {
+                $data.Groups += $key
+                $data.Requirements += $strings
+            }
+            'tool.uv' {
+                if ($key -eq 'dev-dependencies') {
+                    $data.Groups += 'dev'
+                    $data.Requirements += $strings
+                }
+            }
+            { $_ -in 'project.scripts', 'project.gui-scripts' } { $data.Scripts += $key }
+            'tool.uv.workspace' {
+                if ($key -eq 'members') { $data.Members = $strings }
+                elseif ($key -eq 'exclude') { $data.Exclude = $strings }
+            }
+        }
+
+        $key = $null
+    }
+
+    $script:UvCompletionCache.Pyprojects[$file.FullName] = @{ Stamp = $stamp; Data = $data }
+    $data
+}
+
+function Get-UvProjectInfo {
+    # uv discovers the project from the nearest pyproject.toml above the
+    # working directory, and its workspace from the nearest ancestor that
+    # declares [tool.uv.workspace].
+    $directory = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath
+    $project = $null
+    $projectDirectory = $null
+    $root = $null
+    $rootDirectory = $null
+
+    while (-not [string]::IsNullOrEmpty($directory)) {
+        $data = Read-UvPyprojectFile -Path (Join-Path $directory 'pyproject.toml')
+        if ($data) {
+            if ($null -eq $project) {
+                $project = $data
+                $projectDirectory = $directory
+            }
+
+            if ($data.IsWorkspace) {
+                $root = $data
+                $rootDirectory = $directory
+                break
+            }
+        }
+
+        $directory = Split-Path -Parent $directory
+    }
+
+    if ($null -eq $project) {
+        return $null
+    }
+
+    if ($null -eq $root) {
+        $root = $project
+        $rootDirectory = $projectDirectory
+    }
+
+    @{
+        Project       = $project
+        Root          = $root
+        RootDirectory = $rootDirectory
+    }
+}
+
+function Get-UvWorkspaceMember {
+    param([hashtable]$ProjectInfo)
+
+    # Member globs are expanded one segment at a time with .NET enumeration
+    # (simple * and ? matching, inaccessible directories skipped), which is an
+    # order of magnitude cheaper than provider wildcards on every Tab.
+    $enumerationOptions = [System.IO.EnumerationOptions]::new()
+    $names = @($ProjectInfo.Root.Name)
+    foreach ($pattern in @($ProjectInfo.Root.Members)) {
+        $directories = @($ProjectInfo.RootDirectory)
+        foreach ($segment in @($pattern -split '[\\/]' | Where-Object { $_ -and $_ -ne '.' })) {
+            $directories = @(foreach ($directory in $directories) {
+                if ($segment.IndexOfAny([char[]]'*?') -ge 0) {
+                    [System.IO.Directory]::GetDirectories($directory, $segment, $enumerationOptions)
+                } elseif ([System.IO.Directory]::Exists((Join-Path $directory $segment))) {
+                    Join-Path $directory $segment
+                }
+            })
+        }
+
+        foreach ($directory in $directories) {
+            $relativePath = [System.IO.Path]::GetRelativePath($ProjectInfo.RootDirectory, $directory).Replace('\', '/')
+            if (@($ProjectInfo.Root.Exclude | Where-Object { $relativePath -like $_.Replace('\', '/') }).Count -gt 0) {
+                continue
+            }
+
+            $member = Read-UvPyprojectFile -Path (Join-Path $directory 'pyproject.toml')
+            if ($member) {
+                $names += $member.Name
+            }
+        }
+    }
+
+    Get-UvUniqueStrings -Items $names
+}
+
+function Get-UvRunTarget {
+    param([hashtable]$ProjectInfo)
+
+    # The project's own entry points plus whatever the project environment
+    # already has on its Scripts path (python, pytest, ruff, ...).
+    $environment = if ($env:UV_PROJECT_ENVIRONMENT) {
+        [System.IO.Path]::Combine($ProjectInfo.RootDirectory, $env:UV_PROJECT_ENVIRONMENT)
+    } else {
+        Join-Path $ProjectInfo.RootDirectory '.venv'
+    }
+
+    $names = @($ProjectInfo.Project.Scripts) +
+        @(Get-ChildItem -LiteralPath (Join-Path $environment 'Scripts') -Filter '*.exe' -File -ErrorAction Ignore | ForEach-Object BaseName)
+
+    Get-UvUniqueStrings -Items $names
+}
+
+function Get-UvRequirementName {
+    param([string[]]$Requirements)
+
+    $names = foreach ($requirement in @($Requirements)) {
+        if ($requirement -match '^\s*([A-Za-z0-9][A-Za-z0-9._-]*)') {
+            $matches[1]
+        }
+    }
+
+    Get-UvUniqueStrings -Items $names
+}
+
+function Select-UvPlainValue {
+    param([string[]]$Items)
+
+    # Live values are emitted bare, so anything that would need quoting in
+    # argument mode is dropped instead.
+    @(@($Items) | Where-Object { $_ -match '^[A-Za-z0-9][A-Za-z0-9._+-]*$' })
+}
+
+function Get-UvDynamicOptionValue {
+    param(
+        [string]$Option,
+        [string]$Metavar
+    )
+
+    if ($Metavar -ceq 'PYTHON') {
+        return Select-UvPlainValue -Items (Get-UvPythonVersion)
+    }
+
+    $isExtra = $Metavar -cin 'EXTRA', 'OPTIONAL'
+    $isGroup = $Metavar -cin 'GROUP', 'NO_GROUP', 'ONLY_GROUP'
+    $isMember = $Option -ceq '--package' -and $Metavar -ceq 'PACKAGE'
+    if (-not ($isExtra -or $isGroup -or $isMember)) {
+        return @()
+    }
+
+    $projectInfo = Get-UvProjectInfo
+    if (-not $projectInfo) {
+        return @()
+    }
+
+    $values = if ($isMember) {
+        Get-UvWorkspaceMember -ProjectInfo $projectInfo
+    } elseif ($isExtra) {
+        $projectInfo.Project.Extras
+    } else {
+        $projectInfo.Project.Groups
+    }
+
+    Select-UvPlainValue -Items (Get-UvUniqueStrings -Items $values)
+}
+
+function Get-UvOperandValue {
+    param(
+        [string[]]$Path,
+        [bool]$OperandSeen
+    )
+
+    # Single-operand slots stop once an operand is typed; list slots
+    # (`tool uninstall a b`, `remove x y`) keep offering.
+    $values = switch (Get-UvCacheKey -Path $Path) {
+        'tool run' { if (-not $OperandSeen) { Get-UvInstalledTool } }
+        'tool upgrade' { Get-UvInstalledTool }
+        'tool uninstall' { Get-UvInstalledTool }
+        'python pin' { if (-not $OperandSeen) { Get-UvPythonVersion } }
+        'python find' { if (-not $OperandSeen) { Get-UvPythonVersion } }
+        'python uninstall' { Get-UvPythonVersion -Managed }
+        'remove' {
+            $projectInfo = Get-UvProjectInfo
+            if ($projectInfo) { Get-UvRequirementName -Requirements $projectInfo.Project.Requirements }
+        }
+        'run' {
+            if (-not $OperandSeen) {
+                $projectInfo = Get-UvProjectInfo
+                if ($projectInfo) { Get-UvRunTarget -ProjectInfo $projectInfo }
+            }
+        }
+    }
+
+    Select-UvPlainValue -Items $values
 }
 
 function Get-UvStaticSubcommands {
@@ -652,6 +1038,11 @@ function Get-UvOptionValues {
         }
     }
 
+    if (@($values).Count -eq 0) {
+        $metavar = Get-UvOptionMetavar -SourceName $SourceName -Path $Path -Option $optionKey
+        $values += @(Get-UvDynamicOptionValue -Option $optionKey -Metavar $metavar)
+    }
+
     Get-UvUniqueStrings -Items $values
 }
 
@@ -843,6 +1234,12 @@ function Complete-Uv {
 
     if ($effectiveWordToComplete.StartsWith('-')) {
         New-UvCompletionResults -Items $pathData.Options -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName) -WordToComplete $effectiveWordToComplete -Tooltips @{}
+        return
+    }
+
+    $operandValues = @(Get-UvOperandValue -Path $path -OperandSeen $context.OperandSeen)
+    if ($operandValues.Count -gt 0) {
+        New-UvCompletionResults -Items $operandValues -ResultType ([System.Management.Automation.CompletionResultType]::ParameterValue) -WordToComplete $effectiveWordToComplete -Tooltips @{}
         return
     }
 

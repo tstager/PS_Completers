@@ -42,7 +42,10 @@ The script initializes `$script:UvCompletionCache` once and reuses it across com
 
 - resolved executable paths for `uv` and `uvx`,
 - per-command-path parsed help data,
-- a static command tree that serves as the fallback when `uv` is not installed.
+- a static command tree that serves as the fallback when `uv` is not installed,
+- the `uv tool dir` / `uv python dir` answers (once per binary and env override),
+- the installed interpreter versions (five-minute TTL),
+- parsed `pyproject.toml` files (re-read when the file's write time or size changes).
 
 ### 2. Executable discovery
 
@@ -94,7 +97,25 @@ The completer then decides what to offer based on context:
 - values for the previous option when it takes one (switches such as `--frozen` fall through to the normal option/command list; path-typed options such as `--cache-dir` deliberately return nothing so PowerShell's filesystem completion applies; free values with no published set get a `<metavar>` placeholder),
 - positional values such as the shell names for `uv generate-shell-completion`,
 - values for `--option=value` assignments,
-- help-topic subcommands when `uv help ...` is being completed.
+- help-topic subcommands when `uv help ...` is being completed,
+- live operand and option values (see below).
+
+### 6. Live values
+
+These are read only inside the registered script block, never at load:
+
+| Slot | Source |
+| --- | --- |
+| `uv tool run` / `uvx` (first operand), `uv tool upgrade`, `uv tool uninstall` | directories holding a `uv-receipt.toml` under `uv tool dir` |
+| `--python` / `-p` (separate and `--python=` forms), `uv python pin` / `find` (first operand) | `uv python list --only-installed --offline --output-format json`; each minor request (`3.13`) is offered ahead of the exact versions |
+| `uv python uninstall` | uv-managed installs under `uv python dir` (directory listing) |
+| `--extra`, `--optional` | `[project.optional-dependencies]` of the nearest `pyproject.toml` |
+| `--group`, `--no-group`, `--only-group` | `[dependency-groups]` (plus `dev` for `[tool.uv] dev-dependencies`) |
+| `--package` | workspace members: the root that declares `[tool.uv.workspace]`, its `members` globs minus `exclude`, each member's `[project] name` |
+| `uv remove` operands | dependency names from `[project] dependencies`, optional dependencies, dependency groups and `dev-dependencies` |
+| `uv run` (first operand) | `[project.scripts]` / `[project.gui-scripts]` plus the `.exe` names in the project environment's `Scripts` folder (`.venv`, or `UV_PROJECT_ENVIRONMENT`) |
+
+The nearest `pyproject.toml` is found by walking up from the current filesystem location, as uv does. The three processes (`uv tool dir`, `uv python dir`, `uv python list`) run under the same 5 s kill guard and ANSI strip as the help calls. Values that would need quoting in argument mode are dropped rather than emitted. When a slot's source is empty (no project, no tools) the completer falls back to its usual option list; when the source has values but none match the typed prefix it returns nothing, so PowerShell's filesystem completion applies (`uv run ma` still reaches `main.py`).
 
 ## Key completion behaviors / supported values
 
@@ -200,8 +221,9 @@ uvx <TAB>
 
 ## Limitations / notes
 
-- The completer only suggests values it can discover from help output.
-- It does not add project-specific completions such as package names or filesystem-aware argument completion.
+- Option values come from help output plus the live sources above; other free-form values get a `<metavar>` placeholder.
+- `--project` / `--directory` are not honoured when locating `pyproject.toml`; the current location is used.
+- The `pyproject.toml` reader is line-based and covers only the tables listed above (not their dotted-key or inline-table spellings).
 - The help parser depends on the general shape of `uv --help` output. Major format changes in the CLI could reduce completion quality.
 - `uvx` is intentionally mapped onto the `uv tool run` branch; this is a repository-specific design choice in the script.
 - Blank completion falls back to option suggestions (typed as parameter names) when a command path exposes options but no further subcommands.
