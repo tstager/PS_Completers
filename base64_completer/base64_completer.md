@@ -60,6 +60,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - The parsed option set is seeded with the static list, so a lossy help parse can add spellings but never lose them, and the harvest lookahead accepts `]`/`)` so uutils' `decode data [alias: -D]` contributes `-D`.
 - A single-dash word made only of known short flags (`-di`) is treated as a cluster and completed by appending each remaining flag; a cluster that already holds the value-taking `-w` is complete.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- A separate-form value slot belongs to the word that ends before the cursor, not the line's last word, so editing `base64 -w  file.txt` with the cursor in the gap still offers the `-w` values.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Option values

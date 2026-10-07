@@ -67,7 +67,7 @@
         @{
             Path    = 'base64_completer/base64_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6FC71D49FF8A120F9A4860E214F7CDE86C76D2F2E5248885B211B011D96824F2'
+            Hash    = 'SHA256:CED8468B5B010C952DE77807F521E4847E3E29DA010B6E98638E6EA53C9C7A7E'
             Targets = @(
                 @{ CommandName = 'base64'; Native = $true }
                 @{ CommandName = 'base64.exe'; Native = $true }

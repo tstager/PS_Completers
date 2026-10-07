@@ -12,7 +12,7 @@ function Get-Base64CompletionOptions {
     $fallbackOptions = @('-d', '--decode', '-i', '--ignore-garbage', '-w', '--wrap', '--help', '--version')
     $commandCandidates = @('base64.exe', 'base64')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -192,7 +192,8 @@ function Get-Base64PathCompletions {
 function Get-Base64OptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [int]$CursorPosition
     )
 
     $option = $null
@@ -203,13 +204,11 @@ function Get-Base64OptionValueCompletions {
         $prefix = $Matches['value']
         $attached = $option + '='
     } elseif (-not $CurrentWord.StartsWith('-')) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-        if ([string]::IsNullOrEmpty($CurrentWord)) {
-            if ($elements.Count -gt 1) {
-                $option = $elements[-1]
-            }
-        } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
-            $option = $elements[-2]
+        # The option owning the slot is the word that ends before the cursor, not the line's
+        # last word, so a value slot followed by a later operand still completes its values.
+        $before = @($commandAst.CommandElements | Where-Object { $_.Extent.EndOffset -lt $CursorPosition } | ForEach-Object { $_.Extent.Text })
+        if ($before.Count -gt 1) {
+            $option = $before[-1]
         }
     }
 
@@ -305,7 +304,7 @@ function Complete-Base64 {
         Get-Base64CurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-Base64OptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $optionValues = @(Get-Base64OptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -CursorPosition $cursorPosition)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }
