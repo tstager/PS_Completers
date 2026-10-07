@@ -92,7 +92,13 @@ function Remove-RuOuterQuotes {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    # An open quote has no closing partner yet. Single-quoted text is literal
+    # apart from a doubled quote; elsewhere a backtick escapes the next character.
+    if ($Value.StartsWith("'")) {
+        return ($Value -replace "^'|'$", '').Replace("''", "'")
+    }
+
+    [regex]::Replace(($Value -replace '^"', ''), '`(.)|"$', { param($match) $match.Groups[1].Value })
 }
 
 function ConvertTo-RuQuotedValue {
@@ -181,24 +187,18 @@ function Initialize-RuCompletionCatalog {
 
 function Get-RuCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    # The parser keeps an unterminated quote or a backtick-escaped space in one
+    # element, so the word under the cursor is that element's text up to the cursor.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -le $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
     $Fallback
@@ -547,7 +547,7 @@ function Complete-Ru {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-RuCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-RuCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     }
 
     $state = Get-RuState -TokensBeforeCurrent (Get-RuArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)

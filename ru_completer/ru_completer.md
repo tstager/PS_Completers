@@ -65,6 +65,8 @@ Without `-h`, the completer offers absolute local registry paths rooted at:
 
 and preserves long-form roots such as `HKEY_LOCAL_MACHINE\` when typed.
 
+The word under the cursor comes from the PowerShell parser, so an unterminated quote (`ru "HKCU\Control Panel\<TAB>`) or a backtick-escaped space (`` ru HKCU\Control` Panel\<TAB> ``) is read as one path; candidates that contain whitespace or metacharacters are emitted double-quoted. The same applies to the `-h` hive-file slot.
+
 ### Hive mode
 
 When `-h` is present:
