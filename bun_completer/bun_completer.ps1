@@ -137,9 +137,14 @@ function Get-BunTokenText {
 }
 
 function Get-BunUniqueStrings {
-    param([string[]]$Items)
+    param(
+        [string[]]$Items,
+        [switch]$CaseSensitive
+    )
 
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    # Option tokens stay case-distinct (bun has -f/--force and -F/--filter); commands and values fold.
+    $comparer = if ($CaseSensitive) { [System.StringComparer]::Ordinal } else { [System.StringComparer]::OrdinalIgnoreCase }
+    $seen = [System.Collections.Generic.HashSet[string]]::new($comparer)
     $results = New-Object System.Collections.Generic.List[string]
 
     foreach ($item in @($Items)) {
@@ -188,9 +193,9 @@ function New-BunPathData {
     @{
         Commands              = @(Get-BunUniqueStrings -Items $Commands)
         CommandDescriptions   = $CommandDescriptions
-        Options               = @(Get-BunUniqueStrings -Items $Options)
+        Options               = @(Get-BunUniqueStrings -Items $Options -CaseSensitive)
         ValuesByOption        = $ValuesByOption
-        OptionsExpectingValue = @(Get-BunUniqueStrings -Items $OptionsExpectingValue)
+        OptionsExpectingValue = @(Get-BunUniqueStrings -Items $OptionsExpectingValue -CaseSensitive)
     }
 }
 
@@ -247,7 +252,7 @@ function Get-BunOptionTokensFromLine {
         $match.Groups[1].Value
     }
 
-    Get-BunUniqueStrings -Items $tokens
+    Get-BunUniqueStrings -Items $tokens -CaseSensitive
 }
 
 function Test-BunOptionLineExpectsValue {
@@ -554,8 +559,8 @@ function Get-BunHelpData {
     }
 
     $helpData.Commands = @(Get-BunUniqueStrings -Items $helpData.Commands)
-    $helpData.Options = @(Get-BunUniqueStrings -Items $helpData.Options)
-    $helpData.OptionsExpectingValue = @(Get-BunUniqueStrings -Items $helpData.OptionsExpectingValue)
+    $helpData.Options = @(Get-BunUniqueStrings -Items $helpData.Options -CaseSensitive)
+    $helpData.OptionsExpectingValue = @(Get-BunUniqueStrings -Items $helpData.OptionsExpectingValue -CaseSensitive)
 
     $script:BunCompletionCache.HelpDataByPath[$cacheKey] = $helpData
     $helpData
@@ -1117,7 +1122,7 @@ function Get-BunStaticOptionsExpectingValue {
                     '--shell', '--main-fields', '--extension-order', '--tsconfig-override',
                     '--define', '-d', '--drop', '--loader', '-l', '--jsx-factory',
                     '--jsx-fragment', '--jsx-import-source', '--jsx-runtime'
-                ))
+                )) -CaseSensitive
         }
         'build' {
             return @(
@@ -1238,18 +1243,21 @@ function Get-BunOptionExpectsValue {
         return $false
     }
 
+    # A short flag keeps its case: the boolean -f (--force) must not match the value-taking -F (--filter).
+    $comparison = if ($Option.StartsWith('--')) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+
     # An empty option list collapses to AutomationNull on its way into the cache, so @() around it
     # yields a single $null element; drop that before calling a method on it.
     $staticOptions = Get-BunStaticOptionsExpectingValue -Path $Path
     foreach ($candidate in @($staticOptions | Where-Object { $_ })) {
-        if ($candidate.Equals($Option, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($candidate.Equals($Option, $comparison)) {
             return $true
         }
     }
 
     $helpData = Get-BunHelpData -Path $Path
     foreach ($candidate in @($helpData.OptionsExpectingValue | Where-Object { $_ })) {
-        if ($candidate.Equals($Option, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($candidate.Equals($Option, $comparison)) {
             return $true
         }
     }
@@ -1550,7 +1558,7 @@ function Get-BunOptionSuggestions {
     $helpData = Get-BunHelpData -Path $Path
     $items = New-Object System.Collections.Generic.List[object]
 
-    foreach ($option in @(Get-BunUniqueStrings -Items (@($helpData.Options) + @(Get-BunStaticOptionNameList -Path $Path)))) {
+    foreach ($option in @(Get-BunUniqueStrings -Items (@($helpData.Options) + @(Get-BunStaticOptionNameList -Path $Path)) -CaseSensitive)) {
         $item = New-BunSuggestionItem -CompletionText $option -ToolTip $option -ResultType 'ParameterName'
         if ($item) {
             [void]$items.Add($item)
@@ -1642,7 +1650,7 @@ function Get-BunOptionValueSuggestions {
     switch ($pathKey) {
         { $_ -in @('', 'run') } {
             # -F/--filter is a root flag ('bun --filter <pattern> <script>') inherited by run.
-            if ($normalizedOption -in @('--filter', '-f')) {
+            if ($normalizedOption -eq '--filter' -or $Option -ceq '-F') {
                 foreach ($workspace in @(Get-BunWorkspaceNames)) {
                     $item = New-BunSuggestionItem -CompletionText ($AssignmentPrefix + $workspace) -ToolTip 'workspace name'
                     if ($item) {
@@ -1662,7 +1670,7 @@ function Get-BunOptionValueSuggestions {
             }
         }
         'outdated' {
-            if ($normalizedOption -in @('--filter', '-f')) {
+            if ($normalizedOption -eq '--filter' -or $Option -ceq '-F') {
                 foreach ($workspace in @(Get-BunWorkspaceNames)) {
                     $item = New-BunSuggestionItem -CompletionText ($AssignmentPrefix + $workspace) -ToolTip 'workspace filter'
                     if ($item) {
@@ -1953,15 +1961,21 @@ function ConvertTo-BunCompletionResults {
         [string]$WordToComplete
     )
 
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    # A typed short flag keeps its case so -F never completes to -f; long options and values keep
+    # the case-insensitive prefix match.
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
+    $caseSensitive = $WordToComplete -cmatch '^-[^-]'
     foreach ($item in @($Items)) {
         if ($null -eq $item -or [string]::IsNullOrWhiteSpace($item.CompletionText)) {
             continue
         }
 
-        if (-not [string]::IsNullOrEmpty($WordToComplete) -and
-            $item.CompletionText -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
-            continue
+        if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+            $matched = if ($caseSensitive) { $item.CompletionText -clike $pattern } else { $item.CompletionText -like $pattern }
+            if (-not $matched) {
+                continue
+            }
         }
 
         if (-not $seen.Add($item.CompletionText)) {
