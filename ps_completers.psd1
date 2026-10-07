@@ -276,7 +276,7 @@
         @{
             Path    = 'dircolors_completer/dircolors_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:09B819FCFBBB2BA1CC53449872DDF549154B4763C3A80EB3A1F02B7E4C6472BF'
+            Hash    = 'SHA256:B125BA3734AC1D55782ACE19DEA4E9B3701E2C95186412AB693EFD15C7D93231'
             Targets = @(
                 @{ CommandName = 'dircolors'; Native = $true }
                 @{ CommandName = 'dircolors.exe'; Native = $true }

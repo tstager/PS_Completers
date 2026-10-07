@@ -58,8 +58,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the PowerShell parser token that ends at the cursor (rebased to the command's start offset, so completion works when the command is not the first statement on the line). An unterminated quote is one word running to the cursor, spaces included, and its quotes and escapes are removed before matching (`'it''s` matches `it's.txt`).
+- Path completions keep the quote the user opened. With a double quote, `` ` ``, `"` and `$` are backtick-escaped. Otherwise a name containing whitespace, a quote, a backtick, or any of `{ } ( ) ; , | & < > $`, or starting with `@` or `#`, is single-quoted with embedded `'` doubled, so accepting `a;b.txt`, `c$d.txt` or `e(f).txt` cannot split the command or expand a variable.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the tool lookup and cache probe use `-ErrorAction Ignore` so a cold load adds nothing to `$Error`, even when dircolors is not installed.
 
 ## Representative validation scenarios
 
