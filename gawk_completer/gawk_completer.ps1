@@ -13,6 +13,7 @@ if (-not (Get-Variable -Name GawkCompletionCatalog -Scope Script -ErrorAction Ig
         MinimalLongAbbreviations = @{}
         LongSuggestions         = @()
         LoadExtensions          = @()
+        LoadExtensionsKey       = $null
         LintValues              = @('fatal', 'invalid', 'no-ext')
         FieldSeparators         = @(
             @{ Text = ','; Tooltip = 'Comma-separated fields' }
@@ -92,7 +93,7 @@ function Get-GawkExecutablePath {
     $candidates += @('gawk.exe', 'gawk', 'awk.exe', 'awk')
 
     foreach ($candidate in $candidates | Select-Object -Unique) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($command) {
             $script:GawkCompletionCatalog.ExecutablePath = $command.Source
             break
@@ -410,42 +411,103 @@ function Resolve-GawkRealExecutablePath {
     $ExecutablePath
 }
 
-function Get-GawkDiscoveredLoadExtensions {
-    param([string]$CommandName = 'gawk')
+function Get-GawkLibrarySearchPath {
+    param([string]$ExecutablePath)
 
-    $seededExtensions = @(
-        'filefuncs',
-        'fnmatch',
-        'fork',
-        'inplace',
-        'intdiv',
-        'ordchr',
-        'readdir',
-        'readfile',
-        'revoutput',
-        'revtwoway',
-        'rwarray',
-        'time'
-    )
+    # gawk finds a bare --load name only on its effective AWKLIBPATH: the
+    # environment variable when set, otherwise a compiled-in default that can
+    # name the builder's machine (scoop's mingw build: d:/usr/lib/gawk/ext-4.1).
+    $entries = New-Object System.Collections.Generic.List[string]
+    $environmentValue = [Environment]::GetEnvironmentVariable('AWKLIBPATH')
+    if (-not [string]::IsNullOrWhiteSpace($environmentValue)) {
+        [void]$entries.Add($environmentValue)
+    }
 
-    $results = New-Object System.Collections.Generic.List[string]
-    $seen = @{}
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $ExecutablePath
+        [void]$startInfo.ArgumentList.Add('BEGIN { print ENVIRON["AWKLIBPATH"] }')
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
 
-    foreach ($name in $seededExtensions) {
-        $key = $name.ToLowerInvariant()
-        if (-not $seen.ContainsKey($key)) {
-            $seen[$key] = $true
-            [void]$results.Add($name)
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+            }
+
+            if ($outputTask.Wait(1000)) {
+                $value = @(($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '') -split '\r?\n' | Select-Object -First 1)
+                if ($value.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($value[0])) {
+                    [void]$entries.Add($value[0].Trim())
+                }
+            }
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        Write-Debug -Message ('gawk AWKLIBPATH probe failed: {0}' -f $_.Exception.Message)
+    }
+
+    # Git for Windows' msys gawk prints POSIX paths (/usr/lib/gawk) rooted at
+    # the directory that holds usr\bin\gawk.exe.
+    $msysRoot = $null
+    if ((Split-Path -Parent $ExecutablePath) -match '^(.+)[\\/]usr[\\/]bin$') {
+        $msysRoot = $Matches[1]
+    }
+
+    $directories = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in $entries) {
+        # mingw builds separate entries with ';', msys builds with ':'; a ':'
+        # right after a leading drive letter belongs to the path.
+        foreach ($part in @($entry.Split(';') | ForEach-Object { $_ -split '(?<!^[A-Za-z]):' })) {
+            if ([string]::IsNullOrWhiteSpace($part)) {
+                continue
+            }
+
+            $candidate = $part.Trim()
+            if ($candidate -match '^/(?!/)') {
+                if (-not $msysRoot) {
+                    continue
+                }
+
+                $candidate = $msysRoot + $candidate
+            }
+
+            $item = Get-Item -LiteralPath $candidate.Replace('/', '\') -Force -ErrorAction Ignore
+            if ($item -and $item.PSIsContainer) {
+                [void]$directories.Add($item.FullName.TrimEnd('\'))
+            }
         }
     }
 
-    $candidateDirectories = New-Object System.Collections.Generic.List[string]
-    $libPath = [Environment]::GetEnvironmentVariable('AWKLIBPATH')
-    if (-not [string]::IsNullOrWhiteSpace($libPath)) {
-        foreach ($part in $libPath.Split([System.IO.Path]::PathSeparator)) {
-            if (-not [string]::IsNullOrWhiteSpace($part) -and (Test-Path -LiteralPath $part)) {
-                [void]$candidateDirectories.Add($part)
+    @($directories.ToArray())
+}
+
+function Get-GawkDiscoveredLoadExtensions {
+    param([string]$CommandName = 'gawk')
+
+    $executablePath = Resolve-GawkRealExecutablePath -ExecutablePath (Get-GawkExecutablePath -CommandName $CommandName)
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+        # Static fallback for when gawk is absent: the extensions gawk ships.
+        return @(
+            foreach ($name in @('filefuncs', 'fnmatch', 'fork', 'inplace', 'intdiv', 'ordchr', 'readdir', 'readfile', 'revoutput', 'revtwoway', 'rwarray', 'time')) {
+                [pscustomobject]@{ Name = $name; Text = $name; ToolTip = 'Load the {0} extension' -f $name }
             }
+        )
+    }
+
+    $searchDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $candidateDirectories = New-Object System.Collections.Generic.List[string]
+    foreach ($directory in @(Get-GawkLibrarySearchPath -ExecutablePath $executablePath)) {
+        if ($searchDirectories.Add($directory)) {
+            [void]$candidateDirectories.Add($directory)
         }
     }
 
@@ -453,52 +515,80 @@ function Get-GawkDiscoveredLoadExtensions {
     # <prefix>\lib\gawk\ext-<API> (scoop, MSYS2), where <prefix> is the parent of
     # the bin directory holding the real gawk.exe. The bin directory itself is
     # never scanned: it holds the msys/mingw runtime DLLs, not extensions.
-    $executablePath = Resolve-GawkRealExecutablePath -ExecutablePath (Get-GawkExecutablePath -CommandName $CommandName)
-    if (-not [string]::IsNullOrWhiteSpace($executablePath)) {
-        $exeDirectory = Split-Path -Parent $executablePath
-        $prefixDirectory = Split-Path -Parent $exeDirectory
-        $libRoots = @(
-            (Join-Path -Path $exeDirectory -ChildPath 'lib\gawk')
-            if (-not [string]::IsNullOrWhiteSpace($prefixDirectory)) { Join-Path -Path $prefixDirectory -ChildPath 'lib\gawk' }
-        )
-        foreach ($libRoot in $libRoots) {
-            if (-not (Test-Path -LiteralPath $libRoot -PathType Container)) {
+    $exeDirectory = Split-Path -Parent $executablePath
+    $prefixDirectory = Split-Path -Parent $exeDirectory
+    $libRoots = @(
+        (Join-Path -Path $exeDirectory -ChildPath 'lib\gawk')
+        if (-not [string]::IsNullOrWhiteSpace($prefixDirectory)) { Join-Path -Path $prefixDirectory -ChildPath 'lib\gawk' }
+    )
+    foreach ($libRoot in $libRoots) {
+        if (-not (Test-Path -LiteralPath $libRoot -PathType Container)) {
+            continue
+        }
+
+        [void]$candidateDirectories.Add($libRoot.TrimEnd('\'))
+        foreach ($apiDirectory in @(Get-ChildItem -LiteralPath $libRoot -Directory -Filter 'ext-*' -ErrorAction Ignore)) {
+            [void]$candidateDirectories.Add($apiDirectory.FullName.TrimEnd('\'))
+        }
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    $scannedDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($directory in $candidateDirectories) {
+        if (-not $scannedDirectories.Add($directory)) {
+            continue
+        }
+
+        $onSearchPath = $searchDirectories.Contains($directory)
+        foreach ($file in @(Get-ChildItem -LiteralPath $directory -File -ErrorAction Ignore)) {
+            if ($file.Extension -notin @('.dll', '.so', '.dylib', '.bundle')) {
                 continue
             }
 
-            [void]$candidateDirectories.Add($libRoot)
-            foreach ($apiDirectory in @(Get-ChildItem -LiteralPath $libRoot -Directory -Filter 'ext-*' -ErrorAction SilentlyContinue)) {
-                [void]$candidateDirectories.Add($apiDirectory.FullName)
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            if ([string]::IsNullOrWhiteSpace($name)) {
+                continue
+            }
+
+            # Runtime libraries (libgmp-10, msys-2.0, cygwin1) sit beside real
+            # extensions in some layouts and are never loadable with --load.
+            if ($name -match '^(lib|msys|cyg)') {
+                continue
+            }
+
+            $key = $name.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) {
+                continue
+            }
+
+            $seen[$key] = $true
+            if ($onSearchPath) {
+                [void]$results.Add([pscustomobject]@{ Name = $name; Text = $name; ToolTip = ('Load the {0} extension from {1}' -f $name, $directory) })
+            } else {
+                # Off gawk's AWKLIBPATH a bare name fails ("cannot open shared
+                # library"); the path without its suffix loads.
+                [void]$results.Add([pscustomobject]@{
+                        Name = $name
+                        Text = Join-Path -Path $directory -ChildPath $name
+                        ToolTip = ('Load the {0} extension by path; {1} is not on gawk''s AWKLIBPATH' -f $name, $directory)
+                    })
             }
         }
     }
 
-    foreach ($directory in @($candidateDirectories | Select-Object -Unique)) {
-        Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -in @('.dll', '.so', '.dylib', '.bundle') } |
-            ForEach-Object {
-                $name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
-                if ([string]::IsNullOrWhiteSpace($name)) {
-                    return
-                }
+    @($results.ToArray() | Sort-Object -Property Name)
+}
 
-                # Runtime libraries (libgmp-10, msys-2.0, cygwin1) sit beside real
-                # extensions in some layouts and are never loadable with --load.
-                if ($name -match '^(lib|msys|cyg)') {
-                    return
-                }
-
-                $key = $name.ToLowerInvariant()
-                if ($seen.ContainsKey($key)) {
-                    return
-                }
-
-                $seen[$key] = $true
-                [void]$results.Add($name)
-            }
+function Get-GawkLoadExtensionCatalog {
+    # The answer depends on the resolved gawk and on $env:AWKLIBPATH.
+    $cacheKey = [string](Get-GawkExecutablePath) + '|' + [Environment]::GetEnvironmentVariable('AWKLIBPATH')
+    if ($script:GawkCompletionCatalog['LoadExtensionsKey'] -ne $cacheKey) {
+        $script:GawkCompletionCatalog['LoadExtensions'] = @(Get-GawkDiscoveredLoadExtensions)
+        $script:GawkCompletionCatalog['LoadExtensionsKey'] = $cacheKey
     }
 
-    @($results.ToArray() | Sort-Object)
+    @($script:GawkCompletionCatalog['LoadExtensions'])
 }
 
 function Initialize-GawkCompletionCatalog {
@@ -576,7 +666,6 @@ function Initialize-GawkCompletionCatalog {
             }
         }
     )
-    $script:GawkCompletionCatalog.LoadExtensions = Get-GawkDiscoveredLoadExtensions -CommandName $CommandName
     $script:GawkCompletionCatalog.Initialized = $true
 }
 
@@ -977,6 +1066,48 @@ function Get-GawkSimpleValueCompletions {
     }
 }
 
+function ConvertTo-GawkArgumentText {
+    param(
+        [string]$Text,
+        [string]$QuoteCharacter = ''
+    )
+
+    if ($QuoteCharacter -eq '"') {
+        return '"' + ($Text -replace '([`"$])', '`$1') + '"'
+    }
+
+    if ($QuoteCharacter -eq "'" -or $Text -match '[\s{}();,|&<>''"`$]|^[@#]') {
+        return "'" + $Text.Replace("'", "''") + "'"
+    }
+
+    $Text
+}
+
+function Get-GawkLoadExtensionCompletion {
+    param(
+        [string]$CurrentWord,
+        [string]$AttachedPrefix = ''
+    )
+
+    $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
+    $quoteCharacter = ''
+    if ($word.StartsWith("'") -or $word.StartsWith('"')) {
+        $quoteCharacter = $word.Substring(0, 1)
+        $word = $word.Substring(1)
+    }
+
+    foreach ($extension in @(Get-GawkLoadExtensionCatalog)) {
+        # A path-form value also matches on its extension name, so 'fil' finds '<dir>\filefuncs'.
+        if (-not ($extension.Text.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $extension.Name.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase))) {
+            continue
+        }
+
+        $valueText = $AttachedPrefix + $extension.Text
+        New-GawkCompletionResult -CompletionText (ConvertTo-GawkArgumentText -Text $valueText -QuoteCharacter $quoteCharacter) -ListItemText $valueText -ResultType 'ParameterValue' -ToolTip $extension.ToolTip
+    }
+}
+
 function Get-GawkValueCompletions {
     param(
         [hashtable]$Definition,
@@ -996,7 +1127,7 @@ function Get-GawkValueCompletions {
             return @(Get-GawkPathCompletions -InputText $CurrentWord -AttachedPrefix $AttachedPrefix)
         }
         'LoadExtension' {
-            return @(Get-GawkSimpleValueCompletions -Values $script:GawkCompletionCatalog.LoadExtensions -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix)
+            return @(Get-GawkLoadExtensionCompletion -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix)
         }
         'Lint' {
             return @(Get-GawkSimpleValueCompletions -Values $script:GawkCompletionCatalog.LintValues -CurrentWord $CurrentWord -AttachedPrefix $AttachedPrefix)
@@ -1020,6 +1151,12 @@ function Get-GawkOptionCompletions {
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
     # Short options are case-distinct (-f/-F, -d/-D ...), so dedupe ordinally.
     $seen = [System.Collections.Generic.Dictionary[string, bool]]::new([System.StringComparer]::Ordinal)
+    # A typed single-dash word must keep its case, or '-V' would also match '-v'.
+    $comparison = if ($word.StartsWith('--')) {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
 
     if ([string]::IsNullOrWhiteSpace($word) -or '--'.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
         $key = '--'
@@ -1036,7 +1173,7 @@ function Get-GawkOptionCompletions {
             [pscustomobject]@{ Text = $definition.Short; ToolTip = $definition.Description },
             [pscustomobject]@{ Text = $definition.Long; ToolTip = $definition.Description }
         )) {
-            if ($candidate.Text.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($candidate.Text.StartsWith($word, $comparison)) {
                 $key = $candidate.Text
                 if ($seen.ContainsKey($key)) {
                     continue
@@ -1055,7 +1192,7 @@ function Get-GawkOptionCompletions {
             continue
         }
 
-        if ($candidate.CompletionText.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($candidate.CompletionText.StartsWith($word, $comparison)) {
             $key = $candidate.CompletionText
             if ($seen.ContainsKey($key)) {
                 continue

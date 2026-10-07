@@ -130,7 +130,7 @@ Important semantics handled by the parser:
   - suggests `fatal`, `invalid`, and `no-ext`
 - `LoadExtension`
   - `-l`, `--load`
-  - suggests seeded extension names plus locally discovered extension-library names
+  - suggests the extensions the resolved gawk can actually load: bare names for libraries on gawk's effective `AWKLIBPATH`, the full path without the suffix for install-local libraries that are not on it (see below)
 - `FieldSeparator`
   - `-F`, `--field-separator`
   - suggests `,`, `:`, `;`, `|`, `\t`, and `[[:space:]]+`
@@ -157,6 +157,8 @@ The completer suggests:
 - long options such as `--file`, `--field-separator`, `--assign`, `--source`, `--exec`, `--include`, `--load`, `--lint`, `--profile`, `--pretty-print`, `--dump-variables`, and the remaining help-validated gawk options
 - minimal safe long-option abbreviations when a long option has a unique prefix
 
+A typed single-dash word is matched case-sensitively, so `-V`, `-C`, `-S`, `-I`, `-P`, `-O` and `-n` complete only to themselves and never to their case twins; a typed `--` word keeps case-insensitive prefix matching.
+
 ### Output-file option behavior
 
 For `-d`, `-D`, `-o`, and `-p`, the optional file value is completed only in the forms the script models as valid:
@@ -176,13 +178,16 @@ The script intentionally distinguishes the program-source slot from later positi
 
 ### Local load-extension discovery
 
-For `-l` / `--load`, the completer combines:
+gawk resolves a bare `--load` name only through its effective `AWKLIBPATH`: `$env:AWKLIBPATH` when set, otherwise a compiled-in default. That default can name the builder's machine (the scoop mingw build reports `d:/usr/lib/gawk/ext-4.1`), so a bare name fails there with `cannot open shared library` even though the DLL ships with the install. For `-l` / `--load`, the completer therefore:
 
-- a seeded list of common gawk extensions including `filefuncs`, `fnmatch`, `fork`, `inplace`, `intdiv`, `ordchr`, `readdir`, `readfile`, `revoutput`, `revtwoway`, `rwarray`, and `time`
-- extension-library names discovered from `AWKLIBPATH`
-- extension-library names discovered in the install's extension directory: the resolved executable (a scoop `.shim` target or symlink is followed first) is expected at `<prefix>\bin\gawk.exe`, and `<prefix>\lib\gawk` plus any `<prefix>\lib\gawk\ext-<API>` directory is scanned
+- reads the effective search path once from the resolved gawk (`gawk 'BEGIN { print ENVIRON["AWKLIBPATH"] }'`, bounded to 5 s), adds `$env:AWKLIBPATH`, and maps msys POSIX entries such as `/usr/lib/gawk` under the directory that holds `usr\bin\gawk.exe` (Git for Windows)
+- scans those directories plus the install's extension directories: the resolved executable (a scoop `.shim` target or symlink is followed first) is expected at `<prefix>\bin\gawk.exe`, and `<prefix>\lib\gawk` plus any `<prefix>\lib\gawk\ext-<API>` directory is scanned
+- offers a bare name (`filefuncs`) for a library on the search path, and the full path without the suffix (`<dir>\filefuncs`, which gawk loads directly) for an install-local library that is not; a path value also matches on its extension name, so `--load fil<TAB>` finds it, and it is quoted when it contains a space or metacharacter
+- caches the list for the session, keyed by the resolved executable and `$env:AWKLIBPATH`, so changing the variable takes effect on the next Tab
 
 Discovered files are limited to local library files with extensions such as `.dll`, `.so`, `.dylib`, and `.bundle`; the executable's own `bin` directory is never scanned and names beginning with `lib`, `msys`, or `cyg` are skipped, so runtime DLLs are not offered as extensions.
+
+When no gawk executable is found, a static list of the extensions gawk ships (`filefuncs`, `fnmatch`, `fork`, `inplace`, `intdiv`, `ordchr`, `readdir`, `readfile`, `revoutput`, `revtwoway`, `rwarray`, `time`) is offered instead.
 
 ## Dependencies or external command expectations
 
@@ -191,7 +196,7 @@ The completer works best when a local `gawk` or `awk` executable is available on
 If an executable is found:
 
 - `--help` is used to validate which options are available locally
-- nearby extension directories can be scanned for `--load` value suggestions
+- its effective `AWKLIBPATH` is read and nearby extension directories are scanned for `--load` value suggestions (only when a `--load` value is completed)
 
 If no executable is found, the embedded metadata still provides static option and value completion, but help validation and install-local extension discovery are unavailable.
 
@@ -224,6 +229,6 @@ gawk -E .\script.awk .\in<TAB>
 - The completer is intentionally single-command and option-oriented; it does not implement a subcommand tree because gawk does not use one.
 - Long-option abbreviation suggestions are conservative: the parser accepts any uniquely resolvable long prefix, but the menu only offers the minimal unique abbreviation plus the full long option.
 - Before program source is known, the first positional token is treated as the awk program slot, so the completer intentionally avoids guessing file paths there.
-- `--load` suggestions are local-only. They come from a seeded list plus libraries found in `AWKLIBPATH` and nearby install directories; the script does not search remote package sources or arbitrary system inventories.
+- `--load` suggestions are local-only. They come from libraries found on gawk's effective `AWKLIBPATH` and in nearby install directories (or a static list when gawk is absent); the script does not search remote package sources or arbitrary system inventories.
 - Help-based option filtering depends on the general shape of `gawk --help`. If that output changes significantly, the script falls back to the embedded definitions.
 - `gawk -F,` with the cursor right after the comma is never handed to a native completer by the engine (the trailing comma is a parse error), so nothing can be offered there; `gawk -F, '{print $1}' <TAB>` works.
