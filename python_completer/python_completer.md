@@ -7,7 +7,7 @@
 - `python`
 - `python.exe`
 
-The completer is static-first and uses the locally derived `python --help` / `python --help-xoptions` surface as its source of truth. It does not shell out to Python during completion.
+The completer is static-first and uses the locally derived `python --help` / `python --help-xoptions` surface as its source of truth. It does not shell out to Python during completion; the `-m` module list is read passively from the resolved interpreter's directories on disk.
 
 ## Covered surface
 
@@ -54,7 +54,8 @@ Modeled `-X` values include:
 - `-X tracemalloc=` and similar `=` partials stay in xoption mode instead of falling back to filesystem completion.
 - `-W` completes the action keywords (`default`, `error`, `always`, `all`, `module`, `once`, `ignore`), completes the standard warning category names after the second colon (`ignore::Dep` -> `ignore::DeprecationWarning`), and otherwise falls back to the placeholder `<action:message:category:module:lineno>`.
 - `-c` returns `<command-string>`.
-- `-m` returns `<module>`.
+- `-m` completes module and package names from the places `python -m` imports from: the current directory (packages need `__init__.py`), the interpreter's `DLLs` and `Lib`, the user site-packages (`%APPDATA%\Python\PythonXY\site-packages`, skipped for venvs and when `PYTHONNOUSERSITE` is set), `Lib\site-packages` (a venv's own when `python` resolves to a venv, read from `pyvenv.cfg`), and the directories listed in their `.pth` files. The interpreter is the first `python` application on `PATH`; Python install manager shims are followed through their `.__target__` file. Dotted names complete submodules (`http.se` -> `http.server`). Names starting with `_` appear only once the word starts with `_`. A word typed with an opening quote keeps that quote. When nothing matches, the word (or `<module>`) is echoed back.
+- The `-m` sources are cached per session: the interpreter layout keyed by `PATH`, each directory listing keyed by the directory's last-write time, so newly installed packages show up on the next Tab.
 - The first positional script operand uses filesystem completion (also from an empty word, alongside the switches) and is not limited to `.py`.
 - The first positional operand also exposes `-` as the stdin sentinel.
 - After `-c`, `-m`, or a script/stdin program operand takes over, the completer stops offering root switches and falls back to placeholders or path-like argument completion only.
@@ -65,9 +66,10 @@ The script top level is limited to:
 
 - `Set-StrictMode`
 - function definitions
+- one `Get-Variable`-guarded `$script:PythonModuleCache` hashtable initializer
 - one literal `Register-ArgumentCompleter -Native` call
 
-There are no top-level assignments, loops, `try` blocks, or external command invocations, so the script stays `Import-CompleterScript`-safe.
+There are no other top-level assignments, loops, `try` blocks, or external command invocations, so the script stays `Import-CompleterScript`-safe and can be dot-sourced twice.
 
 ## Representative validation commands
 

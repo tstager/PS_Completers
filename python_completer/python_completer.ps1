@@ -1,5 +1,13 @@
 Set-StrictMode -Version 2.0
 
+if (-not (Get-Variable -Name PythonModuleCache -Scope Script -ErrorAction Ignore)) {
+    $script:PythonModuleCache = @{
+        RootsKey         = $null
+        Roots            = @()
+        NamesByDirectory = @{}
+    }
+}
+
 function New-PythonCompletionResult {
     param(
         [string]$CompletionText,
@@ -498,6 +506,217 @@ function Get-PythonPathResults {
     @($results.ToArray())
 }
 
+function Get-PythonModuleRoot {
+    # The import roots behind 'python -m', read from the interpreter's layout on disk; no process is started.
+    $cache = $script:PythonModuleCache
+    $key = "$env:PATH|$env:PYTHONNOUSERSITE"
+    if ($cache.RootsKey -ceq $key) {
+        return @($cache.Roots)
+    }
+
+    $roots = New-Object System.Collections.Generic.List[object]
+    $command = Get-Command -Name python -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    $executable = if ($null -eq $command) { '' } else { $command.Source }
+    if ($executable) {
+        $targetFile = "$executable.__target__"
+        if ([System.IO.File]::Exists($targetFile)) {
+            # Python install manager shims record the real interpreter beside themselves.
+            $executable = [System.IO.File]::ReadAllText($targetFile).Trim()
+        }
+    }
+
+    $binDirectory = if ($executable) { [System.IO.Path]::GetDirectoryName($executable) } else { '' }
+    if ($binDirectory) {
+        $venvDirectory = [System.IO.Path]::GetDirectoryName($binDirectory)
+        $venvConfig = if ([string]::IsNullOrEmpty($venvDirectory)) { '' } else { [System.IO.Path]::Combine($venvDirectory, 'pyvenv.cfg') }
+        $baseDirectory = $binDirectory
+        $siteDirectories = New-Object System.Collections.Generic.List[object]
+
+        if ($venvConfig -and [System.IO.File]::Exists($venvConfig)) {
+            $settings = @{}
+            foreach ($configLine in [System.IO.File]::ReadAllLines($venvConfig)) {
+                if ($configLine -match '^\s*([^=]+?)\s*=\s*(.*?)\s*$') {
+                    $settings[$Matches[1]] = $Matches[2]
+                }
+            }
+
+            $baseDirectory = if ($settings.ContainsKey('home')) { $settings['home'] } else { '' }
+            [void]$siteDirectories.Add(@([System.IO.Path]::Combine($venvDirectory, 'Lib', 'site-packages'), 'venv site-packages'))
+            if ($settings.ContainsKey('include-system-site-packages') -and $settings['include-system-site-packages'] -eq 'true' -and $baseDirectory) {
+                [void]$siteDirectories.Add(@([System.IO.Path]::Combine($baseDirectory, 'Lib', 'site-packages'), 'site-packages'))
+            }
+        } else {
+            $versionDll = if ([System.IO.Directory]::Exists($baseDirectory)) {
+                [System.IO.Directory]::GetFiles($baseDirectory, 'python3*.dll') |
+                    ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_) } |
+                    Where-Object { $_ -match '^python3\d+t?$' } |
+                    Select-Object -First 1
+            }
+            if ($versionDll -and $env:APPDATA -and -not $env:PYTHONNOUSERSITE) {
+                [void]$siteDirectories.Add(@([System.IO.Path]::Combine($env:APPDATA, 'Python', ('P' + $versionDll.Substring(1)), 'site-packages'), 'user site-packages'))
+            }
+            [void]$siteDirectories.Add(@([System.IO.Path]::Combine($baseDirectory, 'Lib', 'site-packages'), 'site-packages'))
+        }
+
+        $candidates = @()
+        if ($baseDirectory) {
+            $candidates += , @([System.IO.Path]::Combine($baseDirectory, 'DLLs'), 'stdlib extension')
+            $candidates += , @([System.IO.Path]::Combine($baseDirectory, 'Lib'), 'stdlib')
+        }
+        $candidates += $siteDirectories.ToArray()
+
+        foreach ($candidate in $candidates) {
+            if ([System.IO.Directory]::Exists($candidate[0])) {
+                [void]$roots.Add([pscustomobject]@{ Path = $candidate[0]; Kind = $candidate[1]; RequirePackageMarker = $false; IsSite = $candidate[1].EndsWith('site-packages') })
+            }
+        }
+    }
+
+    $cache.Roots = @($roots.ToArray())
+    $cache.RootsKey = $key
+    @($cache.Roots)
+}
+
+function Get-PythonPthDirectory {
+    param([string]$SiteDirectory)
+
+    # Each .pth line in a site directory appends that path to sys.path; 'import' lines run code and are skipped.
+    $cache = $script:PythonModuleCache.NamesByDirectory
+    $cacheKey = "$SiteDirectory|pth"
+    $stamp = [System.IO.Directory]::GetLastWriteTimeUtc($SiteDirectory)
+    if ($cache.ContainsKey($cacheKey) -and $cache[$cacheKey].Stamp -eq $stamp) {
+        return @($cache[$cacheKey].Entries)
+    }
+
+    $directories = New-Object System.Collections.Generic.List[string]
+    foreach ($pthFile in [System.IO.Directory]::GetFiles($SiteDirectory, '*.pth')) {
+        foreach ($pthLine in [System.IO.File]::ReadAllLines($pthFile)) {
+            $entry = $pthLine.Trim()
+            if (-not $entry -or $entry.StartsWith('#') -or $entry -match '^import[ \t]') {
+                continue
+            }
+
+            $directory = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($SiteDirectory, $entry))
+            if ([System.IO.Directory]::Exists($directory) -and -not $directories.Contains($directory)) {
+                [void]$directories.Add($directory)
+            }
+        }
+    }
+
+    $cache[$cacheKey] = [pscustomobject]@{ Stamp = $stamp; Entries = @($directories.ToArray()) }
+    @($directories.ToArray())
+}
+
+function Get-PythonDirectoryModule {
+    param(
+        [string]$Directory,
+        [bool]$RequirePackageMarker
+    )
+
+    # A directory's entry list only changes when its own LastWriteTime does, so that stamp keys the cache.
+    $cache = $script:PythonModuleCache.NamesByDirectory
+    $cacheKey = "$Directory|$RequirePackageMarker"
+    $stamp = [System.IO.Directory]::GetLastWriteTimeUtc($Directory)
+    if ($cache.ContainsKey($cacheKey) -and $cache[$cacheKey].Stamp -eq $stamp) {
+        return @($cache[$cacheKey].Entries)
+    }
+
+    $modules = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in [System.IO.DirectoryInfo]::new($Directory).EnumerateFileSystemInfos()) {
+        $isPackage = $entry -is [System.IO.DirectoryInfo]
+        if ($isPackage) {
+            if ($RequirePackageMarker -and -not [System.IO.File]::Exists([System.IO.Path]::Combine($entry.FullName, '__init__.py'))) {
+                continue
+            }
+
+            $moduleName = $entry.Name
+        } elseif ($entry.Extension -eq '.py' -or $entry.Extension -eq '.pyw') {
+            $moduleName = [System.IO.Path]::GetFileNameWithoutExtension($entry.Name)
+        } elseif ($entry.Extension -eq '.pyd') {
+            $moduleName = $entry.Name.Substring(0, $entry.Name.IndexOf('.'))
+        } else {
+            continue
+        }
+
+        if ($moduleName -cnotmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $moduleName -ceq '__pycache__' -or $moduleName -ceq '__init__' -or $moduleName -ceq '__main__') {
+            continue
+        }
+
+        [void]$modules.Add([pscustomobject]@{ Name = $moduleName; IsPackage = $isPackage })
+    }
+
+    $cache[$cacheKey] = [pscustomobject]@{ Stamp = $stamp; Entries = @($modules.ToArray()) }
+    @($modules.ToArray())
+}
+
+function Get-PythonModuleCompletions {
+    param([string]$CurrentWord)
+
+    $quote = ''
+    $word = $CurrentWord
+    if ($word.Length -gt 0 -and ($word[0] -eq [char]39 -or $word[0] -eq [char]34)) {
+        $quote = [string]$word[0]
+        $word = $word.Substring(1)
+    }
+
+    $lastDot = $word.LastIndexOf('.')
+    $parentName = if ($lastDot -ge 0) { $word.Substring(0, $lastDot) } else { '' }
+    $leaf = $word.Substring($lastDot + 1)
+    $parentValid = [string]::IsNullOrEmpty($parentName) -or $parentName -cmatch '^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$'
+    $results = New-Object System.Collections.Generic.List[object]
+
+    if ($parentValid) {
+        # 'python -m' puts the current directory first on sys.path; there only real packages count.
+        $searchRoots = New-Object System.Collections.Generic.List[object]
+        [void]$searchRoots.Add([pscustomobject]@{ Path = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath; Kind = 'current directory'; RequirePackageMarker = $true })
+        foreach ($root in @(Get-PythonModuleRoot)) {
+            [void]$searchRoots.Add($root)
+            if ($root.IsSite) {
+                foreach ($pthDirectory in @(Get-PythonPthDirectory -SiteDirectory $root.Path)) {
+                    [void]$searchRoots.Add([pscustomobject]@{ Path = $pthDirectory; Kind = "$($root.Kind) .pth"; RequirePackageMarker = $false })
+                }
+            }
+        }
+
+        $relativePath = $parentName.Replace('.', [System.IO.Path]::DirectorySeparatorChar)
+        $toolTips = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+        $names = New-Object System.Collections.Generic.List[string]
+        $includePrivate = $leaf.StartsWith('_', [System.StringComparison]::Ordinal)
+        $namePrefix = if ($parentName) { "$parentName." } else { '' }
+
+        foreach ($root in $searchRoots) {
+            $directory = if ($relativePath) { [System.IO.Path]::Combine($root.Path, $relativePath) } else { $root.Path }
+            if (-not [System.IO.Directory]::Exists($directory)) {
+                continue
+            }
+
+            foreach ($module in @(Get-PythonDirectoryModule -Directory $directory -RequirePackageMarker $root.RequirePackageMarker)) {
+                if (-not $module.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) -or (-not $includePrivate -and $module.Name.StartsWith('_', [System.StringComparison]::Ordinal))) {
+                    continue
+                }
+
+                $fullName = $namePrefix + $module.Name
+                if (-not $toolTips.ContainsKey($fullName)) {
+                    $kind = if ($module.IsPackage) { 'package' } else { 'module' }
+                    $toolTips[$fullName] = "$($root.Kind) $kind ($directory)"
+                    [void]$names.Add($fullName)
+                }
+            }
+        }
+
+        $names.Sort([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($name in $names) {
+            [void]$results.Add([System.Management.Automation.CompletionResult]::new("$quote$name$quote", $name, 'ParameterValue', $toolTips[$name]))
+        }
+    }
+
+    if ($results.Count -eq 0) {
+        return @(Get-PythonPlaceholderCompletions -CurrentWord $CurrentWord -Placeholder '<module>' -ToolTip 'Module name for python -m.')
+    }
+
+    @($results.ToArray())
+}
+
 function Get-PythonFirstPositionalCompletions {
     param(
         [string]$CurrentWord,
@@ -561,7 +780,7 @@ function Complete-Python {
             'HashPycsMode'  { return @(Get-PythonClosedValueCompletions -Values @('always', 'default', 'never') -CurrentWord $currentWord -ToolTip 'Value for --check-hash-based-pycs.') }
             'XOption'       { return @(Get-PythonXOptionCompletions -CurrentWord $currentWord) }
             'WarningFilter' { return @(Get-PythonWarningFilterCompletions -CurrentWord $currentWord) }
-            'ModuleName'    { return @(Get-PythonPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<module>' -ToolTip 'Module name for python -m.') }
+            'ModuleName'    { return @(Get-PythonModuleCompletions -CurrentWord $currentWord) }
             'CommandString' { return @(Get-PythonPlaceholderCompletions -CurrentWord $currentWord -Placeholder '<command-string>' -ToolTip 'Command string for python -c.') }
         }
     }
