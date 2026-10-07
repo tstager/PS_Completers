@@ -712,7 +712,7 @@
         @{
             Path    = 'pi_completer/pi_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:077D04FB0E74EE065982E8CF6307A1F01D627EF63B5B667DBE32330B8EE200F2'
+            Hash    = 'SHA256:68DAE7FF34182C658916DA01CCE5BD98F36BD2D6FCF89472A5A4D2A1B15DAF87'
             Targets = @(
                 @{ CommandName = 'pi'; Native = $true }
                 @{ CommandName = 'pi.cmd'; Native = $true }

@@ -12,8 +12,9 @@ The implementation is a **hybrid, static-first** completer:
 
 - it keeps static fallback metadata for the stable command grammar
 - it lazily refreshes safe help-driven surfaces from local `pi --help` output
-- it adds local dynamic values for custom providers and models from local `models.json` / `models.jsonc`
-- it adds installed-package source suggestions from `pi list` when that local call succeeds
+- it adds local dynamic values for providers and model ids from `models-store.json` and `models.json` / `models.jsonc`, led by the `defaultModel` from settings
+- it adds installed-package sources from the `packages` array of the global and project `settings.json` (no process is started)
+- it adds MCP server names from the global and project `mcp.json` for `pi mcp remove|login|logout`
 - it adds source-scheme and local-path hints for `install` / `remove` / `uninstall` / `update`
 - and it uses path-aware completion for session, export, extension, skill, prompt-template, theme, and `@file` arguments
 
@@ -49,7 +50,14 @@ There are no top-level assignments, loops, helper invocations, or external comma
 
 `Get-PiCompletionCache` lazily initializes:
 
-- root commands: `install`, `remove`, `uninstall`, `update`, `list`, `config`, `auth` (with `print-api-key`, `print-bearer-token`, `check` and their `--provider`, `--model`, `--min-expiry`, `--json`, `--credentials`, `--no-refresh` flags)
+- root commands: `install`, `remove`, `uninstall`, `update`, `list`, `config`, `auth` (with `print-api-key`, `print-bearer-token`, `check` and their `--provider`, `--model`, `--min-expiry`, `--json`, `--credentials`, `--no-refresh` flags), `mcp`
+- the `pi mcp` tree, taken from pi 1.0.4's `pi mcp --help` and its option parser. `pi mcp` accepts no option before the sub-command (only `--help`/`-h`), and each sub-command has its own options:
+  - `add <server>`: `-l`/`--local`, `--url`, `--env`, `--cwd` (directories), `--header`, `--bearer-token-env-var`, `--oauth-client-id`, `--oauth-client-secret`, `--oauth-callback-port`, `--oauth-client-name`, `--exposure` (`codemode`, `deferred`, `direct`, `hidden`), `--description`. Once the server name and a command word are typed, or after `--`, the rest belongs to the server command and nothing is offered
+  - `remove <server>`: `-l`/`--local`
+  - `list`: `--json`
+  - `login <server>`: `--timeout <seconds>`
+  - `logout <server>`
+  - pi's mcp parser has no `--option=value` form, so attached values are not offered there
 - global options such as `--provider`, `--model`, `--tools`, `--thinking`, `--session`, and `--export`
 - subcommand-specific options such as `-l` / `--local` for `install`, `remove`, and `uninstall`
 - the current static fallback for `update`:
@@ -76,7 +84,7 @@ On demand, the completer safely probes only these local help surfaces:
 - `pi update --help`
 - `pi list --help`
 
-Those results are cached with short TTLs and merged over the static fallback metadata. That keeps the script import-safe while allowing the completer to pick up:
+Those results are cached for 15 minutes and merged over the static fallback metadata. The cache is dropped early when pi is upgraded or its packages change: the key is the write time of `<agent dir>/install/current-version`, `<agent dir>/settings.json` and the resolved shim. Captures go through `pi.cmd` (or a `pi` application) in preference to `pi.ps1`, which would add a pwsh start-up to each one, and are killed after 5 seconds. `pi --help` itself loads every installed extension to list their flags, so the first Tab in a session still waits for it (about 2-3 s on an idle machine). That keeps the script import-safe while allowing the completer to pick up:
 
 - root global flags and aliases such as `--no-builtin-tools` / `-nbt`, `--tools` / `-t`, and `--no-context-files` / `-nc`
 - extension CLI flags exposed in root help, such as `--plan` and `--mcp-config`
@@ -91,13 +99,18 @@ If help parsing fails, completion falls back to the static metadata.
 
 The completer augments the static surface with safe local discovery:
 
-- `Update-PiCustomModelData` reads `models.json` / `models.jsonc`, parses JSONC locally with comment + trailing-comma support, and adds custom provider names and model IDs
+- `Update-PiCustomModelData` reads `models.json` / `models.jsonc` (JSONC with comments and trailing commas) and `models-store.json`, adding provider names plus every `models[].id` as `id` and `provider/id`; the `defaultModel` (and `defaultProvider/defaultModel`) from the global or project `settings.json` comes first
 - `Get-PiKnownResourcePaths` discovers extension, skill, prompt-template, and theme paths in:
   - `~/.pi/agent/...`
   - `.pi/...`
-- `Get-PiInstalledPackageSources` parses `pi list` output for installed package sources used by `remove`, `uninstall`, `update`, and `pi update --extension`
+- `Get-PiInstalledPackageSources` reads the `packages` entries (strings or `{ "source": ... }` objects) of the global and project `settings.json`, including local-path packages, for `remove`, `uninstall`, `update`, and `pi update --extension`
+- `Get-PiMcpServerName` reads only the `mcpServers` key names of the global and project `mcp.json`; server configurations (headers, secrets) are never emitted
 
-These discoveries are cached with short TTLs so completion stays responsive.
+All of these files go through `Read-PiJsonFile`, which accepts comments and trailing commas, reads keys case-sensitively as pi does, and validates with `Test-Json` before `ConvertFrom-Json -AsHashtable`, so a malformed or empty file contributes nothing and adds no record to `$Error`.
+
+The agent directory honours `PI_CODING_AGENT_DIR`. Installed package sources and MCP server names that contain spaces or PowerShell metacharacters are quoted, keeping the quote the user typed.
+
+These discoveries are cached with short TTLs, keyed on the current directory where a project file takes part, so completion stays responsive.
 
 ### 4. Context-aware parsing
 
@@ -174,5 +187,10 @@ Representative validation for this script should include:
   - `pi install `
   - `pi remove `
   - `pi config `
+  - `pi mcp `
+  - `pi mcp add x -`
+  - `pi mcp add x --exposure `
+  - `pi mcp remove `
+  - `pi --model gpt`
   - `pi.cmd --mode `
   - `pi.ps1 --mode `

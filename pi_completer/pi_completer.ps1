@@ -9,11 +9,13 @@
     The completer covers:
     - top-level `pi` subcommands and global options
     - command-specific options for install/remove/uninstall/update/list/config
+    - the `pi mcp` tree (add/remove/list/login/logout) with per-subcommand options
     - inline `--option=value` completion
     - path-aware completion for session, export, extension, skill, prompt, and theme paths
     - `@file` root-argument completion
     - enums for mode, thinking level, tools, and provider names
-    - local custom provider/model discovery from `models.json`
+    - provider/model discovery from `models-store.json`, `models.json` and the settings defaults
+    - installed package sources from `settings.json`, MCP server names from `mcp.json`
     - source-scheme and local-path hints for install/remove/update
 
     The script is safe to dot-source multiple times and keeps its top level
@@ -165,6 +167,38 @@ function Get-PiCompletionCache {
             New-PiOptionSpec -Tokens @('--version', '-v') -Description 'Show version.'
         )
 
+        # `pi mcp` takes no option before its sub-command and accepts each option
+        # only on the sub-commands its parser lists (pi 1.0.4 `pi mcp --help`).
+        $mcpHelpOptions = @(
+            New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show mcp help.'
+        )
+        $mcpLocalOptions = @(
+            New-PiOptionSpec -Tokens @('-l', '--local') -Description 'Use .pi/mcp.json in the current project instead of the global file.'
+        )
+        $mcpAddOptions = @(
+            New-PiOptionSpec -Tokens @('--url') -Description 'Streamable HTTP server URL (instead of a command).' -ValueKind 'Placeholder' -Placeholder '<url>'
+            New-PiOptionSpec -Tokens @('--env') -Description 'Environment variable for a stdio server (repeatable).' -ValueKind 'Placeholder' -Placeholder '<KEY=VALUE>'
+            New-PiOptionSpec -Tokens @('--cwd') -Description 'Working directory for a stdio server.' -ValueKind 'DirectoryPath'
+            New-PiOptionSpec -Tokens @('--header') -Description 'HTTP header (repeatable).' -ValueKind 'Placeholder' -Placeholder '<KEY=VALUE>'
+            New-PiOptionSpec -Tokens @('--bearer-token-env-var') -Description 'Send "Authorization: Bearer ${NAME}".' -ValueKind 'Placeholder' -Placeholder '<NAME>'
+            New-PiOptionSpec -Tokens @('--oauth-client-id') -Description 'Pre-registered OAuth client id.' -ValueKind 'Placeholder' -Placeholder '<id>'
+            New-PiOptionSpec -Tokens @('--oauth-client-secret') -Description 'OAuth client secret (may be ${NAME} or !command).' -ValueKind 'Placeholder' -Placeholder '<secret>'
+            New-PiOptionSpec -Tokens @('--oauth-callback-port') -Description 'Fixed OAuth callback port.' -ValueKind 'Placeholder' -Placeholder '<port>'
+            New-PiOptionSpec -Tokens @('--oauth-client-name') -Description 'Client name sent when registering with the OAuth server.' -ValueKind 'Placeholder' -Placeholder '<name>'
+            New-PiOptionSpec -Tokens @('--exposure') -Description 'codemode (default), deferred, direct, or hidden.' -ValueKind 'McpExposure'
+            New-PiOptionSpec -Tokens @('--description') -Description 'What the server offers, shown in the system prompt.' -ValueKind 'Placeholder' -Placeholder '<text>'
+        )
+        $mcpCommandSpecs = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        $mcpCommandSpecs['add'] = New-PiCommandSpec -Name 'mcp' -Description 'Add or replace a server in mcp.json.' -Positionals @('McpCommand', 'McpNewServer') -Options @($mcpLocalOptions + $mcpAddOptions + $mcpHelpOptions)
+        $mcpCommandSpecs['remove'] = New-PiCommandSpec -Name 'mcp' -Description 'Remove a server from mcp.json.' -Positionals @('McpCommand', 'McpServer') -Options @($mcpLocalOptions + $mcpHelpOptions)
+        $mcpCommandSpecs['list'] = New-PiCommandSpec -Name 'mcp' -Description 'Show state, tools, and errors.' -Positionals @('McpCommand') -Options @(
+            @(New-PiOptionSpec -Tokens @('--json') -Description 'Print the list as JSON.') + $mcpHelpOptions
+        )
+        $mcpCommandSpecs['login'] = New-PiCommandSpec -Name 'mcp' -Description 'Sign in through the browser.' -Positionals @('McpCommand', 'McpServer') -Options @(
+            @(New-PiOptionSpec -Tokens @('--timeout') -Description 'How long login waits for the browser (default: 300).' -ValueKind 'Placeholder' -Placeholder '<seconds>') + $mcpHelpOptions
+        )
+        $mcpCommandSpecs['logout'] = New-PiCommandSpec -Name 'mcp' -Description 'Delete the stored OAuth credentials.' -Positionals @('McpCommand', 'McpServer') -Options $mcpHelpOptions
+
         $commandSpecs = @(
             New-PiCommandSpec -Name 'install' -Description 'Install extension source and add to settings.' -Positionals @('PackageSource') -Options $installLikeOptions
             New-PiCommandSpec -Name 'remove' -Description 'Remove extension source from settings.' -Positionals @('InstalledPackageSource') -Options $installLikeOptions
@@ -191,6 +225,7 @@ function Get-PiCompletionCache {
                 New-PiOptionSpec -Tokens @('--no-refresh') -Description 'Do not refresh expired OAuth credentials (check).'
                 New-PiOptionSpec -Tokens @('--help', '-h') -Description 'Show subcommand help.'
             )
+            New-PiCommandSpec -Name 'mcp' -Description 'Configure and check MCP servers.' -Positionals @('McpCommand') -Options $mcpHelpOptions
         )
 
         $commandLookup = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -256,14 +291,20 @@ function Get-PiCompletionCache {
             OutputModes = @('text', 'json', 'rpc')
             TuiModes = @('regular', 'fullscreen')
             AuthCommands = @('print-api-key', 'print-bearer-token', 'check')
+            McpCommands = @('add', 'remove', 'list', 'login', 'logout')
+            McpCommandSpecs = $mcpCommandSpecs
+            McpExposureModes = @('codemode', 'deferred', 'direct', 'hidden')
             ExecutablePath = $null
             ExecutablePathProbed = $false
             CustomModelDataLoadedAt = [datetime]::MinValue
             CustomModelDataTtlSeconds = 120
+            CustomModelDataLocation = ''
             CustomProviderNames = @()
             CustomModelCandidates = @()
+            DefaultModelCandidates = @()
+            HelpVersionStamp = ''
             RootHelpLoadedAt = [datetime]::MinValue
-            RootHelpTtlSeconds = 60
+            RootHelpTtlSeconds = 900
             CommandHelpLoadedAt = @{
                 install   = [datetime]::MinValue
                 remove    = [datetime]::MinValue
@@ -271,10 +312,15 @@ function Get-PiCompletionCache {
                 update    = [datetime]::MinValue
                 list      = [datetime]::MinValue
             }
-            CommandHelpTtlSeconds = 60
+            CommandHelpTtlSeconds = 900
             InstalledPackageSourcesLoadedAt = [datetime]::MinValue
             InstalledPackageSourcesTtlSeconds = 60
+            InstalledPackageSourcesLocation = ''
             InstalledPackageSources = @()
+            McpServerNamesLoadedAt = [datetime]::MinValue
+            McpServerNamesTtlSeconds = 60
+            McpServerNamesLocation = ''
+            McpServerNames = @()
             SessionFilesLoadedAt = [datetime]::MinValue
             SessionFilesTtlSeconds = 60
             SessionFiles = @()
@@ -306,8 +352,14 @@ function Resolve-PiExecutablePath {
     $cache.ExecutablePathProbed = $true
     $cache.ExecutablePath = $null
 
-    foreach ($commandName in @('pi.ps1', 'pi.cmd', 'pi')) {
-        $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue | Select-Object -First 1
+    # The application shims start node directly; pi.ps1 would add a pwsh start-up
+    # to every capture, so it is only the last resort.
+    foreach ($candidate in @(
+            @{ Name = 'pi.cmd'; Type = 'Application' },
+            @{ Name = 'pi'; Type = 'Application' },
+            @{ Name = 'pi.ps1'; Type = 'ExternalScript' }
+        )) {
+        $command = Get-Command -Name $candidate.Name -CommandType $candidate.Type -ErrorAction Ignore | Select-Object -First 1
         if ($command) {
             $cache.ExecutablePath = if ($command.Source) { $command.Source } else { $command.Name }
             break
@@ -315,6 +367,58 @@ function Resolve-PiExecutablePath {
     }
 
     $cache.ExecutablePath
+}
+
+function Get-PiAgentDirectory {
+    $agentDirectory = $env:PI_CODING_AGENT_DIR
+    $homePath = [Environment]::GetFolderPath('UserProfile')
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        if ($agentDirectory -eq '~' -or $agentDirectory.StartsWith('~/') -or $agentDirectory.StartsWith('~\')) {
+            $agentDirectory = $homePath + $agentDirectory.Substring(1)
+        }
+
+        return $agentDirectory
+    }
+
+    if ([string]::IsNullOrWhiteSpace($homePath)) {
+        return ''
+    }
+
+    [System.IO.Path]::Combine($homePath, '.pi', 'agent')
+}
+
+function Sync-PiHelpVersionStamp {
+    # Help output changes when pi is upgraded (managed installs rewrite
+    # install/current-version, npm installs rewrite the shim) or when a package
+    # with extension CLI flags is added to settings.json.
+    $cache = Get-PiCompletionCache
+    $stampPaths = New-Object System.Collections.Generic.List[string]
+    $agentDirectory = Get-PiAgentDirectory
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        [void]$stampPaths.Add([System.IO.Path]::Combine($agentDirectory, 'install', 'current-version'))
+        [void]$stampPaths.Add([System.IO.Path]::Combine($agentDirectory, 'settings.json'))
+    }
+
+    $executablePath = Resolve-PiExecutablePath
+    if (-not [string]::IsNullOrWhiteSpace($executablePath)) {
+        [void]$stampPaths.Add($executablePath)
+    }
+
+    $stamp = [string]::Join('|', @(
+            foreach ($stampPath in $stampPaths) {
+                "$stampPath=$([System.IO.File]::GetLastWriteTimeUtc($stampPath).Ticks)"
+            }
+        ))
+
+    if ($stamp -ceq $cache.HelpVersionStamp) {
+        return
+    }
+
+    $cache.HelpVersionStamp = $stamp
+    $cache.RootHelpLoadedAt = [datetime]::MinValue
+    foreach ($commandName in @($cache.CommandHelpLoadedAt.Keys)) {
+        $cache.CommandHelpLoadedAt[$commandName] = [datetime]::MinValue
+    }
 }
 
 function ConvertTo-PiCommandLineArgument {
@@ -392,7 +496,7 @@ function Invoke-PiCapture {
         $process.StandardInput.Close()
         $outputTask = $process.StandardOutput.ReadToEndAsync()
         $errorTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(10000)) {
+        if (-not $process.WaitForExit(5000)) {
             try { $process.Kill($true) } catch { }
             return @()
         }
@@ -564,28 +668,6 @@ function Remove-PiJsonComments {
     }
 
     $builder.ToString()
-}
-
-function ConvertFrom-PiJsonConfig {
-    param(
-        [string]$Path,
-        [string]$Content
-    )
-
-    if ([System.IO.Path]::GetExtension($Path).Equals('.jsonc', [System.StringComparison]::OrdinalIgnoreCase)) {
-        $documentOptions = [System.Text.Json.JsonDocumentOptions]::new()
-        $documentOptions.CommentHandling = [System.Text.Json.JsonCommentHandling]::Skip
-        $documentOptions.AllowTrailingCommas = $true
-        $document = [System.Text.Json.JsonDocument]::Parse($Content, $documentOptions)
-
-        try {
-            return ($document.RootElement.GetRawText() | ConvertFrom-Json -ErrorAction Stop)
-        } finally {
-            $document.Dispose()
-        }
-    }
-
-    $Content | ConvertFrom-Json -ErrorAction Stop
 }
 
 function Get-PiValueKindForOption {
@@ -793,6 +875,7 @@ function ConvertFrom-PiEnumeratedDescription {
 }
 
 function Update-PiRootHelpData {
+    Sync-PiHelpVersionStamp
     $cache = Get-PiCompletionCache
     if (Test-PiCacheFresh -LoadedAt $cache.RootHelpLoadedAt -TtlSeconds $cache.RootHelpTtlSeconds) {
         return
@@ -884,6 +967,7 @@ function Update-PiCommandHelpData {
         return
     }
 
+    Sync-PiHelpVersionStamp
     if (Test-PiCacheFresh -LoadedAt $cache.CommandHelpLoadedAt[$CommandName] -TtlSeconds $cache.CommandHelpTtlSeconds) {
         return
     }
@@ -961,35 +1045,117 @@ function Get-PiGlobalOptions {
     (Get-PiCompletionCache).GlobalOptions
 }
 
+function Get-PiSettingsPath {
+    # Global settings first, then the project file that overrides it.
+    $paths = New-Object System.Collections.Generic.List[string]
+    $agentDirectory = Get-PiAgentDirectory
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        [void]$paths.Add([System.IO.Path]::Combine($agentDirectory, 'settings.json'))
+    }
+
+    [void]$paths.Add((Join-Path (Get-Location) '.pi\settings.json'))
+    @($paths.ToArray())
+}
+
+function Read-PiJsonFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    # Returns the root object as a case-sensitive dictionary (pi's JSON.parse keeps
+    # 'a' and 'A' apart), or $null. Nothing here may throw: a caught error is still
+    # recorded in $Error, so Test-Json (which records nothing) rejects a malformed
+    # file before ConvertFrom-Json, and -AsHashtable accepts every document that
+    # passes it, keys differing only in case included. Comments and trailing commas
+    # are accepted in every file (pi strips comments from models.json too).
+    $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Ignore
+    if ([string]::IsNullOrWhiteSpace($content) -or
+        -not (Test-Json -Json $content -Options IgnoreComments, AllowTrailingCommas -ErrorAction Ignore)) {
+        return $null
+    }
+
+    $root = ConvertFrom-Json -InputObject $content -AsHashtable
+    if ($root -is [System.Collections.IDictionary]) {
+        return $root
+    }
+
+    $null
+}
+
 function Get-PiInstalledPackageSources {
+    # pi's package list is the packages[] array of the global and project
+    # settings.json (entries are a source string or an object with .source).
     $cache = Get-PiCompletionCache
-    if (Test-PiCacheFresh -LoadedAt $cache.InstalledPackageSourcesLoadedAt -TtlSeconds $cache.InstalledPackageSourcesTtlSeconds) {
+    $location = (Get-Location).ProviderPath
+    if ($cache.InstalledPackageSourcesLocation -ceq $location -and
+        (Test-PiCacheFresh -LoadedAt $cache.InstalledPackageSourcesLoadedAt -TtlSeconds $cache.InstalledPackageSourcesTtlSeconds)) {
         return $cache.InstalledPackageSources
     }
 
     $sources = New-Object System.Collections.Generic.List[string]
-    $text = ConvertTo-PiPlainText -InputLines (Invoke-PiCapture -Arguments @('list'))
-    foreach ($line in @($text -split "`n")) {
-        if ($line -notmatch '^\s{2}(?!\s)(?<source>.+)$') {
+    foreach ($settingsPath in @(Get-PiSettingsPath)) {
+        $settings = Read-PiJsonFile -Path $settingsPath
+        if ($null -eq $settings -or $null -eq $settings['packages']) {
             continue
         }
 
-        $source = $Matches.source.Trim()
-        if ([string]::IsNullOrWhiteSpace($source) -or
-            $source -like 'User packages:' -or
-            $source -like 'Project packages:' -or
-            $source -like 'No packages installed.*' -or
-            $source -match '^[A-Za-z]:[\\/]' -or
-            $source -like ':*') {
-            continue
-        }
+        foreach ($package in @($settings['packages'])) {
+            $source = if ($package -is [string]) {
+                $package
+            } elseif ($package -is [System.Collections.IDictionary] -and $null -ne $package['source']) {
+                [string]$package['source']
+            } else {
+                $null
+            }
 
-        [void]$sources.Add($source)
+            if (-not [string]::IsNullOrWhiteSpace($source)) {
+                [void]$sources.Add($source)
+            }
+        }
     }
 
     $cache.InstalledPackageSources = Get-PiUniqueStrings -Items @($sources.ToArray())
+    $cache.InstalledPackageSourcesLocation = $location
     $cache.InstalledPackageSourcesLoadedAt = Get-Date
     $cache.InstalledPackageSources
+}
+
+function Get-PiMcpServerName {
+    # Server names only (never the configs, which can carry headers and
+    # secrets) from the global and project mcp.json `mcpServers` objects.
+    $cache = Get-PiCompletionCache
+    $location = (Get-Location).ProviderPath
+    if ($cache.McpServerNamesLocation -ceq $location -and
+        (Test-PiCacheFresh -LoadedAt $cache.McpServerNamesLoadedAt -TtlSeconds $cache.McpServerNamesTtlSeconds)) {
+        return $cache.McpServerNames
+    }
+
+    $paths = New-Object System.Collections.Generic.List[string]
+    $agentDirectory = Get-PiAgentDirectory
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        [void]$paths.Add([System.IO.Path]::Combine($agentDirectory, 'mcp.json'))
+    }
+
+    [void]$paths.Add((Join-Path (Get-Location) '.pi\mcp.json'))
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($path in $paths) {
+        $config = Read-PiJsonFile -Path $path
+        if ($null -eq $config -or $config['mcpServers'] -isnot [System.Collections.IDictionary]) {
+            continue
+        }
+
+        foreach ($server in $config['mcpServers'].GetEnumerator()) {
+            [void]$names.Add([string]$server.Key)
+        }
+    }
+
+    $cache.McpServerNames = Get-PiUniqueStrings -Items @($names.ToArray())
+    $cache.McpServerNamesLocation = $location
+    $cache.McpServerNamesLoadedAt = Get-Date
+    $cache.McpServerNames
 }
 
 function Get-PiTokenText {
@@ -1042,6 +1208,12 @@ function Get-PiCurrentWord {
         }
 
         if ($extent.EndOffset -eq $CursorPosition -and $element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            # A quoted (possibly unterminated) word is matched without its quotes;
+            # PowerShell hands the completer the quoted text.
+            if ($element.StringConstantType -ne [System.Management.Automation.Language.StringConstantType]::BareWord) {
+                return $element.Value
+            }
+
             return $WordToComplete
         }
 
@@ -1055,6 +1227,46 @@ function Get-PiCurrentWord {
     }
 
     $WordToComplete
+}
+
+function Get-PiQuoteCharacter {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The quote the user opened the word under the cursor with, if any.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -ge $CursorPosition -or $extent.EndOffset -lt $CursorPosition) {
+            continue
+        }
+
+        if ($extent.Text.StartsWith("'") -or $extent.Text.StartsWith('"')) {
+            return $extent.Text.Substring(0, 1)
+        }
+
+        return ''
+    }
+
+    ''
+}
+
+function ConvertTo-PiQuotedValue {
+    param(
+        [string]$Value,
+        [string]$QuoteCharacter
+    )
+
+    if ([string]::IsNullOrEmpty($QuoteCharacter) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+        return $Value
+    }
+
+    if ($QuoteCharacter -eq '"') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
 }
 
 function Get-PiCommandSpec {
@@ -1146,10 +1358,10 @@ function Get-PiAtFileCompletions {
 
 function Get-PiModelsJsonPaths {
     $paths = New-Object System.Collections.Generic.List[string]
-    $homePath = [Environment]::GetFolderPath('UserProfile')
-    if (-not [string]::IsNullOrWhiteSpace($homePath)) {
-        [void]$paths.Add((Join-Path $homePath '.pi\agent\models.json'))
-        [void]$paths.Add((Join-Path $homePath '.pi\agent\models.jsonc'))
+    $agentDirectory = Get-PiAgentDirectory
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        [void]$paths.Add([System.IO.Path]::Combine($agentDirectory, 'models.json'))
+        [void]$paths.Add([System.IO.Path]::Combine($agentDirectory, 'models.jsonc'))
     }
 
     [void]$paths.Add((Join-Path (Get-Location) '.pi\models.json'))
@@ -1158,9 +1370,39 @@ function Get-PiModelsJsonPaths {
     Get-PiUniqueStrings -Items $paths
 }
 
+function Add-PiModelEntry {
+    param(
+        [string]$ProviderName,
+        [object]$ProviderValue,
+        [System.Collections.Generic.List[string]]$ModelCandidates
+    )
+
+    if ($ProviderValue -isnot [System.Collections.IDictionary] -or $null -eq $ProviderValue['models']) {
+        return
+    }
+
+    foreach ($model in @($ProviderValue['models'])) {
+        if ($model -isnot [System.Collections.IDictionary] -or $null -eq $model['id']) {
+            continue
+        }
+
+        $modelId = [string]$model['id']
+        if ([string]::IsNullOrWhiteSpace($modelId)) {
+            continue
+        }
+
+        [void]$ModelCandidates.Add($modelId)
+        if ($modelId -notmatch '/') {
+            [void]$ModelCandidates.Add("$ProviderName/$modelId")
+        }
+    }
+}
+
 function Update-PiCustomModelData {
     $cache = Get-PiCompletionCache
-    if (Test-PiCacheFresh -LoadedAt $cache.CustomModelDataLoadedAt -TtlSeconds $cache.CustomModelDataTtlSeconds) {
+    $location = (Get-Location).ProviderPath
+    if ($cache.CustomModelDataLocation -ceq $location -and
+        (Test-PiCacheFresh -LoadedAt $cache.CustomModelDataLoadedAt -TtlSeconds $cache.CustomModelDataTtlSeconds)) {
         return
     }
 
@@ -1168,71 +1410,68 @@ function Update-PiCustomModelData {
     $modelCandidates = New-Object System.Collections.Generic.List[string]
 
     foreach ($path in @(Get-PiModelsJsonPaths)) {
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $config = Read-PiJsonFile -Path $path
+        if ($null -eq $config -or $config['providers'] -isnot [System.Collections.IDictionary]) {
             continue
         }
 
-        try {
-            $content = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
-            $config = ConvertFrom-PiJsonConfig -Path $path -Content $content
-            if ($null -eq $config -or $null -eq $config.PSObject.Properties['providers'] -or $null -eq $config.providers) {
+        foreach ($provider in $config['providers'].GetEnumerator()) {
+            $providerName = [string]$provider.Key
+            if ([string]::IsNullOrWhiteSpace($providerName)) {
                 continue
             }
 
-            foreach ($providerProperty in @($config.providers.PSObject.Properties)) {
-                $providerName = $providerProperty.Name
-                if ([string]::IsNullOrWhiteSpace($providerName)) {
-                    continue
-                }
-
-                [void]$providerNames.Add($providerName)
-
-                $providerValue = $providerProperty.Value
-                if ($null -eq $providerValue -or $null -eq $providerValue.PSObject.Properties['models']) {
-                    continue
-                }
-
-                foreach ($model in @($providerValue.models)) {
-                    if ($null -eq $model -or $null -eq $model.PSObject.Properties['id']) {
-                        continue
-                    }
-
-                    $modelId = [string]$model.id
-                    if ([string]::IsNullOrWhiteSpace($modelId)) {
-                        continue
-                    }
-
-                    [void]$modelCandidates.Add($modelId)
-                    if ($modelId -notmatch '/') {
-                        [void]$modelCandidates.Add("$providerName/$modelId")
-                    }
-                }
-            }
-        } catch {
-            continue
+            [void]$providerNames.Add($providerName)
+            Add-PiModelEntry -ProviderName $providerName -ProviderValue $provider.Value -ModelCandidates $modelCandidates
         }
     }
 
-    # Provider ids pi has actually fetched a catalog for live in models-store.json.
-    $homePath = [Environment]::GetFolderPath('UserProfile')
-    if (-not [string]::IsNullOrWhiteSpace($homePath)) {
-        $storePath = Join-Path $homePath '.pi\agent\models-store.json'
-        if (Test-Path -LiteralPath $storePath -PathType Leaf) {
-            try {
-                $store = Get-Content -LiteralPath $storePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                foreach ($storeProperty in @($store.PSObject.Properties)) {
-                    if ($storeProperty.Name -match '^[a-z0-9][a-z0-9-]*$') {
-                        [void]$providerNames.Add($storeProperty.Name)
-                    }
+    # models-store.json holds the catalog pi fetched per provider, in the same
+    # provider.models[].id shape as models.json.
+    $agentDirectory = Get-PiAgentDirectory
+    if (-not [string]::IsNullOrWhiteSpace($agentDirectory)) {
+        $store = Read-PiJsonFile -Path ([System.IO.Path]::Combine($agentDirectory, 'models-store.json'))
+        if ($null -ne $store) {
+            foreach ($storeEntry in $store.GetEnumerator()) {
+                $providerName = [string]$storeEntry.Key
+                if ($providerName -match '^[a-z0-9][a-z0-9-]*$') {
+                    [void]$providerNames.Add($providerName)
+                    Add-PiModelEntry -ProviderName $providerName -ProviderValue $storeEntry.Value -ModelCandidates $modelCandidates
                 }
-            } catch {
-                $null = $_
             }
+        }
+    }
+
+    # The configured default model leads the list (project settings override global).
+    $defaultProvider = $null
+    $defaultModel = $null
+    foreach ($settingsPath in @(Get-PiSettingsPath)) {
+        $settings = Read-PiJsonFile -Path $settingsPath
+        if ($null -eq $settings) {
+            continue
+        }
+
+        if ($settings['defaultProvider'] -is [string]) {
+            $defaultProvider = $settings['defaultProvider']
+        }
+
+        if ($settings['defaultModel'] -is [string]) {
+            $defaultModel = $settings['defaultModel']
+        }
+    }
+
+    $defaultCandidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($defaultModel)) {
+        [void]$defaultCandidates.Add($defaultModel)
+        if (-not [string]::IsNullOrWhiteSpace($defaultProvider) -and $defaultModel -notmatch '/') {
+            [void]$defaultCandidates.Add("$defaultProvider/$defaultModel")
         }
     }
 
     $cache.CustomProviderNames = Get-PiUniqueStrings -Items @($providerNames.ToArray())
     $cache.CustomModelCandidates = Get-PiUniqueStrings -Items @($modelCandidates.ToArray())
+    $cache.DefaultModelCandidates = @($defaultCandidates.ToArray())
+    $cache.CustomModelDataLocation = $location
     $cache.CustomModelDataLoadedAt = Get-Date
 }
 
@@ -1247,6 +1486,10 @@ function Get-PiModelCandidates {
     $cache = Get-PiCompletionCache
 
     $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($defaultCandidate in @($cache.DefaultModelCandidates)) {
+        [void]$candidates.Add($defaultCandidate)
+    }
+
     foreach ($providerName in @(Get-PiProviderNames)) {
         [void]$candidates.Add("$providerName/*")
         [void]$candidates.Add("$providerName/")
@@ -1452,7 +1695,8 @@ function Get-PiValueCompletions {
         [string]$WordToComplete,
         [string]$ContextToken,
         [string]$InlinePrefix,
-        [string]$Placeholder
+        [string]$Placeholder,
+        [string]$QuoteCharacter
     )
 
     $cache = Get-PiCompletionCache
@@ -1463,7 +1707,8 @@ function Get-PiValueCompletions {
             [string]$completionText,
             [string]$toolTip,
             [string]$resultType = 'ParameterValue',
-            [string]$listItemText = $completionText
+            [string]$listItemText = $completionText,
+            [string]$emittedText = $completionText
         )
 
         if ([string]::IsNullOrWhiteSpace($completionText)) {
@@ -1475,9 +1720,9 @@ function Get-PiValueCompletions {
         }
 
         $finalCompletion = if ([string]::IsNullOrEmpty($InlinePrefix)) {
-            $completionText
+            $emittedText
         } else {
-            "$InlinePrefix$completionText"
+            "$InlinePrefix$emittedText"
         }
 
         $finalListItemText = if ([string]::IsNullOrEmpty($InlinePrefix)) {
@@ -1515,6 +1760,26 @@ function Get-PiValueCompletions {
         'AuthCommand' {
             foreach ($authCommand in @($cache.AuthCommands)) {
                 & $addResult $authCommand 'pi auth command'
+            }
+        }
+        'McpCommand' {
+            foreach ($mcpCommand in @($cache.McpCommands)) {
+                & $addResult $mcpCommand $cache.McpCommandSpecs[$mcpCommand].Description
+            }
+        }
+        'McpServer' {
+            foreach ($serverName in @(Get-PiMcpServerName)) {
+                & $addResult $serverName 'Configured MCP server' -emittedText (ConvertTo-PiQuotedValue -Value $serverName -QuoteCharacter $QuoteCharacter)
+            }
+
+            & $addResult '<server>' 'MCP server name'
+        }
+        'McpNewServer' {
+            & $addResult '<server>' 'Name of the MCP server to add or replace'
+        }
+        'McpExposure' {
+            foreach ($exposureMode in @($cache.McpExposureModes)) {
+                & $addResult $exposureMode 'MCP tool exposure'
             }
         }
         'SessionName' {
@@ -1701,7 +1966,7 @@ function Get-PiValueCompletions {
             }
 
             foreach ($source in @(Get-PiInstalledPackageSources)) {
-                & $addResult $source 'Installed package source'
+                & $addResult $source 'Installed package source' -emittedText (ConvertTo-PiQuotedValue -Value $source -QuoteCharacter $QuoteCharacter)
             }
 
             if (Test-PiPathLike -Value $WordToComplete) {
@@ -1718,7 +1983,7 @@ function Get-PiValueCompletions {
             }
 
             foreach ($source in @(Get-PiInstalledPackageSources)) {
-                & $addResult $source 'Installed package source'
+                & $addResult $source 'Installed package source' -emittedText (ConvertTo-PiQuotedValue -Value $source -QuoteCharacter $QuoteCharacter)
             }
 
             foreach ($source in @('npm:', 'git:', 'https://', 'ssh://git@github.com/', '.\', '..\')) {
@@ -1785,12 +2050,15 @@ function Complete-Pi {
 
     $cache = Get-PiCompletionCache
     $globalOptions = @(Get-PiGlobalOptions)
+    $quoteCharacter = Get-PiQuoteCharacter -CommandAst $CommandAst -CursorPosition $CursorPosition
     $WordToComplete = Get-PiCurrentWord -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
     $tokens = @(Get-PiProcessedTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
     $commandSpec = $null
     $positionalsConsumed = 0
     $expectingValue = $null
     $rootMessageMode = $false
+    $mcpCommandArguments = $false
+    $mcpSubcommand = ''
     $exportInputConsumed = $false
     $exportOutputConsumed = $false
     $selectedUpdateTarget = $false
@@ -1823,7 +2091,7 @@ function Complete-Pi {
             $expectingValue = $null
         }
 
-        if ($rootMessageMode) {
+        if ($rootMessageMode -or $mcpCommandArguments) {
             continue
         }
 
@@ -1872,6 +2140,13 @@ function Complete-Pi {
             continue
         }
 
+        # `pi mcp add <server> -- <command> [args...]`: everything after `--`
+        # belongs to the server command.
+        if ($mcpSubcommand -ceq 'add' -and $token -eq '--') {
+            $mcpCommandArguments = $true
+            continue
+        }
+
         if ($token.StartsWith('-')) {
             $commandOption = Find-PiOptionSpec -Token $token -Options $commandSpec.Options
             if ($commandOption) {
@@ -1905,6 +2180,21 @@ function Complete-Pi {
         if ($commandSpec.Name -eq 'update') {
             $selectedUpdateTarget = $true
         }
+
+        if ($commandSpec.Name -eq 'mcp') {
+            if ($positionalsConsumed -eq 1 -and $cache.McpCommandSpecs.ContainsKey($token)) {
+                # Each mcp sub-command has its own options and operands.
+                $mcpSubcommand = $token
+                $commandSpec = $cache.McpCommandSpecs[$token]
+            } elseif ($mcpSubcommand -ceq 'add' -and $positionalsConsumed -ge 3) {
+                # pi stops parsing options once the server name and the command are seen.
+                $mcpCommandArguments = $true
+            }
+        }
+    }
+
+    if ($mcpCommandArguments) {
+        return
     }
 
     if ($expectingValue -and $expectingValue.OptionalValue) {
@@ -1913,7 +2203,10 @@ function Complete-Pi {
         }
     }
 
-    if ([string]::IsNullOrEmpty($WordToComplete) -and $tokens.Count -gt 0 -and $tokens[-1].Contains('=')) {
+    # pi mcp's own option parser has no --option=value form.
+    $attachedValues = -not ($commandSpec -and $commandSpec.Name -eq 'mcp')
+
+    if ($attachedValues -and [string]::IsNullOrEmpty($WordToComplete) -and $tokens.Count -gt 0 -and $tokens[-1].Contains('=')) {
         $options = if ($commandSpec) { $commandSpec.Options } else { $globalOptions }
         $inlineEmptyOption = Find-PiOptionSpec -Token $tokens[-1] -Options $options
         if ($inlineEmptyOption -and $inlineEmptyOption.ValueKind) {
@@ -1921,26 +2214,26 @@ function Complete-Pi {
             $flagPart = $tokens[-1].Substring(0, $equalsIndex)
             $valuePrefix = $tokens[-1].Substring($equalsIndex + 1)
             if ([string]::IsNullOrEmpty($valuePrefix)) {
-                Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineEmptyOption.Placeholder
+                Get-PiValueCompletions -ValueKind $inlineEmptyOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineEmptyOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineEmptyOption.Placeholder -QuoteCharacter $quoteCharacter
                 return
             }
         }
     }
 
-    if ($WordToComplete -like '*=*') {
+    if ($attachedValues -and $WordToComplete -like '*=*') {
         $equalsIndex = $WordToComplete.IndexOf('=')
         $flagPart = $WordToComplete.Substring(0, $equalsIndex)
         $valuePrefix = $WordToComplete.Substring($equalsIndex + 1)
         $options = if ($commandSpec) { $commandSpec.Options } else { $globalOptions }
         $inlineOption = Find-PiOptionSpec -Token $flagPart -Options $options
         if ($inlineOption -and $inlineOption.ValueKind) {
-            Get-PiValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineOption.Placeholder
+            Get-PiValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart=" -Placeholder $inlineOption.Placeholder -QuoteCharacter $quoteCharacter
             return
         }
     }
 
     if ($expectingValue) {
-        Get-PiValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -ContextToken $expectingValue.Token -Placeholder $expectingValue.Placeholder
+        Get-PiValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -ContextToken $expectingValue.Token -Placeholder $expectingValue.Placeholder -QuoteCharacter $quoteCharacter
         return
     }
 
@@ -2013,7 +2306,7 @@ function Complete-Pi {
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
     if ($valueKind) {
-        foreach ($item in @(Get-PiValueCompletions -ValueKind $valueKind -WordToComplete $WordToComplete -ContextToken $commandSpec.Name)) {
+        foreach ($item in @(Get-PiValueCompletions -ValueKind $valueKind -WordToComplete $WordToComplete -ContextToken $commandSpec.Name -QuoteCharacter $quoteCharacter)) {
             [void]$results.Add($item)
         }
     }
