@@ -591,7 +591,7 @@
         @{
             Path    = 'mktemp_completer/mktemp_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:47E3B94A31EA12A5F7B9329298AD37C9161DF635DA9CEA7D2904052CF1D9236B'
+            Hash    = 'SHA256:8A6521AB63FAB9934155E9FFF3079B44F5D186E95C382514193168E6A3871D1E'
             Targets = @(
                 @{ CommandName = 'mktemp'; Native = $true }
                 @{ CommandName = 'mktemp.exe'; Native = $true }

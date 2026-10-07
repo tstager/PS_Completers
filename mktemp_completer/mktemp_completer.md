@@ -62,6 +62,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - TEMPLATE names a file that does not exist yet and must end in at least three X's, so the operand slot offers template shapes instead of existing files; only a path part inside the template (`subdir\log.`) is completed against the filesystem, directories only.
 - `-p DIR` and `--tmpdir[=DIR]` are directory-only slots: files are filtered out and the results keep their `ProviderContainer` type. The attached short form `-pC:\Temp` is recognised too; because PowerShell splits that token at the colon and only replaces the text after `-pC:`, the completer trims that unreplaced head from its results.
+- `--tmpdir`'s DIR is optional and attached-only (`--tmpdir=DIR`); the tool rejects `--tmpdir DIR TEMPLATE` with "too many templates", so the word after a bare `--tmpdir` is the TEMPLATE operand and gets template shapes.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 

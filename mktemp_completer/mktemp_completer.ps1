@@ -12,7 +12,7 @@ function Get-MktempCompletionOptions {
     $fallbackOptions = @('-d', '--directory', '-u', '--dry-run', '-q', '--quiet', '--suffix', '-p', '--tmpdir', '-t', '-h', '--help', '-V', '--version')
     $commandCandidates = @('mktemp.exe', 'mktemp')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -262,6 +262,12 @@ function Get-MktempOptionValueCompletions {
         } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
             $option = $elements[-2]
         }
+
+        # --tmpdir[=DIR] takes its DIR only attached, so the word after a bare --tmpdir is the
+        # TEMPLATE operand; only -p and --suffix own the next word.
+        if ($option -cnotin @('-p', '--suffix')) {
+            $option = $null
+        }
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
@@ -347,7 +353,7 @@ function Complete-Mktemp {
         }
     }
 
-    if ($currentWord -match '^(?:--?[A-Za-z0-9][A-Za-z0-9-]*=|-p.)' -or ((-not $currentWord.StartsWith('-')) -and $previousToken -cin @('-p', '--tmpdir', '--suffix'))) {
+    if ($currentWord -match '^(?:--?[A-Za-z0-9][A-Za-z0-9-]*=|-p.)' -or ((-not $currentWord.StartsWith('-')) -and $previousToken -cin @('-p', '--suffix'))) {
         return @()
     }
 
