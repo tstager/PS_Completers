@@ -139,7 +139,7 @@
         @{
             Path    = 'cmd_completer/cmd_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:CED24A5053041A788FE4AA866294C469750D28E416BB80C683559058A23BAF4A'
+            Hash    = 'SHA256:C21A914F934A7E5B530A411F65470AAF387233F5C9A575B4F1D3DB92E3F80420'
             Targets = @(
                 @{ CommandName = 'cmd'; Native = $true }
                 @{ CommandName = 'cmd.exe'; Native = $true }

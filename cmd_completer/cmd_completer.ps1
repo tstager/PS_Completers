@@ -1,5 +1,13 @@
 Set-StrictMode -Version 2.0
 
+if (-not (Get-Variable -Name CmdPathCommandCache -Scope Script -ErrorAction Ignore)) {
+    $script:CmdPathCommandCache = @{
+        Key      = $null
+        Expires  = 0
+        Commands = @()
+    }
+}
+
 if ($true) {
 function New-CmdCompletionResult {
     param(
@@ -166,6 +174,47 @@ function Get-CmdInternalCommands {
     )
 }
 
+function Get-CmdPathCommandList {
+    # Applications (%PATHEXT%) and PowerShell scripts (.ps1) on %PATH%, first match in
+    # PATH order winning, sorted by name. Cached per PATH/PATHEXT value with a short TTL
+    # so files installed into an existing PATH directory still show up.
+    $cache = $script:CmdPathCommandCache
+    $key = [string]$env:PATH + '|' + [string]$env:PATHEXT
+    if ($cache.Key -ceq $key -and $cache.Expires -gt [System.Environment]::TickCount64) {
+        return $cache.Commands
+    }
+
+    $extensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($extension in @(([string]$env:PATHEXT).Split(';')) + '.ps1') {
+        if (-not [string]::IsNullOrWhiteSpace($extension)) {
+            [void]$extensions.Add($extension.Trim())
+        }
+    }
+
+    $options = [System.IO.EnumerationOptions]::new()
+    $options.AttributesToSkip = [System.IO.FileAttributes]::None
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $commands = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in ([string]$env:PATH).Split(';')) {
+        $directory = [System.Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+        if ([string]::IsNullOrWhiteSpace($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+            continue
+        }
+
+        foreach ($file in [System.IO.Directory]::EnumerateFiles($directory, '*', $options)) {
+            $name = [System.IO.Path]::GetFileName($file)
+            if ($extensions.Contains([System.IO.Path]::GetExtension($name)) -and $seen.Add($name)) {
+                $commands.Add([pscustomobject]@{ Name = $name; Source = $file })
+            }
+        }
+    }
+
+    $cache.Commands = @($commands | Sort-Object -Property Name)
+    $cache.Key = $key
+    $cache.Expires = [System.Environment]::TickCount64 + 60000
+    $cache.Commands
+}
+
 function Get-CmdCommandCompletions {
     param([string]$CurrentWord)
 
@@ -186,7 +235,7 @@ function Get-CmdCommandCompletions {
         }
     }
 
-    foreach ($command in @(Get-Command -Name ([System.Management.Automation.WildcardPattern]::Escape($cleanWord) + '*') -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 30)) {
+    foreach ($command in @(Get-CmdPathCommandList | Where-Object { $_.Name.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 30)) {
         New-CmdCompletionResult -CompletionText ($quotePrefix + $command.Name + $quotePrefix) -ListItemText $command.Name -ToolTip $command.Source
     }
 
