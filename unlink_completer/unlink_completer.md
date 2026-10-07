@@ -50,7 +50,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The current word is the command element the PowerShell parser places under the cursor, so completion works when the command is not the first statement on the line, and an unterminated quote such as `unlink "C:\Program F` completes the whole typed path instead of the text after its last space.
+- The opening quote is stripped before matching (and the quoting inside it undone, so `'it''s` matches `it's`), and the completion keeps the user's quote character. Unquoted names that contain whitespace or an argument-mode metacharacter (`{` `}` `(` `)` `;` `,` `|` `&` `<` `>` `'` `"` `` ` `` `$`, or a leading `@` or `#`) are emitted in single quotes with embedded `'` doubled, the same way the engine quotes paths; inside double quotes `` ` ``, `"` and `$` are backtick-escaped.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios

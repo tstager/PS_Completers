@@ -12,7 +12,7 @@ function Get-UnlinkCompletionOptions {
     $fallbackOptions = @('--help', '--version')
     $commandCandidates = @('unlink.exe', 'unlink')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -87,26 +87,53 @@ function New-UnlinkCompletionResult {
 function Remove-UnlinkOuterQuotes {
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    # The word may be an unterminated quote running to the cursor, so the closing
+    # quote is optional. Undo the quoting PowerShell applies inside each form so a
+    # previously accepted quoted completion matches its file again.
+    if ($Value.StartsWith("'")) {
+        $inner = $Value.Substring(1)
+        if ($inner -match "('+)$" -and $Matches[1].Length % 2 -eq 1) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+
+        return $inner.Replace("''", "'")
+    }
+
+    if ($Value.StartsWith('"')) {
+        $inner = $Value.Substring(1)
+        if ($inner -match '^(?:[^`]|`.)*"$') {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+
+        return ($inner -replace '`(.)', '$1')
+    }
+
+    $Value
 }
 
 function ConvertTo-UnlinkQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Whitespace and argument-mode metacharacters would end, split or expand a
+    # bare word, so such names are quoted in the user's quote style (single
+    # quotes when the user typed none, matching the engine's own path quoting).
+    if ($QuoteChar -eq '"') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
     }
 
     $Value
@@ -114,26 +141,22 @@ function ConvertTo-UnlinkQuotedValue {
 
 function Get-UnlinkCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the
+    # cursor, so the word under the cursor is read from the AST, not by splitting
+    # the line on whitespace.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
+    # No element under the cursor (it sits in whitespace): the engine's word is empty.
     $Fallback
 }
 
@@ -141,7 +164,11 @@ function Get-UnlinkPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-UnlinkOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath[0] -eq [char]34 -or $InputPath[0] -eq [char]39)) {
+        [string]$InputPath[0]
+    } else {
+        ''
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -178,7 +205,7 @@ function Get-UnlinkPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-UnlinkQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-UnlinkQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-UnlinkCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -208,7 +235,7 @@ function Complete-Unlink {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-UnlinkCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-UnlinkCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {

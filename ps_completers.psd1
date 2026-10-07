@@ -1404,7 +1404,7 @@
         @{
             Path    = 'unlink_completer/unlink_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:77D38D801DF4B95F2D4A7DD5051D169B039F90010D79CFEA38867BBEA5D95BFD'
+            Hash    = 'SHA256:BC43B4546645FB03BE81498E6AE1A72805550304936A5194A3F6997E57555CC1'
             Targets = @(
                 @{ CommandName = 'unlink'; Native = $true }
                 @{ CommandName = 'unlink.exe'; Native = $true }
