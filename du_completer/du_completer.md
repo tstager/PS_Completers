@@ -10,6 +10,7 @@ The completer covers:
 
 - every short and long option of GNU `du`, offered case-sensitively so `-B`/`-b`, `-D`/`-d`, `-H`/`-h`, `-L`/`-l`, `-S`/`-s` and `-X`/`-x` stay distinct
 - values for `-d`/`--max-depth`, `-B`/`--block-size`, `-t`/`--threshold`, `--time`, `--time-style` and `--exclude`, in the separate and the attached `--opt=value` form
+- clustered short flags (`-sh`, `-sd 1`, `-sd1`), as GNU `du` parses them with getopt
 - directory completion for the operand slots
 - quoted paths, including an unterminated opening quote
 
@@ -40,8 +41,9 @@ The top level contains `Set-StrictMode`, one `Get-Variable`-guarded catalog init
 ## How completion works
 
 - `Initialize-DuCompletionCatalog` builds the option catalog from a static table of GNU options with their value kinds, then overlays descriptions parsed from `du --help` (run with stdin closed). Lookups use an ordinal comparer.
-- `Get-DuState` scans the completed tokens, records which options were used, and notes when the previous option still expects a value. An attached `--opt=value` token counts as a complete option.
-- `Complete-Du` answers, in order: values for an attached `--opt=` word, values for a pending option, options for a word starting with `-`, and directory completion for everything else. An empty operand slot also lists the unused options.
+- `Get-DuState` scans the completed tokens, records which options were used (ordinal, so `-s` does not hide `-S`), and notes when the previous option still expects a value. An attached `--opt=value` token counts as a complete option.
+- `Get-DuShortFlagCluster` splits a cluster such as `-sh` or `-sd1` into its flags: every letter is a flag until one that takes a value, which consumes the rest of the word or, when it ends the word, the next word. A completed `-sd ` therefore offers depth values, and `-sd1 ` does not.
+- `Complete-Du` answers, in order: values for an attached `--opt=` word, values for a pending option, cluster extensions for a word of two or more short flags (`-sh` offers `-sha`, `-shc`, ... for each unused short flag; a cluster ending in a value-taking flag is not extended), options for a word starting with `-`, and directory completion for everything else. An empty operand slot also lists the unused options.
 - Value kinds: `Levels` offers `0 1 2 3 5 10`; `Size` offers `1 1K 1M 1G K M G`; `TimeWord` offers `atime access use ctime status`; `TimeStyle` offers `full-iso long-iso iso +%Y-%m-%d`; `File` returns nothing so PowerShell's file completion applies.
 
 ## Representative validation scenarios
@@ -53,6 +55,8 @@ du -d
 du --max-depth=
 du --time=
 du -h
+du -sh
+du -sd 
 ```
 
 Expected behavior:
@@ -61,6 +65,7 @@ Expected behavior:
 - `--m` completes `--max-depth`; `-d ` and `--max-depth=` list the depth hints
 - `--time=` lists the time words with the `--time=` prefix kept
 - `-h ` lists the directories of the current location
+- `-sh` lists `-sh0`, `-sha`, `-shB`, ... for every unused short flag; `-sd ` lists the depth hints
 
 ## Dependencies or external command expectations
 

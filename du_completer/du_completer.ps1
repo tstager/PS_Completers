@@ -18,7 +18,7 @@ function Resolve-DuCommandName {
         return $script:DuCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name du.exe, du -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name du.exe, du -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:DuCompletionCatalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -204,12 +204,38 @@ function Get-DuArgumentTokens {
     $tokens
 }
 
+function Get-DuShortFlagCluster {
+    param([string]$Token)
+
+    # du parses with getopt, so '-sh' is '-s -h' and '-sd1' is '-s -d 1': every letter is a flag
+    # until one that takes a value, which consumes the rest of the word (or the next word).
+    if ($Token -cnotmatch '^-[A-Za-z0-9]{2,}$') {
+        return @()
+    }
+
+    $flags = [System.Collections.Generic.List[object]]::new()
+    foreach ($letter in $Token.Substring(1).ToCharArray()) {
+        $flag = '-' + $letter
+        if (-not $script:DuCompletionCatalog.SwitchByKey.ContainsKey($flag)) {
+            return @()
+        }
+
+        $flagSpec = $script:DuCompletionCatalog.SwitchByKey[$flag]
+        $flags.Add($flagSpec)
+        if ($flagSpec.TakesValue) {
+            break
+        }
+    }
+
+    $flags.ToArray()
+}
+
 function Get-DuState {
     param([string[]]$TokensBeforeCurrent)
 
     Initialize-DuCompletionCatalog
 
-    $usedSwitches = @{}
+    $usedSwitches = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
     $positionals = New-Object System.Collections.Generic.List[string]
     $pendingValueKind = $null
     $helpRequested = $false
@@ -240,6 +266,19 @@ function Get-DuState {
 
             if ($switchSpec.TakesValue -and -not $attachedValue) {
                 $pendingValueKind = $switchSpec.ValueKind
+            }
+            continue
+        }
+
+        $clusterFlags = @(Get-DuShortFlagCluster -Token $cleanToken)
+        if ($clusterFlags.Count -gt 0) {
+            foreach ($flagSpec in $clusterFlags) {
+                $usedSwitches[$flagSpec.Token] = $true
+            }
+
+            $lastFlag = $clusterFlags[-1]
+            if ($lastFlag.TakesValue -and $cleanToken.Length -eq ($clusterFlags.Count + 1)) {
+                $pendingValueKind = $lastFlag.ValueKind
             }
             continue
         }
@@ -276,6 +315,32 @@ function Get-DuSwitchCompletions {
     }
 }
 
+function Get-DuShortFlagClusterCompletions {
+    param(
+        [string]$CurrentWord,
+        [pscustomobject]$State
+    )
+
+    # Extend a cluster of value-less short flags with each short flag not yet used; a flag that
+    # takes a value may only end the cluster, so it is offered but never extended.
+    $clusterFlags = @(Get-DuShortFlagCluster -Token $CurrentWord)
+    if ($clusterFlags.Count -eq 0 -or $clusterFlags[-1].TakesValue) {
+        return @()
+    }
+
+    $usedFlags = @($clusterFlags | ForEach-Object { $_.Token })
+    @(
+        foreach ($switchSpec in $script:DuCompletionCatalog.Switches) {
+            if ($switchSpec.Token -cnotmatch '^-[A-Za-z0-9]$' -or $switchSpec.Token -cin $usedFlags -or $State.UsedSwitches.ContainsKey($switchSpec.Token)) {
+                continue
+            }
+
+            $clustered = $CurrentWord + $switchSpec.Token.Substring(1)
+            New-DuCompletionResult -CompletionText $clustered -ListItemText $clustered -ResultType 'ParameterName' -ToolTip ('{0}: {1}' -f $switchSpec.Token, $switchSpec.Description)
+        }
+    )
+}
+
 function Get-DuDirectoryCompletions {
     param([string]$InputPath)
 
@@ -298,7 +363,7 @@ function Get-DuDirectoryCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property Name)) {
@@ -378,6 +443,10 @@ function Complete-Du {
 
     if ($state.PendingValueKind) {
         return @(Get-DuValueCompletions -ValueKind $state.PendingValueKind -CurrentWord $currentWord)
+    }
+
+    if ($currentWord -cmatch '^-[A-Za-z0-9]{2,}$') {
+        return @(Get-DuShortFlagClusterCompletions -CurrentWord $currentWord -State $state)
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
