@@ -9,7 +9,7 @@ The implementation is static-first with light safe runtime hints:
 - it seeds the validated switch surface
 - it optionally parses `Listdlls -accepteula -nobanner /?` (stdin closed, 5 s timeout) to refine descriptions
 - it adds local process-name hints for the positional `processname|pid` slot, and PID hints once the typed prefix is numeric
-- it uses a placeholder for the free-form `-d dllname` slot
+- it offers the DLL file names in the system directory (System32) for the `-d dllname` slot
 
 ## Registration and command names
 
@@ -50,13 +50,14 @@ For the default `processname|pid` form, the completer uses `Get-Process` and a s
 - process names, sorted, when the typed prefix is empty or non-numeric
 - process IDs, numerically sorted, only when the typed prefix is all digits (PIDs 0 and 4 are omitted because Listdlls cannot open them)
 
-### DLL-name placeholder
+### DLL names for `-d`
 
-For `-d`, the script deliberately avoids live DLL probing and returns:
+For `-d`, the completer lists the `*.dll` file names in the system directory (`[Environment]::SystemDirectory`, normally `C:\Windows\System32`). The list is read from disk on the first `-d` Tab and cached for 300 seconds. No process is started and no running process is inspected.
 
-- `<dll-name>`
-
-That suppresses filesystem fallback without pretending to inspect module state.
+- matching is a case-insensitive prefix match on the file name
+- each tooltip shows the full path
+- if you typed an opening quote (`'` or `"`), the results keep that quote; names that contain whitespace or PowerShell metacharacters are single-quoted
+- if nothing matches, or the directory cannot be read, the completer falls back to `<dll-name>` (empty word) or echoes the typed value, which suppresses the filesystem fallback
 
 ## Key completion behaviors / supported values
 
@@ -80,17 +81,13 @@ Modelled on the two usage forms `listdlls [-r] [-v | -u] [processname|pid]` and 
 
 ### `-d dllname`
 
-`listdlls -d ` returns:
-
-- `<dll-name>`
-
-If you already started typing a value, the completer echoes that current token back as a safe placeholder completion.
+`listdlls -d ker` returns the matching System32 DLL names, for example `kernel32.dll`, `KernelBase.dll` and `kerberos.dll`. Listdlls itself also accepts a partial name such as `kernel32`, so you can stop typing early.
 
 ## Dependencies or external command expectations
 
 - `Get-Process` is used for local process hints
 - `Listdlls -accepteula -nobanner /?` is optionally parsed for help text refinement (help output only; the call is bounded by a timeout and never prompts)
-- no local DLL enumeration is attempted
+- the `*.dll` file names in the system directory are enumerated for `-d` (a passive directory read, cached for 300 s)
 
 ## Usage / loading example
 
@@ -110,5 +107,5 @@ Validated with `pwsh -NoProfile` and `TabExpansion2` for both bare and `.exe` co
 
 ## Limitations / notes
 
-- The completer intentionally does not enumerate loaded module names.
+- The completer does not walk the modules loaded by running processes (that takes seconds); `-d` names come from System32 only, so DLLs loaded from other folders must be typed.
 - Process hints are local-only and short-lived.

@@ -555,7 +555,7 @@
         @{
             Path    = 'listdlls_completer/listdlls_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:300E31B1A44A71FCBA88C765A29F17CD71A533EE770112AF890C566AA006CE35'
+            Hash    = 'SHA256:7C8E3B8F4A20D354901E4DB74D5DC14F60C5ACA994956205FDA356EEFE9EA596'
             Targets = @(
                 @{ CommandName = 'Listdlls'; Native = $true }
                 @{ CommandName = 'Listdlls.exe'; Native = $true }

@@ -12,6 +12,10 @@ if (-not (Get-Variable -Name ListdllsCompletionCatalog -Scope Script -ErrorActio
         ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 15
         DllPlaceholder          = '<dll-name>'
+        DllEntries              = @()
+        DllCacheUpdated         = $null
+        DllCacheTtlSeconds      = 300
+        QuotePattern            = '[\s{}();,|&<>''"`$]|^[@#]'
     }
 }
 
@@ -243,6 +247,105 @@ function Update-ListdllsProcessCache {
     $script:ListdllsCompletionCatalog.ProcessCacheUpdated = Get-Date
 }
 
+function Update-ListdllsDllCache {
+    $lastUpdated = $script:ListdllsCompletionCatalog.DllCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:ListdllsCompletionCatalog.DllCacheTtlSeconds) {
+            return
+        }
+    }
+
+    # System32 file names are a passive, cheap source; walking (Get-Process).Modules takes seconds.
+    $names = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $systemDirectory = [System.Environment]::SystemDirectory
+    if (-not [string]::IsNullOrEmpty($systemDirectory) -and [System.IO.Directory]::Exists($systemDirectory)) {
+        try {
+            foreach ($path in [System.IO.Directory]::EnumerateFiles($systemDirectory, '*.dll')) {
+                [void]$names.Add([System.IO.Path]::GetFileName($path))
+            }
+        } catch {
+            Write-Debug "listdlls DLL enumeration failed: $($_.Exception.Message)"
+        }
+    }
+
+    # Prebuilt unquoted results keep a warm Tab over the 3700+ names cheap; ListItemText holds the bare name.
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in $names) {
+        $completionText = $name
+        if ($name -match $script:ListdllsCompletionCatalog.QuotePattern) {
+            $completionText = ConvertTo-ListdllsQuotedValue -Value $name -Quote ''
+        }
+
+        $entries.Add([System.Management.Automation.CompletionResult]::new(
+                $completionText,
+                $name,
+                'ParameterValue',
+                [System.IO.Path]::Combine($systemDirectory, $name)
+            ))
+    }
+
+    $script:ListdllsCompletionCatalog.DllEntries = @($entries.ToArray())
+    $script:ListdllsCompletionCatalog.DllCacheUpdated = Get-Date
+}
+
+function ConvertTo-ListdllsQuotedValue {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    if ($Quote -eq "'" -or $Value -match $script:ListdllsCompletionCatalog.QuotePattern) {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    $Value
+}
+
+function Get-ListdllsDllCompletions {
+    param([string]$CurrentWord)
+
+    Update-ListdllsDllCache
+
+    $quote = ''
+    $typedValue = $CurrentWord
+    if ($typedValue.Length -gt 0 -and ($typedValue[0] -eq [char]"'" -or $typedValue[0] -eq [char]'"')) {
+        $quote = [string]$typedValue[0]
+        $typedValue = $typedValue.Substring(1)
+        if ($typedValue.EndsWith($quote)) {
+            $typedValue = $typedValue.Substring(0, $typedValue.Length - 1)
+        }
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $script:ListdllsCompletionCatalog.DllEntries) {
+        if (-not $entry.ListItemText.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        if ([string]::IsNullOrEmpty($quote)) {
+            $results.Add($entry)
+        } else {
+            $results.Add([System.Management.Automation.CompletionResult]::new(
+                    (ConvertTo-ListdllsQuotedValue -Value $entry.ListItemText -Quote $quote),
+                    $entry.ListItemText,
+                    'ParameterValue',
+                    $entry.ToolTip
+                ))
+        }
+    }
+
+    if ($results.Count -gt 0) {
+        return @($results.ToArray())
+    }
+
+    @(New-ListdllsLiteralValueResults -CurrentValue $CurrentWord -Placeholder $script:ListdllsCompletionCatalog.DllPlaceholder -ToolTip 'DLL name to search for.')
+}
+
 function New-ListdllsLiteralValueResults {
     param(
         [string]$CurrentValue,
@@ -433,7 +536,7 @@ function Complete-Listdlls {
     }
 
     if ($state.ValueContext -eq '-d') {
-        return @(New-ListdllsLiteralValueResults -CurrentValue $currentWord -Placeholder $script:ListdllsCompletionCatalog.DllPlaceholder -ToolTip 'DLL name to search for.')
+        return @(Get-ListdllsDllCompletions -CurrentWord $currentWord)
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/'))) {
