@@ -83,7 +83,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## Option values
 
-- `--backup`: `none`, `off`, `numbered`, `t`, `existing`, `nil`, `simple`, `never`
+- `--backup=`: `none`, `off`, `numbered`, `t`, `existing`, `nil`, `simple`, `never` (attached form only; `--backup[=CONTROL]` takes an optional argument, so `ln --backup none` would read `none` as TARGET)
 - `-S`, `--suffix`: `~`, `<suffix>`
 - `-t`, `--target-directory`: filesystem paths
 
@@ -99,7 +99,7 @@ ln --backup=
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
-- `--backup` shows its documented values in both the separate and the attached form
+- `--backup=` shows its documented values; `--backup ` (space-separated) falls through to path completion like `-b `, because ln does not accept a CONTROL word there
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 

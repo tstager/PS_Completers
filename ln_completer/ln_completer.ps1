@@ -12,7 +12,7 @@ function Get-LnCompletionOptions {
     $fallbackOptions = @('-b', '--backup', '-f', '--force', '-i', '--interactive', '-L', '--logical', '-n', '--no-dereference', '-P', '--physical', '-r', '--relative', '-S', '--suffix', '-s', '--symbolic', '-t', '--target-directory', '-T', '--no-target-directory', '-v', '--verbose', '-h', '--help', '-V', '--version')
     $commandCandidates = @('ln.exe', 'ln')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -213,6 +213,11 @@ function Get-LnOptionValueCompletions {
     }
 
     if ([string]::IsNullOrEmpty($option)) {
+        return @()
+    }
+
+    # --backup[=CONTROL] takes an optional argument, so CONTROL is only accepted attached.
+    if ($option -ceq '--backup' -and -not $attached) {
         return @()
     }
 
