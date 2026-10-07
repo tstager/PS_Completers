@@ -12,7 +12,7 @@ function Get-TacCompletionOptions {
     $fallbackOptions = @('-b', '--before', '-r', '--regex', '-s', '--separator', '--help', '--version')
     $commandCandidates = @('tac.exe', 'tac')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,29 +84,37 @@ function New-TacCompletionResult {
     )
 }
 
-function Remove-TacOuterQuotes {
-    param([string]$Value)
+function Get-TacQuoteKind {
+    param([string]$Text)
 
-    if ($null -eq $Value) {
-        return ''
+    # PowerShell treats the typographic quotes as quote characters too.
+    if ($Text -match '^[''\u2018-\u201B]') {
+        return "'"
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    if ($Text -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
 }
 
 function ConvertTo-TacQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if ($QuoteChar -eq '"') {
+        return '"' + ($Value -replace '([`$"\u201C-\u201E])', '`$1') + '"'
+    }
+
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]') {
+        return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
     }
 
     $Value
@@ -114,24 +122,37 @@ function ConvertTo-TacQuotedValue {
 
 function Get-TacCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
+    foreach ($element in $CommandAst.CommandElements) {
+        if ($CursorPosition -le $element.Extent.StartOffset -or $CursorPosition -gt $element.Extent.EndOffset) {
+            continue
+        }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
+        $text = $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        $quote = Get-TacQuoteKind -Text $text
+        if ([string]::IsNullOrEmpty($quote)) {
+            return $text
+        }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+        if ($CursorPosition -eq $element.Extent.EndOffset) {
+            if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                return $quote + $element.Value
+            }
+            if ($element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+                return $quote + ($element.Value -replace '`(.)', '$1')
+            }
+        }
+
+        $body = $text.Substring(1)
+        if ($quote -eq "'") {
+            return $quote + ($body -replace '[''\u2018-\u201B]{2}', "'")
+        }
+
+        return $quote + ($body -replace '`(.)', '$1')
     }
 
     $Fallback
@@ -140,8 +161,8 @@ function Get-TacCurrentToken {
 function Get-TacPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-TacOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = Get-TacQuoteKind -Text $InputPath
+    $cleanInput = if ([string]::IsNullOrEmpty($quoteChar)) { $InputPath } else { $InputPath.Substring(1) }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -178,7 +199,7 @@ function Get-TacPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-TacQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-TacQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-TacCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -259,11 +280,7 @@ function Complete-Tac {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-TacCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-TacCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
 
     $optionValues = @(Get-TacOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
