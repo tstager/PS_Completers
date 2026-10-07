@@ -268,20 +268,23 @@ function Get-FindStrAttachedTokenInfo {
         return $null
     }
 
-    $match = [regex]::Match($Token, '^(?<root>/[A-Za-z?][A-Za-z0-9-]*):(?<value>.*)$')
+    # findstr parses a switch word letter by letter, so plain flags may lead a
+    # value switch in one cluster (/nic:text, /na:0C); the value switch must
+    # come last, and the whole typed head stays the completion prefix.
+    $match = [regex]::Match($Token, '^(?<head>/(?i:[belrsixvnmop]*)(?<root>[A-Za-z])):(?<value>.*)$')
     if (-not $match.Success) {
         return $null
     }
 
     $catalog = Get-FindStrCompletionCatalog
-    $rootKey = $match.Groups['root'].Value.ToLowerInvariant()
+    $rootKey = '/' + $match.Groups['root'].Value.ToLowerInvariant()
     if (-not $catalog.AttachedValueLookup.ContainsKey($rootKey)) {
         return $null
     }
 
     [pscustomobject]@{
         RootKey = $rootKey
-        Prefix  = $match.Groups['root'].Value + ':'
+        Prefix  = $match.Groups['head'].Value + ':'
         Value   = $match.Groups['value'].Value
         Switch  = $catalog.AttachedValueLookup[$rootKey]
     }
@@ -314,6 +317,16 @@ function Get-FindStrCompletionContext {
         $argumentKey = $argument.ToLowerInvariant()
         if ($catalog.SwitchLookup.ContainsKey($argumentKey)) {
             if ($argumentKey -eq '/?') {
+                $helpRequested = $true
+            }
+
+            continue
+        }
+
+        # A cluster of plain flags (/si, /spin, /i?) is still switches, not
+        # the bare search string.
+        if ([regex]::IsMatch($argument, '^/(?i:[belrsixvnmop?]{2,})$')) {
+            if ($argument.Contains('?')) {
                 $helpRequested = $true
             }
 

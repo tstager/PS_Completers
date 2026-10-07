@@ -102,6 +102,8 @@ Behavior by switch:
 - `/D:` completes only the segment after the last `;`
 - `/C:` never falls back to filesystem results; it emits placeholders or the typed text back as a completion result
 
+`findstr.exe` also accepts combined switch clusters that `/?` does not print: plain flags may be bundled (`/si`, `/spin`, `/i?`), and a value switch may end a cluster (`/nic:error`, `/na:0C`, `/ig:patterns.txt`). The completer treats a plain-flag cluster as switches rather than as the bare search string, and completes a cluster ending in a value switch exactly like that switch, keeping the whole typed head (`/nic:`) as the completion prefix.
+
 ### 3. Operand routing
 
 In observed `findstr.exe` runtime behavior, the first bare positional behaves as the `strings` operand and later bare operands behave as filenames. The completer follows that behavior:
@@ -214,6 +216,7 @@ foreach ($s in @(
 
 - `findstr` uses attached values instead of separated switch arguments for `/A:`, `/C:`, `/D:`, `/F:`, `/G:`, and `/Q:`.
 - `/OFF[LINE]` is presented as two concrete completions: `/OFF` and `/OFFLINE`.
+- Switch clusters parse letter by letter (`/si` = `/S /I`, `/nic:x` = `/N /I /C:x`); only the last letter of a cluster may take a value.
 - `/F:/` and `/G:/` are valid console sentinels and should not throw path-splitting errors.
 - In PowerShell, `/D:` values containing `;` should usually be quoted because `;` is a statement separator.
 
