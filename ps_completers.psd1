@@ -1514,7 +1514,7 @@
         @{
             Path    = 'wsl_completer/wsl_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:ED9725C5D1AC43CA8E74BF16F3ED9FDF6442DB55CA8DF907A31683F89717E12B'
+            Hash    = 'SHA256:921EA6AEB844D20DFB21790DB6AAE5F4184FDC9B5F0969651C39565FD296DEB8'
             Targets = @(
                 @{ CommandName = 'wsl'; Native = $true }
                 @{ CommandName = 'wsl.exe'; Native = $true }

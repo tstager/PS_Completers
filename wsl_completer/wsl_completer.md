@@ -28,7 +28,7 @@ The completer returns nothing when `wsl` is not on `PATH`.
 3. Value slots are answered first:
    - distribution names after `-d`/`--distribution`, `--export`, `--manage`, `--set-default`/`-s`, `--set-version`, `--terminate`/`-t` and `--unregister`, from `wsl -l -q`
    - distribution ids after `--distribution-id`, from the registry
-   - `1`/`2` after `--version` and `--set-default-version`, and as the second operand of `--set-version <Distro>`
+   - `1`/`2` after `--install --version`, `--import --version` and `--set-default-version`, and as the second operand of `--set-version <Distro>`
    - `standard`/`login`/`none` after `--shell-type`
    - `true`/`false` after `--set-sparse`, and after `-s` inside `--manage`
    - `tar`/`tar.gz`/`tar.xz`/`vhd` after `--format`; `ext4`/`drvfs` after `--type`; `root` after `-u`/`--user`

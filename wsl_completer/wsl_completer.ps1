@@ -5,7 +5,7 @@
 Set-StrictMode -Version Latest
 
 function Get-WslDistributionNames {
-    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command wsl -ErrorAction Ignore)) {
         return
     }
 
@@ -63,7 +63,7 @@ function Complete-WslNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     # Ensure wsl.exe is available
-    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command wsl -ErrorAction Ignore)) {
         return
     }
 
@@ -111,7 +111,6 @@ function Complete-WslNative {
     }
 
     $enumValues = @{
-        '--version'             = @('1', '2')
         '--set-default-version' = @('1', '2')
         '--shell-type'          = @('standard', 'login', 'none')
         '--set-sparse'          = @('true', 'false')
@@ -141,6 +140,11 @@ function Complete-WslNative {
             New-WslCompletionResult -Values (Get-WslDistributionNames) -WordToComplete $wordToComplete
             return
         }
+    }
+
+    if ($previousToken -eq '--version' -and $mode -in @('--install', '--import')) {
+        New-WslCompletionResult -Values @('1', '2') -WordToComplete $wordToComplete
+        return
     }
 
     if ($enumValues.ContainsKey($previousToken)) {
