@@ -31,7 +31,7 @@
         @{
             Path    = 'apm_completer/apm_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:71AC972C4D3A6FFD5B29F1D7C0202F4A42953CE8066629F40F9A7715459911AA'
+            Hash    = 'SHA256:E07787B36C3090AC46A68666817E86328B7E1B5E78805CF2F4B2500FAD4D08EB'
             Targets = @(
                 @{ CommandName = 'apm'; Native = $true }
                 @{ CommandName = 'apm.exe'; Native = $true }

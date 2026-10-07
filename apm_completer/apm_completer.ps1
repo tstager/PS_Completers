@@ -5,10 +5,21 @@ Registers native PowerShell completion for apm and apm.exe.
 .DESCRIPTION
 The completer is static-first and is derived from the official APM CLI
 reference plus the upstream microsoft/apm click command definitions for
-documented enum values and aliases.
+documented enum values and aliases. When apm is installed, each command's
+live '--help' page is parsed once per session and merged over the static
+table, so subcommands and options added by newer releases still complete.
 #>
 
 Set-StrictMode -Version Latest
+
+if (-not (Get-Variable -Name ApmLiveHelpCache -Scope Script -ErrorAction Ignore)) {
+    $script:ApmLiveHelpCache = @{
+        ExecutableProbed = $false
+        Executable       = $null
+        Stamp            = $null
+        Entries          = @{}
+    }
+}
 
 function New-ApmCompletionResult {
     param(
@@ -138,6 +149,57 @@ function Get-ApmFreeformValueCompletions {
     New-ApmCompletionResult -CompletionText $typedValue -ToolTip $typedValue
 }
 
+function Get-ApmListValueCompletion {
+    # Completes the segment after the last comma of a comma-separated value.
+    # PowerShell parses an unquoted a,b,c as an array literal: $WordToComplete
+    # is then only the last segment and only that segment is replaced, while
+    # the native command still receives 'a,b,c' as one argument. A quoted word
+    # arrives whole with its opening quote, so the earlier segments and the
+    # quote are kept as the prefix.
+    param(
+        [string[]]$Values,
+        [string]$WordToComplete,
+        [string]$AttachedPrefix = '',
+        [string]$ElementText = ''
+    )
+
+    $quote = ''
+    $word = $WordToComplete
+    if ($word.Length -gt 0 -and ($word[0] -eq "'" -or $word[0] -eq '"')) {
+        # PowerShell closes an unterminated quote in $WordToComplete itself.
+        $quote = [string]$word[0]
+        $word = $word.Substring(1)
+        if ($word.EndsWith($quote)) {
+            $word = $word.Substring(0, $word.Length - 1)
+        }
+    }
+
+    $emitPrefix = ''
+    if (-not [string]::IsNullOrEmpty($AttachedPrefix) -and $word.StartsWith($AttachedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $emitPrefix = $word.Substring(0, $AttachedPrefix.Length)
+        $word = $word.Substring($AttachedPrefix.Length)
+    }
+
+    $lastComma = $word.LastIndexOf(',')
+    $committed = $word.Substring(0, $lastComma + 1)
+    $fragment = $word.Substring($lastComma + 1)
+
+    $source = if ([string]::IsNullOrEmpty($ElementText)) { $WordToComplete } else { $ElementText }
+    $source = $source -replace '^[''"]', '' -replace '^-{1,2}[^=,]+=', ''
+    $chosen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($segment in @($source -split ',' | Select-Object -SkipLast 1)) {
+        [void]$chosen.Add($segment.Trim())
+    }
+
+    foreach ($value in $Values) {
+        if ($chosen.Contains($value) -or -not (Test-ApmStartsWith -Candidate $value -Prefix $fragment)) {
+            continue
+        }
+
+        New-ApmCompletionResult -CompletionText "$quote$emitPrefix$committed$value$quote" -ToolTip $value
+    }
+}
+
 function Get-ApmCompletionCatalog {
     $existingCatalog = Get-Variable -Name ApmCompletionCatalog -Scope Script -ErrorAction Ignore
     if ($null -ne $existingCatalog) {
@@ -157,20 +219,22 @@ function Get-ApmCompletionCatalog {
             [string[]]$Tokens,
             [string]$Description,
             [string]$ValueKind = 'flag',
-            [string[]]$Values = @()
+            [string[]]$Values = @(),
+            [switch]$OptionalValue
         )
 
         foreach ($token in $Tokens) {
             [pscustomobject]@{
-                Token       = $token
-                Description = $Description
-                ValueKind   = $ValueKind
-                Values      = @($Values)
+                Token         = $token
+                Description   = $Description
+                ValueKind     = $ValueKind
+                Values        = @($Values)
+                OptionalValue = [bool]$OptionalValue
             }
         }
     }
 
-    # apm 0.30.0: --target and --runtime share one 21-entry harness list.
+    # apm 0.33.0: --target and --runtime share one 21-entry harness list.
     $targetValues = @(
         'agent-skills', 'agents', 'agy', 'all', 'antigravity', 'claude', 'codex', 'copilot',
         'copilot-app', 'copilot-cowork', 'cursor', 'gemini', 'grok-build', 'grok-cloud',
@@ -184,6 +248,7 @@ function Get-ApmCompletionCatalog {
     $countValues = @('0', '1', '4', '8', '10', '20', '50')
     $transportValues = @('stdio', 'http', 'sse', 'streamable-http')
     $packFormatValues = @('plugin', 'agent-plugin', 'claude', 'claude-plugin', 'apm')
+    $packMarketplaceValues = @('all', 'none', 'claude', 'codex')
     $lifecycleEventValues = @('pre-install', 'post-install', 'pre-update', 'post-update', 'pre-uninstall', 'post-uninstall')
 
     $catalog = [ordered]@{}
@@ -195,6 +260,7 @@ function Get-ApmCompletionCatalog {
             & $newCommand 'uninstall' 'Remove packages using manifest entries or direct locked refs'
             & $newCommand 'prune' 'Remove APM packages absent from the resolved dependency set'
             & $newCommand 'audit' 'Scan installed primitives for hidden Unicode, drift, and lockfile issues'
+            & $newCommand 'auth' 'Get a working credential for a git host'
             & $newCommand 'pack' 'Pack distributable artifacts from your APM project'
             & $newCommand 'unpack' '[Deprecated] Extract an APM bundle into the current project'
             & $newCommand 'update' 'Refresh APM dependencies to the latest matching refs'
@@ -247,6 +313,15 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--user') 'Record the deny in your personal ~/.apm/config.json instead of apm.yml'
+        )
+    }
+
+    $catalog['auth'] = [pscustomobject]@{
+        Subcommands = @()
+        Options = @(
+            & $newOption @('--check') 'Validate the token against the host''s REST API (one network call)'
+            & $newOption @('--export') 'Print "export VAR=token" on stdout for eval'
+            & $newOption @('--verbose', '-v') 'Show detailed output'
         )
     }
 
@@ -388,7 +463,7 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--global', '-g') 'Operate on ~/.apm/apm.yml instead of the current project'
             & $newOption @('--update') 'Re-resolve refs to their latest SHAs before writing the lockfile'
             & $newOption @('--no-policy') 'Skip policy enforcement during resolution'
-            & $newOption @('--target', '-t') 'Agent target(s) to scope policy enforcement during resolution' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Agent target(s) to scope policy enforcement during resolution' 'list' $targetValues
             & $newOption @('--parallel-downloads') 'Max concurrent package downloads (0 to disable parallelism)' 'freeform' $countValues
         )
     }
@@ -414,7 +489,7 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--yes', '-y') 'Skip interactive prompts and use auto-detected defaults'
-            & $newOption @('--target') 'Comma-separated target list (skip prompt)' 'enum' $targetValues
+            & $newOption @('--target') 'Comma-separated target list (skip prompt)' 'list' $targetValues
             & $newOption @('--format') 'Plugin layout' 'enum' @('plugin', 'agent-plugin', 'claude', 'claude-plugin')
             & $newOption @('--claude-plugin') 'Scaffold the legacy Claude-compatible layout'
             & $newOption @('--verbose', '-v') 'Show detailed output'
@@ -467,8 +542,15 @@ function Get-ApmCompletionCatalog {
     $catalog['init'] = [pscustomobject]@{
         Subcommands = @()
         Options = @(
+            & $newOption @('--discover') 'Inventory existing local packages without writes'
+            & $newOption @('--apply', '--write') 'Add existing local package references to consumer apm.yml; never install'
+            & $newOption @('--format') 'Discovery report format' 'enum' @('text', 'json', 'yaml')
+            & $newOption @('--global', '-g') 'Discover under home and declare packages in ~/.apm/apm.yml'
             & $newOption @('--yes', '-y') 'Skip interactive prompts and use auto-detected defaults'
             & $newOption @('--plugin') 'Initialize as a plugin authoring project'
+            & $newOption @('--marketplace') '(deprecated) Use apm marketplace init instead'
+            & $newOption @('--target') 'Comma-separated target list (skip prompt, write directly)' 'list' $targetValues
+            & $newOption @('--verbose', '-v') 'Show detailed output'
         )
     }
 
@@ -478,17 +560,38 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--runtime') 'Target specific runtime only' 'enum' $installRuntimeValues
             & $newOption @('--exclude') 'Exclude specific runtime from installation' 'enum' $installRuntimeValues
             & $newOption @('--only') 'Install only specific dependency type' 'enum' @('apm', 'mcp')
-            & $newOption @('--target', '-t') 'Force deployment to a specific target' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Target harness(es) to deploy to (comma-separated)' 'list' $targetValues
             & $newOption @('--update') 'Update dependencies to latest Git references'
             & $newOption @('--force') 'Overwrite locally-authored files on collision'
             & $newOption @('--dry-run') 'Show what would be installed without installing'
+            & $newOption @('--frozen') 'Refuse to install when apm.lock.yaml is missing or out of sync (CI-safe)'
             & $newOption @('--parallel-downloads') 'Max concurrent package downloads' 'freeform' $countValues
-            & $newOption @('--verbose') 'Show detailed installation information'
+            & $newOption @('--verbose', '-v') 'Show detailed installation information'
             & $newOption @('--trust-transitive-mcp') 'Trust self-defined MCP servers from transitive packages'
             & $newOption @('--dev') 'Install as development dependency'
+            & $newOption @('--allow-insecure') 'Allow HTTP (insecure) dependencies'
+            & $newOption @('--allow-insecure-host') 'Allow transitive HTTP dependencies from this hostname (repeatable)' 'freeform' @('<hostname>')
             & $newOption @('--global', '-g') 'Install to user scope instead of the current project'
+            & $newOption @('--ssh') 'Prefer SSH transport for shorthand (owner/repo) dependencies'
+            & $newOption @('--https') 'Prefer HTTPS transport for shorthand (owner/repo) dependencies'
+            & $newOption @('--allow-protocol-fallback') 'Restore the legacy permissive cross-protocol fallback chain'
+            & $newOption @('--mcp') 'Add an MCP server entry to apm.yml' 'freeform' @('<name>')
             & $newOption @('--transport') 'MCP transport for --mcp entries' 'enum' $transportValues
+            & $newOption @('--url') 'MCP server URL for remote transports (requires --mcp)' 'freeform' @('https://<host>/mcp')
+            & $newOption @('--env') 'Environment variable for stdio MCP, repeatable (requires --mcp)' 'freeform' @('<KEY=VALUE>')
+            & $newOption @('--header') 'HTTP header for remote MCP, repeatable (requires --mcp and --url)' 'freeform' @('<KEY=VALUE>')
+            & $newOption @('--mcp-version') 'Pin MCP registry entry to a specific version (requires --mcp)' 'freeform' @('<version>')
+            & $newOption @('--registry') 'MCP registry URL for resolving --mcp NAME' 'freeform' @('https://<registry>')
+            & $newOption @('--skill') 'Install only named skill(s) from a SKILL_BUNDLE (repeatable)' 'freeform' @('<name>')
+            & $newOption @('--no-policy') 'Skip org policy enforcement for this invocation'
             & $newOption @('--audit') 'Run apm audit over deployed files during install' 'enum' @('off', 'warn', 'block')
+            & $newOption @('--no-audit') 'Disable the install-time audit for this invocation'
+            & $newOption @('--refresh') 'Re-fetch all dependencies from upstream and re-resolve all ref pins'
+            & $newOption @('--legacy-skill-paths') 'Deploy skill files to per-client paths instead of .agents/skills/'
+            & $newOption @('--as') 'Override the display label when installing a local bundle' 'freeform' @('<alias>')
+            & $newOption @('--trust-bin') 'Deploy bin/ executables for this invocation'
+            & $newOption @('--no-trust-bin') 'Skip bin/ executable deployment for this invocation'
+            & $newOption @('--root') 'Install into DIR instead of the current directory' 'path'
         )
     }
 
@@ -520,7 +623,14 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--ci') 'Run lockfile consistency checks for CI/CD gates'
             & $newOption @('--policy') 'Policy source for CI checks' 'policy'
             & $newOption @('--no-cache') 'Force fresh policy fetch'
+            & $newOption @('--no-policy') 'Skip org policy discovery and enforcement'
             & $newOption @('--no-fail-fast') 'Run all checks even after a failure'
+            & $newOption @('--no-drift') 'Skip the install-replay drift check'
+            & $newOption @('--external') 'Ingest findings from an external SARIF-native scanner (repeatable)' 'enum' @('skillspector', 'sarif')
+            & $newOption @('--external-sarif') 'SARIF file to ingest for --external sarif' 'path'
+            & $newOption @('--external-llm') 'Force LLM-powered analysis on for external scanners'
+            & $newOption @('--no-external-llm') 'Force LLM-powered analysis off for external scanners'
+            & $newOption @('--external-args') 'Extra argv tokens for external scanners this run' 'freeform' @('<args>')
         )
     }
 
@@ -533,7 +643,18 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--archive-format') 'Archive format when --archive is set' 'enum' @('zip', 'tar.gz')
             & $newOption @('--dry-run') 'List files that would be packed without writing anything'
             & $newOption @('--format') 'Bundle format' 'enum' $packFormatValues
+            & $newOption @('--claude-plugin') 'Select the legacy Claude plugin bundle output'
             & $newOption @('--force') 'On collision, last writer wins instead of first'
+            & $newOption @('--verbose', '-v') 'Show detailed packing information'
+            & $newOption @('--offline') 'Marketplace: use cached refs, skip network'
+            & $newOption @('--include-prerelease') 'Marketplace: include pre-release version tags'
+            & $newOption @('--check-versions') 'Release gate: verify per-package versions agree with the versioning strategy'
+            & $newOption @('--check-clean') 'Release gate: diff regenerated marketplace outputs against disk'
+            & $newOption @('--strict-metadata') 'Marketplace: fail when remote metadata cannot be fetched'
+            & $newOption @('--marketplace', '-m') 'Comma-separated marketplace outputs to build' 'list' $packMarketplaceValues
+            & $newOption @('--marketplace-path') 'Override output path for a format (repeatable)' 'freeform' @('<FORMAT=PATH>')
+            & $newOption @('--json') 'Emit machine-readable JSON to stdout'
+            & $newOption @('--legacy-skill-paths') 'Deploy skill files to per-client paths instead of .agents/skills/'
         )
     }
 
@@ -544,6 +665,7 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--skip-verify') 'Skip completeness verification against the bundle lockfile'
             & $newOption @('--force') 'Deploy despite critical hidden-character findings'
             & $newOption @('--dry-run') 'Show what would be extracted without writing anything'
+            & $newOption @('--verbose', '-v') 'Show detailed unpacking information'
         )
     }
 
@@ -556,7 +678,7 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--global', '-g') 'Refresh user-scope dependencies (~/.apm/) instead of the current project'
             & $newOption @('--force') 'Overwrite locally-authored files and deploy despite critical security findings'
             & $newOption @('--parallel-downloads') 'Max concurrent package downloads (0 to disable parallelism)' 'freeform' $countValues
-            & $newOption @('--target', '-t') 'Agent target(s) to update for (comma-separated for multiple)' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Agent target(s) to update for (comma-separated for multiple)' 'list' $targetValues
         )
     }
 
@@ -571,6 +693,7 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--global', '-g') 'Inspect package from user scope'
+            & $newOption @('--registry') 'List versions from a registry (name one, or a full git URL)' 'freeform' @('<registry>') -OptionalValue
         )
     }
 
@@ -578,6 +701,7 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--global', '-g') 'Inspect package from user scope'
+            & $newOption @('--registry') 'List versions from a registry (name one, or a full git URL)' 'freeform' @('<registry>') -OptionalValue
         )
     }
 
@@ -615,12 +739,15 @@ function Get-ApmCompletionCatalog {
         Options = @(
             & $newOption @('--global', '-g') 'List user-scope packages instead of the current project'
             & $newOption @('--all') 'List packages from both project and user scope'
+            & $newOption @('--insecure') 'Show only installed dependencies locked to http:// sources'
         )
     }
 
     $catalog['deps tree'] = [pscustomobject]@{
         Subcommands = @()
-        Options = @()
+        Options = @(
+            & $newOption @('--global', '-g') 'Show user-scope dependency tree (~/.apm/)'
+        )
     }
 
     $catalog['deps info'] = [pscustomobject]@{
@@ -642,8 +769,9 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--verbose', '-v') 'Show detailed update information'
             & $newOption @('--force') 'Overwrite locally-authored files on collision'
             & $newOption @('--global', '-g') 'Update user-scope dependencies'
-            & $newOption @('--target', '-t') 'Force deployment to a specific target' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Force deployment to a specific target (comma-separated)' 'list' $targetValues
             & $newOption @('--parallel-downloads') 'Max concurrent downloads' 'freeform' $countValues
+            & $newOption @('--legacy-skill-paths') 'Deploy skill files to per-client paths instead of .agents/skills/'
         )
     }
 
@@ -664,7 +792,7 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--url') 'Server URL for remote transports' 'freeform' @('https://<host>/mcp')
             & $newOption @('--env') 'Environment variable (repeatable)' 'freeform' @('<KEY=VALUE>')
             & $newOption @('--header') 'HTTP header (repeatable)' 'freeform' @('<KEY=VALUE>')
-            & $newOption @('--target', '-t') 'Agent target(s) to deploy to' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Agent target(s) to deploy to' 'list' $targetValues
             & $newOption @('--registry') 'Custom registry URL' 'freeform' @('https://<registry>')
             & $newOption @('--mcp-version') 'Pin registry entry to a specific version' 'freeform' @('<version>')
             & $newOption @('--global', '-g') 'Install to user scope (~/.apm/)'
@@ -681,6 +809,7 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--limit') 'Number of results to show' 'freeform' @('20', '50')
+            & $newOption @('--verbose', '-v') 'Show detailed output'
         )
     }
 
@@ -688,12 +817,15 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--limit') 'Number of results to show' 'freeform' @('5', '10', '20', '50')
+            & $newOption @('--verbose', '-v') 'Show detailed output'
         )
     }
 
     $catalog['mcp show'] = [pscustomobject]@{
         Subcommands = @()
-        Options = @()
+        Options = @(
+            & $newOption @('--verbose', '-v') 'Show detailed output'
+        )
     }
 
     $catalog['marketplace'] = [pscustomobject]@{
@@ -883,7 +1015,7 @@ function Get-ApmCompletionCatalog {
         Subcommands = @()
         Options = @(
             & $newOption @('--output', '-o') 'Output file path' 'path'
-            & $newOption @('--target', '-t') 'Target agent format' 'enum' $targetValues
+            & $newOption @('--target', '-t') 'Target agent format (comma-separated)' 'list' $targetValues
             & $newOption @('--chatmode') 'Chatmode to prepend to the AGENTS.md file' 'freeform' @('<chatmode>')
             & $newOption @('--dry-run') 'Preview compilation without writing files'
             & $newOption @('--no-links') 'Skip markdown link resolution'
@@ -895,6 +1027,12 @@ function Get-ApmCompletionCatalog {
             & $newOption @('--verbose', '-v') 'Show detailed source attribution and optimizer analysis'
             & $newOption @('--local-only') 'Ignore dependencies and compile only local primitives'
             & $newOption @('--clean') 'Remove orphaned generated files'
+            & $newOption @('--legacy-skill-paths') 'Deploy skill files to per-client paths instead of .agents/skills/'
+            & $newOption @('--all') 'Compile for all canonical targets'
+            & $newOption @('--force-instructions') 'Include the instructions section even when rules are already populated'
+            & $newOption @('--no-force-instructions') 'Keep the default instructions deduplication'
+            & $newOption @('--root') 'Write AGENTS.md / CLAUDE.md outputs under DIR' 'path'
+            & $newOption @('--global', '-g') 'Compile user-scope root context files from ~/.apm/apm_modules'
         )
     }
 
@@ -954,7 +1092,7 @@ function Get-ApmCompletionCatalog {
     $catalog['runtime remove'] = [pscustomobject]@{
         Subcommands = @()
         Options = @(
-            & $newOption @('--yes') 'Confirm the action without prompting'
+            & $newOption @('--yes', '-y') 'Confirm the action without prompting'
         )
     }
 
@@ -972,6 +1110,254 @@ function Get-ApmCompletionCatalog {
     $script:ApmLifecycleEventValues = $lifecycleEventValues
 
     $script:ApmCompletionCatalog
+}
+
+function Get-ApmLiveHelpStamp {
+    # Identifies the installed binary; a changed stamp (upgrade, reinstall,
+    # removal) drops every parsed help page. The WinGet shim is a symlink, so
+    # the stamp follows it to the real executable.
+    $cache = $script:ApmLiveHelpCache
+    if (-not $cache.ExecutableProbed) {
+        $cache.ExecutableProbed = $true
+        $command = Get-Command -Name 'apm.exe' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+        if ($null -ne $command) {
+            $cache.Executable = $command.Source
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($cache.Executable)) {
+        return $null
+    }
+
+    $file = [System.IO.FileInfo]::new($cache.Executable)
+    $target = $file.ResolveLinkTarget($true)
+    if ($null -ne $target) {
+        $file = $target
+    }
+
+    if (-not $file.Exists) {
+        return $null
+    }
+
+    "$($file.FullName)|$($file.LastWriteTimeUtc.Ticks)"
+}
+
+function Invoke-ApmHelpCapture {
+    param([string[]]$CommandPath)
+
+    # APM_E2E_TESTS=1 skips the update check (a GitHub API call plus a cache
+    # file write) that apm's root callback runs before a subcommand's --help.
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($script:ApmLiveHelpCache.Executable)
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $process.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $process.StartInfo.Environment['APM_E2E_TESTS'] = '1'
+        $process.StartInfo.Environment['PYTHONIOENCODING'] = 'utf-8'
+        foreach ($segment in @($CommandPath)) {
+            $process.StartInfo.ArgumentList.Add($segment)
+        }
+        $process.StartInfo.ArgumentList.Add('--help')
+
+        [void]$process.Start()
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $null = $process.StandardError.ReadToEndAsync()
+
+        if (-not $process.WaitForExit(5000)) {
+            try { $process.Kill($true) } catch { Write-Verbose "apm --help did not exit in 5 s and could not be killed: $_" }
+            return $null
+        }
+
+        if ($process.ExitCode -ne 0) {
+            return $null
+        }
+
+        $stdout.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+    }
+    catch {
+        $null
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function ConvertTo-ApmLiveOption {
+    param(
+        [string[]]$Tokens,
+        [string]$Metavar,
+        [string]$Description
+    )
+
+    $valueKind = 'freeform'
+    $values = @()
+    $listedValues = @(
+        if ($Description -match '(?:Values|Names):\s*(?<values>[a-z0-9][a-z0-9-]*(?:,\s*[a-z0-9][a-z0-9-]*)*)') {
+            $Matches['values'] -split ',\s*'
+        }
+    )
+
+    if ([string]::IsNullOrEmpty($Metavar)) {
+        $valueKind = 'flag'
+    }
+    elseif ($Metavar -match '^\[(?<choices>[^\]]+\|[^\]]+)\]$') {
+        $valueKind = 'enum'
+        $values = @($Matches['choices'] -split '\|')
+    }
+    elseif ($Metavar -ceq 'TARGET' -or $Description -match '(?i)\bcomma(?:s|-separated)\b') {
+        $valueKind = 'list'
+        $values = @(if ($listedValues.Count -gt 0) { $listedValues } elseif ($Metavar -ceq 'TARGET') { $script:ApmTargetValues })
+    }
+    elseif ($listedValues.Count -gt 0) {
+        $valueKind = 'enum'
+        $values = $listedValues
+    }
+    elseif ($Metavar -cin @('PATH', 'DIR', 'FILE', 'DIRECTORY')) {
+        $valueKind = 'path'
+    }
+    else {
+        $values = @('<' + $Metavar.Trim([char[]]'[]').ToLowerInvariant() + '>')
+    }
+
+    $toolTip = ($Description -replace '\s*\[default: [^\]]*\]', '').Trim()
+    foreach ($token in $Tokens) {
+        [pscustomobject]@{
+            Token         = $token
+            Description   = $toolTip
+            ValueKind     = $valueKind
+            Values        = $values
+            OptionalValue = $Metavar -match '^\[[^\]|]+\]$'
+        }
+    }
+}
+
+function ConvertFrom-ApmHelpText {
+    # Parses Click help: the 'Options:' block and every '... commands:' block.
+    # A blank line ends a block, so epilog examples are never read as entries.
+    param([string]$Text)
+
+    $subcommands = [System.Collections.Generic.List[object]]::new()
+    $options = [System.Collections.Generic.List[object]]::new()
+    $section = ''
+    $pending = $null
+
+    foreach ($line in ($Text -split '\r?\n')) {
+        $isOptionLine = $section -eq 'options' -and $line -match '^  (?<spec>-.+?)(?:\s{2,}(?<desc>\S.*))?$'
+        $spec = if ($isOptionLine) { $Matches['spec'] } else { '' }
+        $description = if ($isOptionLine) { [string]$Matches['desc'] } else { '' }
+        if ($isOptionLine -or [string]::IsNullOrWhiteSpace($line) -or $line -match '^[A-Za-z][A-Za-z ]*:\s*$') {
+            if ($null -ne $pending) {
+                foreach ($option in ConvertTo-ApmLiveOption -Tokens $pending.Tokens -Metavar $pending.Metavar -Description $pending.Description) {
+                    $options.Add($option)
+                }
+                $pending = $null
+            }
+        }
+
+        if ($isOptionLine) {
+            if ($spec -match'^(?<tokens>-[^\s,/]+(?:(?:,\s*|\s+/\s+)-[^\s,/]+)*)(?:\s+(?<metavar>\S.*))?$') {
+                $pending = [pscustomobject]@{
+                    Tokens      = @($Matches['tokens'] -split ',\s*|\s+/\s+')
+                    Metavar     = [string]$Matches['metavar']
+                    Description = $description
+                }
+            }
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            $section = ''
+            continue
+        }
+
+        if ($line -match '^(?<name>[A-Za-z][A-Za-z ]*):\s*$') {
+            $section = if ($Matches['name'] -ceq 'Options') { 'options' } elseif ($Matches['name'] -match '(?i)commands$') { 'commands' } else { '' }
+            continue
+        }
+
+        if ($section -eq 'commands' -and $line -match '^  (?<name>[a-z][a-z0-9-]*)(?:\s{2,}(?<desc>\S.*))?$') {
+            $subcommands.Add([pscustomobject]@{ Name = $Matches['name']; Description = [string]$Matches['desc'] })
+            continue
+        }
+
+        if ($null -ne $pending -and $line -match '^\s{3,}(?<more>\S.*)$') {
+            # Click wraps hyphenated words at the hyphen ('grok-' / 'cloud').
+            $more = $Matches['more']
+            $pending.Description = if ([string]::IsNullOrEmpty($pending.Description)) {
+                $more
+            }
+            elseif ($pending.Description -match '[a-z]-$') {
+                "$($pending.Description)$more"
+            }
+            else {
+                "$($pending.Description) $more"
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        Subcommands = @($subcommands)
+        Options     = @($options)
+    }
+}
+
+function Get-ApmCatalogEntry {
+    # The static entry for a command path with the live '--help' page merged
+    # over it: static definitions win (they carry richer value kinds), live
+    # subcommands and options the table lacks are appended.
+    param([string]$Key)
+
+    $catalog = Get-ApmCompletionCatalog
+    $staticEntry = if ($catalog.Contains($Key)) {
+        $catalog[$Key]
+    }
+    else {
+        [pscustomobject]@{ Subcommands = @(); Options = @() }
+    }
+
+    $cache = $script:ApmLiveHelpCache
+    $stamp = Get-ApmLiveHelpStamp
+    if ($null -eq $stamp) {
+        return $staticEntry
+    }
+
+    if ($cache.Stamp -ne $stamp) {
+        $cache.Stamp = $stamp
+        $cache.Entries = @{}
+    }
+
+    if ($cache.Entries.ContainsKey($Key)) {
+        return $cache.Entries[$Key]
+    }
+
+    $helpText = Invoke-ApmHelpCapture -CommandPath @($Key -split ' ' | Where-Object { $_ })
+    if ([string]::IsNullOrEmpty($helpText)) {
+        $cache.Entries[$Key] = $staticEntry
+        return $staticEntry
+    }
+
+    $live = ConvertFrom-ApmHelpText -Text $helpText
+    $subcommandNames = [System.Collections.Generic.HashSet[string]]::new([string[]]@($staticEntry.Subcommands | ForEach-Object { $_.Name }), [System.StringComparer]::Ordinal)
+    $optionTokens = [System.Collections.Generic.HashSet[string]]::new([string[]]@($staticEntry.Options | ForEach-Object { $_.Token }), [System.StringComparer]::Ordinal)
+
+    $merged = [pscustomobject]@{
+        Subcommands = @(
+            $staticEntry.Subcommands
+            $live.Subcommands | Where-Object { $subcommandNames.Add($_.Name) }
+        )
+        Options     = @(
+            $staticEntry.Options
+            $live.Options | Where-Object { $optionTokens.Add($_.Token) }
+        )
+    }
+
+    $cache.Entries[$Key] = $merged
+    $merged
 }
 
 function Get-ApmOptionLookup {
@@ -1004,7 +1390,12 @@ function Get-ApmArgsBeforeCursor {
         return $arguments
     }
 
-    if ($arguments.Count -gt 0 -and $arguments[-1] -eq $WordToComplete) {
+    # The last element is the word being completed when it holds the cursor. An
+    # unquoted a,b list is one array-literal element while $WordToComplete is
+    # only its last segment, so text equality alone would miss it.
+    $lastExtent = $CommandAst.CommandElements[-1].Extent
+    $cursorInLast = $lastExtent.StartOffset -lt $CursorPosition -and $lastExtent.EndOffset -ge $CursorPosition
+    if ($arguments.Count -gt 0 -and ($arguments[-1] -eq $WordToComplete -or $cursorInLast)) {
         if ($arguments.Count -eq 1) {
             return @()
         }
@@ -1036,7 +1427,22 @@ function Get-ApmCommandContext {
 
         $match = $currentEntry.Subcommands | Where-Object { $_.Name -eq $arg } | Select-Object -First 1
         if ($null -eq $match) {
-            continue
+            # Only a word the static table does not know reads the live help
+            # page, and only the current command's page, which the returned
+            # Entry needs anyway. Click takes a group's first plain word as its
+            # subcommand, so an unknown word that is not the value of the
+            # option before it ends the path and no deeper page is read.
+            $liveEntry = Get-ApmCatalogEntry -Key $currentKey
+            $match = $liveEntry.Subcommands | Where-Object { $_.Name -eq $arg } | Select-Object -First 1
+            if ($null -eq $match) {
+                $prior = if ($i -gt 0) { $ArgsBeforeCursor[$i - 1] } else { '' }
+                $priorOption = $liveEntry.Options | Where-Object { $_.Token -eq $prior } | Select-Object -First 1
+                if ($null -ne $priorOption -and $priorOption.ValueKind -ne 'flag') {
+                    continue
+                }
+
+                break
+            }
         }
 
         $commandPath.Add($match.Name)
@@ -1047,13 +1453,18 @@ function Get-ApmCommandContext {
             "$currentKey $($match.Name)"
         }
 
-        $currentEntry = $catalog[$currentKey]
+        $currentEntry = if ($catalog.Contains($currentKey)) {
+            $catalog[$currentKey]
+        }
+        else {
+            [pscustomobject]@{ Subcommands = @(); Options = @() }
+        }
         $lastPathIndex = $i
     }
 
     [pscustomobject]@{
         Key           = $currentKey
-        Entry         = $currentEntry
+        Entry         = Get-ApmCatalogEntry -Key $currentKey
         CommandPath   = @($commandPath)
         LastPathIndex = $lastPathIndex
     }
@@ -1103,8 +1514,13 @@ function Get-ApmArgumentAnalysis {
         }
 
         if ($null -ne $pendingOption) {
+            # Click gives an optional value ('--registry [NAME]') the next word
+            # unless that word is an option.
+            $leavesValueOut = $optionLookup[$pendingOption].OptionalValue -and $arg -match '^-.'
             $pendingOption = $null
-            continue
+            if (-not $leavesValueOut) {
+                continue
+            }
         }
 
         if ($arg -match '^(?<option>-{1,2}[^=]+)=') {
@@ -1137,12 +1553,16 @@ function Get-ApmOptionValueResults {
         [string]$CommandKey,
         $Option,
         [string]$WordToComplete,
-        [string]$AttachedPrefix = ''
+        [string]$AttachedPrefix = '',
+        [string]$ElementText = ''
     )
 
     switch ($Option.ValueKind) {
         'enum' {
             return @(Get-ApmClosedValueCompletions -Values $Option.Values -WordToComplete $WordToComplete -AttachedPrefix $AttachedPrefix)
+        }
+        'list' {
+            return @(Get-ApmListValueCompletion -Values $Option.Values -WordToComplete $WordToComplete -AttachedPrefix $AttachedPrefix -ElementText $ElementText)
         }
         'path' {
             $typedPath = if ([string]::IsNullOrEmpty($AttachedPrefix)) { $WordToComplete } else { $WordToComplete.Substring($AttachedPrefix.Length) }
@@ -1184,6 +1604,11 @@ function Get-ApmPositionalResults {
     $lifecycleEvents = (Get-Variable -Name ApmLifecycleEventValues -Scope Script -ErrorAction Ignore).Value
 
     switch ($CommandKey) {
+        'auth' {
+            if ($Analysis.Positionals.Count -eq 0) {
+                return @(Get-ApmFreeformValueCompletions -SuggestedValues @('github.com', 'gitlab.com') -WordToComplete $WordToComplete)
+            }
+        }
         'update' {
             return @(Get-ApmFreeformValueCompletions -SuggestedValues @('<package>') -WordToComplete $WordToComplete)
         }
@@ -1441,19 +1866,58 @@ function Complete-Apm {
     $analysis = Get-ApmArgumentAnalysis -ArgsAfterPath $argsAfterPath -Entry $context.Entry
     $optionLookup = Get-ApmOptionLookup -Entry $context.Entry
 
+    # The parser's element under the cursor, up to the cursor: for an unquoted
+    # comma list it holds the earlier segments $WordToComplete lacks.
+    $elementText = ''
+    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 | Where-Object {
+        $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition
+    } | Select-Object -First 1
+    if ($null -ne $cursorElement) {
+        $elementText = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
+    }
+
     if ($WordToComplete -match '^(?<option>-{1,2}[^=]+)=(?<value>.*)$') {
         $optionName = $Matches.option
         if ($optionLookup.ContainsKey($optionName)) {
             $attachedPrefix = "$optionName="
-            return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$optionName] -WordToComplete $WordToComplete -AttachedPrefix $attachedPrefix)
+            return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$optionName] -WordToComplete $WordToComplete -AttachedPrefix $attachedPrefix -ElementText $elementText)
+        }
+    }
+    elseif ($elementText -match '^(?<option>-{1,2}[^=]+)=.*,') {
+        $optionName = $Matches.option
+        if ($optionLookup.ContainsKey($optionName) -and $optionLookup[$optionName].ValueKind -eq 'list') {
+            return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$optionName] -WordToComplete $WordToComplete -AttachedPrefix "$optionName=" -ElementText $elementText)
         }
     }
 
-    if ($null -ne $analysis.PendingOption -and $optionLookup.ContainsKey($analysis.PendingOption)) {
-        return Get-ApmUniqueResults -Results @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $optionLookup[$analysis.PendingOption] -WordToComplete $WordToComplete)
-    }
-
     $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
+
+    if ($null -ne $analysis.PendingOption -and $optionLookup.ContainsKey($analysis.PendingOption)) {
+        $pendingOption = $optionLookup[$analysis.PendingOption]
+        $valueResults = @(Get-ApmOptionValueResults -CommandKey $context.Key -Option $pendingOption -WordToComplete $WordToComplete -ElementText $elementText)
+        if (-not $pendingOption.OptionalValue) {
+            return Get-ApmUniqueResults -Results $valueResults
+        }
+
+        # A bare optional-value option is complete when an option follows it,
+        # so the slot offers the value placeholder and the command's options.
+        # A plain word would become the value, so positionals stay out.
+        if (-not $WordToComplete.StartsWith('-')) {
+            foreach ($valueResult in $valueResults) {
+                $results.Add($valueResult)
+            }
+        }
+
+        if ([string]::IsNullOrEmpty($WordToComplete) -or $WordToComplete.StartsWith('-')) {
+            foreach ($option in $context.Entry.Options) {
+                if (Test-ApmStartsWith -Candidate $option.Token -Prefix $WordToComplete) {
+                    $results.Add((New-ApmCompletionResult -CompletionText $option.Token -ToolTip $option.Description -ResultType ([System.Management.Automation.CompletionResultType]::ParameterName)))
+                }
+            }
+        }
+
+        return Get-ApmUniqueResults $results
+    }
 
     if ($WordToComplete.StartsWith('-')) {
         foreach ($option in $context.Entry.Options) {
