@@ -56,7 +56,24 @@ Execution flow:
   `exec --color` complete their documented closed sets (also in the
   `--opt=value` form), `-C`/`--cd`/`--add-dir` complete directories, and
   `codex completion <TAB>` offers `bash`, `elvish`, `fish`, `powershell`, `zsh`.
-  Every other slot still goes to the generated script.
+- The overlay also completes values from local codex state under `$CODEX_HOME`
+  (default `~/.codex`), all read passively and re-parsed only when the file's
+  size or write time changes:
+  - session ids for `resume`, `fork`, `archive`, `delete`, `unarchive`,
+    `exec resume`, `exec fork` and `queue --thread`, from
+    `session_index.jsonl` (newest first; the list entry shows the thread name,
+    and typing a thread-name prefix also matches)
+  - model slugs for `-m`/`--model`, from `models_cache.json`
+  - profile names for `-p`/`--profile`, from the `<name>.config.toml` files
+  - plugin selectors for `plugin remove` and MCP server names for
+    `mcp get|remove|login|logout`, from the `[plugins."..."]` and
+    `[mcp_servers.*]` table headers in `config.toml` (names only, never values)
+  - feature keys for `--enable`/`--disable` and `features enable|disable`,
+    from the read-only `codex features list` (run once per session with a 5 s
+    timeout; removed features are skipped)
+  These slots never fall back to the generated option list; an empty source
+  leaves PowerShell's default completion. Every other slot still goes to the
+  generated script.
 - Import time stays cheap because the script does not call `codex` until a real
   completion request occurs.
 
@@ -67,6 +84,8 @@ Execution flow:
 
 # codex <TAB>
 # codex exec <TAB>
+# codex resume <TAB>
+# codex --model <TAB>
 # codex.cmd completion <TAB>
 # codex.ps1 review <TAB>
 ```
