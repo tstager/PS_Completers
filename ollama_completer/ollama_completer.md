@@ -30,7 +30,8 @@ This standalone completer registers native tab completion for `ollama` and `olla
   - `launch --model=`
 - Path completion for `create -f` / `create --file` (an unterminated opening quote is handled). `launch --config` is a boolean switch and takes no value.
 - Enum completion for `create -q/--quantize`, `create --draft-quantize` (q4_0 ... q6_K) and `run --keepalive` (5m, 10m, 30m, 1h, 0, -1).
-- Placeholder-only operand completion to suppress noisy filesystem fallback for:
+- Installed model names for the MODEL operand of `run`, `show`, `stop`, `rm`, `pull`, `push`, `create`, the SOURCE operand of `cp`, and `launch --model` / `--model=`. Names are read passively from the manifest tree (`<root>/manifests/<host>/<namespace>/<name>/<tag>`, root = `$env:OLLAMA_MODELS` or `~/.ollama/models`) and shown the way `ollama list` prints them (`name:tag`, `namespace/name:tag`, `host/namespace/name:tag`); internal `llamacpp:<sha256>` entries are skipped. No process is started and the server is never contacted; the list is cached per models root for 5 s (about 3 ms to rescan 18 manifests). An opening quote is kept on the emitted name.
+- Placeholder operand completion (also the model fallback when no installed model matches) to suppress noisy filesystem fallback for:
   - `<model>`
   - `<source-model>`
   - `<destination-model>`
@@ -39,7 +40,7 @@ This standalone completer registers native tab completion for `ollama` and `olla
 ## Runtime notes
 
 - Validated against local `ollama` version `0.34.0`.
-- The completer deliberately does **not** depend on live model discovery, because `ollama list` can block or time out when the server is unavailable.
+- Model discovery reads the manifest tree instead of running `ollama list`, which needs the server and can block or time out when it is unavailable.
 - `launch --` passthrough is detected before generic switch handling, so completion stops after the bare passthrough marker.
 - Command reconstruction uses `CommandAst.Extent.Text` plus `cursorPosition`; it does not rely on `CommandAst.ToString()`.
 
@@ -94,6 +95,5 @@ foreach ($s in @(
 
 ## Deliberate v1 limits
 
-- No live model discovery.
 - No integration-specific passthrough parsing after `launch --`.
-- Model and prompt slots intentionally use placeholders instead of guessing from local files or server state.
+- Prompt slots intentionally use placeholders; model slots never query server state (running models for `stop` are not distinguished from installed ones).

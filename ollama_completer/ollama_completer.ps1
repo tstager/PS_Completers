@@ -183,6 +183,9 @@ function Get-OllamaCompletionCatalog {
             'run.--keepalive'  = @('5m', '10m', '30m', '1h', '0', '-1')
             'create.--quantize' = @('q4_0', 'q4_1', 'q5_0', 'q5_1', 'q8_0', 'q3_K_S', 'q3_K_M', 'q3_K_L', 'q4_K_S', 'q4_K_M', 'q5_K_S', 'q5_K_M', 'q6_K')
         }
+        LocalModelRoot      = $null
+        LocalModelNames     = @()
+        LocalModelExpires   = [DateTime]::MinValue
         Placeholders        = @{
             'Model'            = @('<model>')
             'SourceModel'      = @('<source-model>')
@@ -685,6 +688,87 @@ function Get-OllamaEnumCompletions {
     @($results.ToArray())
 }
 
+function Get-OllamaLocalModelName {
+    # Installed models are read passively from the manifest tree (<root>/manifests/<host>/<namespace>/<name>/<tag>), so
+    # completion never contacts the server. The list is cached per models root for a few seconds; a missing tree is
+    # cached as empty the same way.
+    $catalog = Get-OllamaCompletionCatalog
+    $root = if (-not [string]::IsNullOrWhiteSpace($env:OLLAMA_MODELS)) {
+        $env:OLLAMA_MODELS
+    } else {
+        [System.IO.Path]::Combine($HOME, '.ollama', 'models')
+    }
+
+    $now = [DateTime]::UtcNow
+    if (($catalog.LocalModelRoot -eq $root) -and ($now -lt $catalog.LocalModelExpires)) {
+        return $catalog.LocalModelNames
+    }
+
+    $names = New-Object System.Collections.Generic.List[string]
+    $manifests = [System.IO.Path]::Combine($root, 'manifests')
+    if ([System.IO.Directory]::Exists($manifests)) {
+        try {
+            $options = [System.IO.EnumerationOptions]::new()
+            $options.RecurseSubdirectories = $true
+            $options.IgnoreInaccessible = $true
+            $options.MaxRecursionDepth = 3
+            foreach ($file in [System.IO.Directory]::EnumerateFiles($manifests, '*', $options)) {
+                $parts = [System.IO.Path]::GetRelativePath($manifests, $file).Split([char[]]@('\', '/'))
+                # Content-addressed internal entries (llamacpp:<sha256>) are not names anyone types.
+                if (($parts.Count -ne 4) -or ($parts[3] -match '^[0-9a-f]{64}$')) {
+                    continue
+                }
+
+                $repository = if ($parts[0] -ne 'registry.ollama.ai') {
+                    '{0}/{1}/{2}' -f $parts[0], $parts[1], $parts[2]
+                } elseif ($parts[1] -ne 'library') {
+                    '{0}/{1}' -f $parts[1], $parts[2]
+                } else {
+                    $parts[2]
+                }
+
+                [void]$names.Add($repository + ':' + $parts[3])
+            }
+        } catch {
+            Write-Debug -Message $_.Exception.Message
+        }
+    }
+
+    $names.Sort([System.StringComparer]::Ordinal)
+    $catalog.LocalModelNames = @($names.ToArray())
+    $catalog.LocalModelRoot = $root
+    $catalog.LocalModelExpires = $now.AddSeconds(5)
+    $catalog.LocalModelNames
+}
+
+function Get-OllamaModelCompletion {
+    param(
+        [string]$CurrentWord,
+        [string]$InlinePrefix = '',
+        [string[]]$Placeholders
+    )
+
+    $quoteCharacter = Get-OllamaQuoteCharacter -InputText $CurrentWord
+    $cleanWord = Remove-OllamaOuterQuotes -InputText $CurrentWord
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @(Get-OllamaLocalModelName)) {
+        if (-not [string]::IsNullOrEmpty($cleanWord) -and
+            -not $name.StartsWith($cleanWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $completionText = $InlinePrefix + (ConvertTo-OllamaQuotedValue -Value $name -QuoteCharacter $quoteCharacter)
+        [void]$results.Add((New-OllamaCompletionResult -CompletionText $completionText -ListItemText $name -ToolTip ('Installed model {0}' -f $name)))
+    }
+
+    if ($results.Count -eq 0) {
+        return @(Get-OllamaPlaceholderCompletions -Values $Placeholders -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
+    }
+
+    @($results.ToArray())
+}
+
 function Get-OllamaCompletionLine {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
@@ -1013,7 +1097,7 @@ function Get-OllamaValueCompletions {
             return @(Get-OllamaPathCompletions -InputText $CurrentWord -InlinePrefix $InlinePrefix -Placeholder '<path>')
         }
         'Model' {
-            return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
+            return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix -Placeholders $catalog.Placeholders['Model'])
         }
         'Duration' {
             $durations = @(Get-OllamaEnumCompletions -Values $catalog.EnumValues['run.--keepalive'] -CurrentWord $CurrentWord -InlinePrefix $InlinePrefix)
@@ -1052,7 +1136,7 @@ function Get-OllamaPositionalCompletions {
     switch ($CommandName) {
         'run' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
 
             if ($Positionals.Count -eq 1) {
@@ -1061,32 +1145,32 @@ function Get-OllamaPositionalCompletions {
         }
         'create' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'show' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'stop' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'pull' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'push' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'cp' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['SourceModel'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['SourceModel'])
             }
 
             if ($Positionals.Count -eq 1) {
@@ -1095,7 +1179,7 @@ function Get-OllamaPositionalCompletions {
         }
         'rm' {
             if ($Positionals.Count -eq 0) {
-                return @(Get-OllamaPlaceholderCompletions -Values $catalog.Placeholders['Model'] -CurrentWord $CurrentWord)
+                return @(Get-OllamaModelCompletion -CurrentWord $CurrentWord -Placeholders $catalog.Placeholders['Model'])
             }
         }
         'help' {
