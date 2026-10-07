@@ -69,6 +69,23 @@ The completer provides explicit value completion for representative non-path slo
 - `-Z` -> `cargo -Z help`
 - `new/init --vcs` -> `git`, `hg`, `pijul`, `fossil`, `none`
 
+Attached forms complete too and keep their prefix: `--color=al` -> `--color=always`, `-Zbind` -> `-Zbindeps`, `-Ffa` -> `-Ffast`. A word such as `--features=x` or `-pfoo` earlier on the line is read as an option with its value, not as an operand.
+
+### Project-aware values
+
+When a `Cargo.toml` is underfoot (nearest one walking up from the current directory, or the one named by root `-C` or `--manifest-path`/`-m`), the completer reads the project from `cargo metadata --no-deps --format-version 1 --offline`:
+
+- `--profile` -> `dev`, `release`, `test`, `bench` plus every `[profile.NAME]` in the workspace root manifest (built-ins only outside a project and for `install`)
+- `-F`/`--features` -> features of the selected package (`-p`/`--package`, else the package of the nearest manifest, else every member of a virtual workspace), including the implicit features of optional dependencies; after a comma only the last segment is completed
+- `-p`/`--package`/`--exclude` -> workspace member names
+- `--bin`/`--example`/`--test`/`--bench` -> target names of that kind in the selected package, including auto-discovered ones
+- `remove <DEP_ID>` -> the selected package's dependency names
+- `update [SPEC]` -> package names in the workspace `Cargo.lock`
+
+`uninstall` operands, `-p`/`--package` and `--bin` come from the install registry `.crates2.json` under `--root`, `CARGO_INSTALL_ROOT` or `CARGO_HOME` (default `~/.cargo`), read passively without starting cargo.
+
+Without a manifest, or when `cargo metadata` fails, the static placeholders stay.
+
 ### Path completion
 
 Local path completion is used only for path-bearing slots such as:
@@ -89,7 +106,7 @@ Local path completion is used only for path-bearing slots such as:
 - Options are keyed and matched ordinally, so `-V` (`--version`) and `-v` (`--verbose`) stay distinct.
 - Subcommands that `cargo --list` prints without a description, such as third-party `binstall` and `miri`, are recognized and get their own switch surface.
 - After `--` the completer returns nothing, leaving the arguments of the program cargo runs to PowerShell's filesystem fallback.
-- The implementation avoids probing package registries, workspaces, or remote sources during completion.
+- The implementation never probes package registries or remote sources during completion. `cargo metadata` runs with `--offline --no-deps` (it reads manifests and writes nothing), stdin closed, a 5 s timeout, and `RUSTUP_AUTO_INSTALL=0` so a `rust-toolchain.toml` that names a missing toolchain cannot trigger a download. Results are cached per manifest path and write time for 30 seconds; failures are cached too. Measured: about 450 ms for the first Tab in a project, about 50 ms after that.
 
 ## Validation performed
 

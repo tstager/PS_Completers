@@ -12,6 +12,7 @@ function Get-CargoCompletionCache {
     $newCache = @{
         Initialized         = $false
         CommandName         = $null
+        CommandResolved     = $false
         RootCommands        = @()
         RootOptions         = @()
         CommandMetadata     = @{}
@@ -24,6 +25,8 @@ function Get-CargoCompletionCache {
         CommandPathOptions  = @{
             '<root>' = @('-C', '--config')
         }
+        Projects            = @{}
+        Installed           = @{}
     }
 
     Set-Variable -Name CargoCompletionCache -Scope Script -Value $newCache
@@ -32,15 +35,16 @@ function Get-CargoCompletionCache {
 
 function Resolve-CargoCommandName {
     $cache = Get-CargoCompletionCache
-    if ($cache.CommandName) {
+    if ($cache.CommandResolved) {
         return $cache.CommandName
     }
 
-    $command = Get-Command -Name cargo.exe, cargo -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name cargo.exe, cargo -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $cache.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
 
+    $cache.CommandResolved = $true
     $cache.CommandName
 }
 
@@ -56,6 +60,54 @@ function Invoke-CargoText {
         @($null | & $commandName @Arguments 2>&1 | ForEach-Object { $_.ToString() -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
     } catch {
         @()
+    }
+}
+
+function Invoke-CargoBoundedText {
+    param(
+        [string[]]$Arguments,
+        [string]$WorkingDirectory
+    )
+
+    $commandName = Resolve-CargoCommandName
+    if (-not $commandName) {
+        return $null
+    }
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new($commandName)
+    foreach ($argument in $Arguments) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    # A Tab must never install the toolchain a rust-toolchain.toml names or reach a registry.
+    $startInfo.Environment['RUSTUP_AUTO_INSTALL'] = '0'
+    $startInfo.Environment['CARGO_NET_OFFLINE'] = 'true'
+    $startInfo.Environment['CARGO_TERM_COLOR'] = 'never'
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $null = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(5000)) {
+            $process.Kill($true)
+            return $null
+        }
+
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            return $null
+        }
+
+        $stdout.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+    } finally {
+        $process.Dispose()
     }
 }
 
@@ -325,7 +377,7 @@ function Get-CargoToolchainCompletions {
             $cache.Toolchains += 'stable'
         }
 
-        $rustup = Get-Command -Name rustup.exe, rustup -ErrorAction SilentlyContinue | Select-Object -First 1
+        $rustup = Get-Command -Name rustup.exe, rustup -ErrorAction Ignore | Select-Object -First 1
         if ($rustup) {
             try {
                 $cache.Toolchains += @(& $rustup.Source 'toolchain' 'list' 2>$null |
@@ -349,7 +401,7 @@ function Get-CargoToolchainCompletions {
 function Get-CargoTargetValues {
     $cache = Get-CargoCompletionCache
     if ($cache.Targets.Count -eq 0) {
-        $rustc = Get-Command -Name rustc.exe, rustc -ErrorAction SilentlyContinue | Select-Object -First 1
+        $rustc = Get-Command -Name rustc.exe, rustc -ErrorAction Ignore | Select-Object -First 1
         if ($rustc) {
             try {
                 $cache.Targets = @(& $rustc.Source '--print' 'target-list' 2>$null | Where-Object { $_ } | Sort-Object -Unique)
@@ -376,6 +428,290 @@ function Get-CargoUnstableFlags {
     }
 
     $cache.UnstableFlags
+}
+
+function Get-CargoOptionValue {
+    param(
+        [pscustomobject]$State,
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        if ($State.OptionValues.ContainsKey($name)) {
+            return $State.OptionValues[$name]
+        }
+    }
+
+    $null
+}
+
+function Resolve-CargoManifestPath {
+    param([pscustomobject]$State)
+
+    $location = (Get-Location -PSProvider FileSystem).ProviderPath
+    if ($State.RootDirectory) {
+        $location = [System.IO.Path]::GetFullPath($State.RootDirectory, $location)
+    }
+
+    $manifestPath = Get-CargoOptionValue -State $State -Names @('--manifest-path', '-m')
+    if ($manifestPath) {
+        $candidate = [System.IO.Path]::GetFullPath($manifestPath, $location)
+        if ([System.IO.File]::Exists($candidate)) {
+            return $candidate
+        }
+
+        return $null
+    }
+
+    # cargo itself walks up from the working directory to the nearest Cargo.toml.
+    $directory = [System.IO.DirectoryInfo]::new($location)
+    while ($directory) {
+        $candidate = [System.IO.Path]::Combine($directory.FullName, 'Cargo.toml')
+        if ([System.IO.File]::Exists($candidate)) {
+            return $candidate
+        }
+
+        $directory = $directory.Parent
+    }
+
+    $null
+}
+
+function Get-CargoProjectInfo {
+    param([pscustomobject]$State)
+
+    $manifest = Resolve-CargoManifestPath -State $State
+    if (-not $manifest) {
+        return $null
+    }
+
+    # Keyed by manifest and its write time, with a short TTL so auto-discovered targets
+    # (a new src/bin/*.rs) and lockfile changes are picked up without restarting the shell.
+    $cache = Get-CargoCompletionCache
+    $key = '{0}|{1}' -f $manifest, [System.IO.File]::GetLastWriteTimeUtc($manifest).Ticks
+    $entry = $cache.Projects[$manifest]
+    if ($entry -and $entry.Key -eq $key -and $entry.Expires -gt [datetime]::UtcNow) {
+        return $entry.Info
+    }
+
+    $info = $null
+    $json = Invoke-CargoBoundedText -WorkingDirectory ([System.IO.Path]::GetDirectoryName($manifest)) -Arguments @(
+        'metadata', '--no-deps', '--format-version', '1', '--offline', '--manifest-path', $manifest
+    )
+
+    if ($json -and $json.TrimStart().StartsWith('{')) {
+        $metadata = $json | ConvertFrom-Json
+        $packages = foreach ($package in @($metadata.packages)) {
+            [pscustomobject]@{
+                Name         = $package.name
+                ManifestPath = $package.manifest_path
+                Features     = @($package.features.PSObject.Properties | ForEach-Object { $_.Name })
+                Targets      = @($package.targets | ForEach-Object { [pscustomobject]@{ Name = $_.name; Kinds = @($_.kind) } })
+                Dependencies = @($package.dependencies | ForEach-Object { if ($_.rename) { $_.rename } else { $_.name } })
+            }
+        }
+
+        $rootManifest = [System.IO.Path]::Combine($metadata.workspace_root, 'Cargo.toml')
+        $profiles = @()
+        if ([System.IO.File]::Exists($rootManifest)) {
+            $profiles = @([regex]::Matches([System.IO.File]::ReadAllText($rootManifest), '(?m)^\s*\[profile\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\s*\]') |
+                ForEach-Object { if ($_.Groups[1].Success) { $_.Groups[1].Value } else { $_.Groups[2].Value } })
+        }
+
+        $lockFile = [System.IO.Path]::Combine($metadata.workspace_root, 'Cargo.lock')
+        $lockNames = @()
+        if ([System.IO.File]::Exists($lockFile)) {
+            $lockNames = @([regex]::Matches([System.IO.File]::ReadAllText($lockFile), '(?m)^name = "([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique -CaseSensitive)
+        }
+
+        $info = [pscustomobject]@{
+            Manifest  = $manifest
+            Packages  = @($packages)
+            Profiles  = $profiles
+            LockNames = $lockNames
+        }
+    }
+
+    # A failed or missing source is cached too, so a broken manifest is not re-run on every Tab.
+    $cache.Projects[$manifest] = @{
+        Key     = $key
+        Expires = [datetime]::UtcNow.AddSeconds(30)
+        Info    = $info
+    }
+
+    $info
+}
+
+function Get-CargoSelectedPackage {
+    param(
+        [pscustomobject]$Info,
+        [pscustomobject]$State
+    )
+
+    $spec = Get-CargoOptionValue -State $State -Names @('-p', '--package')
+    if ($spec) {
+        $name = ($spec -split '@')[0]
+        $picked = @($Info.Packages | Where-Object { $_.Name -ceq $name })
+        if ($picked.Count -gt 0) {
+            return $picked
+        }
+    }
+
+    $own = @($Info.Packages | Where-Object { $_.ManifestPath -eq $Info.Manifest })
+    if ($own.Count -gt 0) {
+        return $own
+    }
+
+    # A virtual workspace root selects every member.
+    @($Info.Packages)
+}
+
+function Get-CargoInstalledCrate {
+    param([pscustomobject]$State)
+
+    $root = Get-CargoOptionValue -State $State -Names @('--root')
+    if (-not $root) {
+        $root = if ($env:CARGO_INSTALL_ROOT) { $env:CARGO_INSTALL_ROOT } elseif ($env:CARGO_HOME) { $env:CARGO_HOME } else { [System.IO.Path]::Combine($HOME, '.cargo') }
+    }
+
+    $location = (Get-Location -PSProvider FileSystem).ProviderPath
+    $registry = [System.IO.Path]::Combine([System.IO.Path]::GetFullPath($root, $location), '.crates2.json')
+    if (-not [System.IO.File]::Exists($registry)) {
+        return $null
+    }
+
+    $cache = Get-CargoCompletionCache
+    $key = '{0}|{1}' -f $registry, [System.IO.File]::GetLastWriteTimeUtc($registry).Ticks
+    $entry = $cache.Installed[$registry]
+    if ($entry -and $entry.Key -eq $key) {
+        return $entry.Info
+    }
+
+    $info = $null
+    $text = [System.IO.File]::ReadAllText($registry)
+    if ($text.TrimStart().StartsWith('{')) {
+        # Keys read 'name version (source)'; bins carry the platform suffix that --bin does not need.
+        $installs = @(($text | ConvertFrom-Json).installs.PSObject.Properties)
+        $info = [pscustomobject]@{
+            Names = @($installs | ForEach-Object { ($_.Name -split ' ')[0] } | Sort-Object -Unique -CaseSensitive)
+            Bins  = @($installs | ForEach-Object { $_.Value.bins } | ForEach-Object { $_ -replace '\.exe$', '' } | Sort-Object -Unique -CaseSensitive)
+        }
+    }
+
+    $cache.Installed[$registry] = @{
+        Key  = $key
+        Info = $info
+    }
+
+    $info
+}
+
+function Get-CargoLiveValue {
+    param(
+        [string]$OptionName,
+        [pscustomobject]$State
+    )
+
+    # Returns @{ Candidates; ToolTip } from the project underfoot or the install registry, or nothing
+    # when there is no live source so the static hint stands.
+    $commandName = $State.CommandName
+
+    if ($commandName -eq 'uninstall') {
+        $installed = Get-CargoInstalledCrate -State $State
+        if (-not $installed) {
+            return
+        }
+
+        switch -CaseSensitive ($OptionName) {
+            { $_ -cin '<operand>', '-p', '--package' } { return @{ Candidates = $installed.Names; ToolTip = 'Installed crate.' } }
+            '--bin' { return @{ Candidates = $installed.Bins; ToolTip = 'Installed binary.' } }
+        }
+
+        return
+    }
+
+    $builtInProfiles = @('dev', 'release', 'test', 'bench')
+    if ($commandName -eq 'install') {
+        if ($OptionName -ceq '--profile') {
+            return @{ Candidates = $builtInProfiles; ToolTip = 'Cargo profile.' }
+        }
+
+        return
+    }
+
+    if ($commandName -eq 'add' -and $OptionName -cin @('-F', '--features')) {
+        return
+    }
+
+    if ($OptionName -cnotin @('--profile', '-F', '--features', '-p', '--package', '--exclude', '--bin', '--example', '--test', '--bench', '<operand>')) {
+        return
+    }
+
+    $info = Get-CargoProjectInfo -State $State
+    if ($OptionName -ceq '--profile') {
+        $profiles = $builtInProfiles
+        if ($info) {
+            $profiles = @($builtInProfiles + @($info.Profiles | Where-Object { $_ -cnotin $builtInProfiles }))
+        }
+
+        return @{ Candidates = $profiles; ToolTip = 'Cargo profile.' }
+    }
+
+    if (-not $info) {
+        return
+    }
+
+    $targetKinds = @{ '--bin' = 'bin'; '--example' = 'example'; '--test' = 'test'; '--bench' = 'bench' }
+    switch -CaseSensitive ($OptionName) {
+        { $_ -cin '-F', '--features' } {
+            $selected = @(Get-CargoSelectedPackage -Info $info -State $State)
+            return @{ Candidates = @($selected | ForEach-Object { $_.Features } | Sort-Object -Unique -CaseSensitive); ToolTip = 'Package feature.' }
+        }
+        { $_ -cin '-p', '--package', '--exclude' } {
+            return @{ Candidates = @($info.Packages | ForEach-Object { $_.Name } | Sort-Object -Unique -CaseSensitive); ToolTip = 'Workspace member.' }
+        }
+        { $targetKinds.ContainsKey($_) } {
+            $kind = $targetKinds[$OptionName]
+            $selected = @(Get-CargoSelectedPackage -Info $info -State $State)
+            $names = @($selected | ForEach-Object { $_.Targets } | Where-Object { $_.Kinds -ccontains $kind } | ForEach-Object { $_.Name } | Sort-Object -Unique -CaseSensitive)
+            return @{ Candidates = $names; ToolTip = "$kind target." }
+        }
+        '<operand>' {
+            if ($commandName -eq 'remove') {
+                $selected = @(Get-CargoSelectedPackage -Info $info -State $State)
+                return @{ Candidates = @($selected | ForEach-Object { $_.Dependencies } | Sort-Object -Unique -CaseSensitive); ToolTip = 'Dependency.' }
+            }
+
+            if ($commandName -eq 'update') {
+                if ($info.LockNames.Count -gt 0) {
+                    return @{ Candidates = $info.LockNames; ToolTip = 'Locked package.' }
+                }
+
+                return @{ Candidates = @(@($info.Packages | ForEach-Object { $_.Name; $_.Dependencies }) | Sort-Object -Unique -CaseSensitive); ToolTip = 'Package.' }
+            }
+        }
+    }
+}
+
+function Get-CargoLiveValueCompletion {
+    param(
+        [string]$OptionName,
+        [string]$CurrentWord,
+        [hashtable]$Live
+    )
+
+    $current = Remove-CargoOuterQuotes -Value $CurrentWord
+    if ($OptionName -cin @('-F', '--features')) {
+        # PowerShell splits 'a,b' itself and replaces only the segment after the last comma.
+        $current = ($current -split ',')[-1]
+    }
+
+    foreach ($value in $Live.Candidates) {
+        if ($value.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase)) {
+            New-CargoCompletionResult -CompletionText $value -ListItemText $value -ResultType 'ParameterValue' -ToolTip $Live.ToolTip
+        }
+    }
 }
 
 function Get-CargoCommandNamesFromList {
@@ -546,6 +882,7 @@ function Get-CargoState {
     $commandTokens = New-Object System.Collections.Generic.List[string]
     $pendingOption = $null
     $sawDoubleDash = $false
+    $rootDirectory = $null
 
     for ($i = 0; $i -lt $TokensBeforeCurrent.Count; $i++) {
         $token = Remove-CargoOuterQuotes -Value $TokensBeforeCurrent[$i]
@@ -555,6 +892,10 @@ function Get-CargoState {
 
         if ($pendingOption) {
             if (-not $commandName) {
+                if ($pendingOption -ceq '-C') {
+                    $rootDirectory = $token
+                }
+
                 $pendingOption = $null
                 continue
             }
@@ -592,6 +933,11 @@ function Get-CargoState {
                 continue
             }
 
+            if ($token -cmatch '^-C(.+)$') {
+                $rootDirectory = $matches[1]
+                continue
+            }
+
             if ($token.StartsWith('-')) {
                 continue
             }
@@ -610,17 +956,26 @@ function Get-CargoState {
     $commandMetadata = Get-CargoCommandMetadata -CommandName $commandName
     $commandPendingOption = $null
     $positionals = New-Object System.Collections.Generic.List[string]
+    $optionValues = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
     $afterDoubleDash = $false
 
     foreach ($token in $commandTokens) {
         if ($commandPendingOption) {
             $positionals.Add($token)
+            $optionValues[$commandPendingOption] = $token
             $commandPendingOption = $null
             continue
         }
 
         if ($token -eq '--') {
             $afterDoubleDash = $true
+            continue
+        }
+
+        # '--opt=value' and '-Xvalue' carry their value in the same word, so neither is an operand.
+        $attached = if ($afterDoubleDash) { $null } else { Split-CargoAttachedValue -Word $token -Metadata $commandMetadata }
+        if ($attached) {
+            $optionValues[$attached.Option] = $attached.Value
             continue
         }
 
@@ -643,6 +998,50 @@ function Get-CargoState {
         PendingOption       = $commandPendingOption
         Positionals         = @($positionals)
         AfterDoubleDash     = $afterDoubleDash
+        OptionValues        = $optionValues
+        RootDirectory       = $rootDirectory
+    }
+}
+
+function Test-CargoValueOption {
+    param(
+        [pscustomobject]$Metadata,
+        [string]$Option
+    )
+
+    $Metadata.Options -ccontains $Option -and ($Metadata.ValueHints.ContainsKey($Option) -or $Metadata.PathOptions -ccontains $Option)
+}
+
+function Split-CargoAttachedValue {
+    param(
+        [string]$Word,
+        [pscustomobject]$Metadata
+    )
+
+    # clap accepts '--opt=value' for every value-bearing long option and '-Xvalue' for every
+    # value-bearing short one ('cargo -Zbindeps', 'cargo build -prelease-crate').
+    if ($Word -cmatch '^(--[A-Za-z0-9][A-Za-z0-9-]*)=(.*)$') {
+        $option = $matches[1]
+        $value = $matches[2]
+        $prefix = "$option="
+    }
+    elseif ($Word -cmatch '^(-[A-Za-z0-9])(.+)$') {
+        $option = $matches[1]
+        $value = $matches[2]
+        $prefix = $option
+    }
+    else {
+        return $null
+    }
+
+    if (-not (Test-CargoValueOption -Metadata $Metadata -Option $option)) {
+        return $null
+    }
+
+    [pscustomobject]@{
+        Option = $option
+        Value  = $value
+        Prefix = $prefix
     }
 }
 
@@ -690,6 +1089,11 @@ function Get-CargoValueCompletions {
                     }
             )
         }
+    }
+
+    $live = Get-CargoLiveValue -OptionName $OptionName -State $State
+    if ($live -and @($live.Candidates).Count -gt 0) {
+        return @(Get-CargoLiveValueCompletion -OptionName $OptionName -CurrentWord $CurrentWord -Live $live)
     }
 
     if ($State.CommandMetadata.PathOptions -contains $OptionName) {
@@ -762,6 +1166,20 @@ function Complete-Cargo {
     }
 
     $state = Get-CargoState -TokensBeforeCurrent @(Get-CargoArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
+
+    if (-not $state.PendingGlobalOption -and -not $state.PendingOption -and -not $state.AfterDoubleDash) {
+        $attached = Split-CargoAttachedValue -Word $currentWord -Metadata $state.CommandMetadata
+        if ($attached) {
+            # After a comma PowerShell replaces only the last list segment, so the prefix stays put.
+            $prefix = if ($attached.Value.Contains(',')) { '' } else { $attached.Prefix }
+            return @(
+                Get-CargoValueCompletions -OptionName $attached.Option -CurrentWord $attached.Value -State $state |
+                    ForEach-Object {
+                        New-CargoCompletionResult -CompletionText ($prefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
+                    }
+            )
+        }
+    }
 
     if (-not $state.CommandName) {
         if ($state.PendingGlobalOption) {
@@ -836,6 +1254,12 @@ function Complete-Cargo {
                 }
 
                 return @($optionResults + $results)
+            }
+        }
+        { $_ -in 'remove', 'update', 'uninstall' } {
+            $live = Get-CargoLiveValue -OptionName '<operand>' -State $state
+            if ($live -and @($live.Candidates).Count -gt 0) {
+                return @($optionResults + @(Get-CargoLiveValueCompletion -OptionName '<operand>' -CurrentWord $currentWord -Live $live))
             }
         }
         'uninstall' {
