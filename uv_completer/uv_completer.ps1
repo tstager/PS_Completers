@@ -331,8 +331,10 @@ function Get-UvParsedHelpData {
                 $currentOption = Get-UvCanonicalOption -Tokens $tokens
 
                 # A metavariable after the option names marks a value-bearing
-                # option; its absence marks a switch.
-                $metavar = if ($line -match '^\s*-[^\s]+(?:,\s*-[^\s]+)*(?:\.\.\.)?\s+(?:\[=)?<([A-Z][A-Z0-9_]*)>') { $matches[1] } else { '' }
+                # option; its absence marks a switch. The leading name decides
+                # the type even when the metavariable has a suffix
+                # (`--bump <BUMP[=VALUE]>`).
+                $metavar = if ($line -match '^\s*-[^\s]+(?:,\s*-[^\s]+)*(?:\.\.\.)?\s+(?:\[=)?<([A-Z][A-Z0-9_]*)(?:\[[^\]]*\])?>') { $matches[1] } else { '' }
                 foreach ($token in $tokens) {
                     $metavarByOption[$token] = $metavar
                 }

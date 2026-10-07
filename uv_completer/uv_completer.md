@@ -85,7 +85,7 @@ and parse the returned help text.
 - options from `Options:`-style sections,
 - possible values from inline help such as `[possible values: ...]`,
 - possible values from indented `Possible values:` lists,
-- the metavariable of every option (`--cache-dir <CACHE_DIR>`), which decides whether the option is a switch, a path-typed option, or a free/enum value,
+- the metavariable of every option (`--cache-dir <CACHE_DIR>`; for a suffixed one such as `--bump <BUMP[=VALUE]>` the leading name counts), which decides whether the option is a switch, a path-typed option, or a free/enum value,
 - the closed value set of the first positional in `Arguments:` (`uv generate-shell-completion <SHELL>`).
 
 ### 5. Result shaping
