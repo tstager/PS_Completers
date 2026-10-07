@@ -15,6 +15,7 @@ The completer resolves `agy.exe` from PATH and lazily reads its installed help. 
 - Root commands, switches, and tooltips come from `agy.exe --help`.
 - Subcommand catalogs come from `agy.exe help <command>`.
 - MCP child options come from the verified `agy.exe mcp <verb> --help` entry points for add, remove, list, enable, and disable.
+- Remote-control child options come from `agy.exe remote-control <subcommand> --help`, the entry point that `agy.exe help remote-control` documents for start, status, and stop.
 - Enum values are extracted from help descriptions, with known value kinds for options whose help omits argument markers.
 - Local file and directory names are enumerated as you type, including separate and attached option values.
 
@@ -33,12 +34,13 @@ agy --log-file=.\
 agy --json-schema .\
 agy mcp add --type h
 agy mcp add -H
+agy remote-control start --
 agy plugin import
 agy plugins install .\
 agy help mcp
 ```
 
-Root session options, root command aliases, MCP verbs, plugin verbs, install options, and mic-serve options are context-aware. Case-sensitive matching preserves MCP's distinct `-H` (header) and `-h` (help). `--new-project` is a boolean switch; print and interactive-prompt options take prompt values. Their arities were checked using deliberately invalid argument parsing, without starting a session.
+Root session options, root command aliases, MCP verbs, plugin verbs, remote-control verbs, install options, and mic-serve options are context-aware. Case-sensitive matching preserves MCP's distinct `-H` (header) and `-h` (help). `--new-project` is a boolean switch; print and interactive-prompt options take prompt values. Their arities were checked using deliberately invalid argument parsing, without starting a session. `remote-control start --name` takes an instance-name value and `--session` is a boolean switch, checked the same way alongside `--help` so the daemon never starts.
 
 Path completion supports local directories and files, literal brackets, trailing separators, spaces, apostrophes, and quoted attached values. JSON schemas offer both a string placeholder and local files. Plugin import offers `gemini`, `claude`, and local directories; plugin install offers local directories and a `plugin@marketplace` placeholder.
 

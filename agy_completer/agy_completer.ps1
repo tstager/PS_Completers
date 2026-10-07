@@ -15,6 +15,7 @@ function Get-AgyCompletionCatalog {
         # Only known help entry points are executable: plugin verbs treat --help as data.
         $arguments = @('--help')
         if ($Context -match '^mcp (add|remove|list|enable|disable)$') { $arguments = @('mcp', $Matches[1], '--help') }
+        elseif ($Context -match '^remote-control (\S+)$') { $arguments = @('remote-control', $Matches[1], '--help') }
         elseif ($Context) { $arguments = @('help', ($Context -split ' ')[0]) }
         $process = [System.Diagnostics.Process]::new()
         try {
@@ -78,6 +79,7 @@ function Get-AgyValueKind {
     }
     if ($Context -eq 'install' -and $Option -ceq '--dir') { return 'directory' }
     if ($Context -eq 'mic-serve' -and $Option -ceq '--addr') { return '<host:port>' }
+    if ($Context -eq 'remote-control start' -and $Option -ceq '--name') { return '<instance-name>' }
     if ($Context -eq 'mcp add') {
         switch -CaseSensitive ($Option) {
             { $_ -cin @('-t','--type') } { return 'stdio|http' }
@@ -159,9 +161,9 @@ function Get-AgyCompletion {
             $catalog = Get-AgyCompletionCatalog $context
             continue
         }
-        if ($context -in @('plugin','mcp') -and -not $operands.Count -and $catalog.Commands.Contains($token)) {
+        if ($context -in @('plugin','mcp','remote-control') -and -not $operands.Count -and $catalog.Commands.Contains($token)) {
             $context += ' ' + $token
-            if ($context.StartsWith('mcp ')) { $catalog = Get-AgyCompletionCatalog $context }
+            if ($context -notlike 'plugin *') { $catalog = Get-AgyCompletionCatalog $context }
             else { $catalog = @{ Options = @{}; Commands = @{} } }
             continue
         }
