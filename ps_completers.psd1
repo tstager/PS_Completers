@@ -1233,7 +1233,7 @@
         @{
             Path    = 'strings_completer/strings_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:924B7BB69FF461311EA770CB984739D40415C2077A3E3F64406D55D598C080B2'
+            Hash    = 'SHA256:BDC019AA926B728FA6697768AA465C0F936B1FDFFBD7F1FE93BE6A4538C519E8'
             Targets = @(
                 @{ CommandName = 'strings'; Native = $true }
                 @{ CommandName = 'strings.exe'; Native = $true }

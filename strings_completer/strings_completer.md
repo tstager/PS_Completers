@@ -46,7 +46,7 @@ The script completes the locally validated switches:
 The completer recognizes the three separate-value switches:
 
 - `-b` -> sample byte counts such as `256`, `512`, `1024`, `4096`, `65536`
-- `-f` -> sample offsets such as `0`, `512`, `4096`, `65536`, `0x1000`
+- `-f` -> sample offsets such as `512`, `4096`, `65536`, `1048576` (positive decimal only: Strings v2.54 rejects `0` and hex values such as `0x1000` with its usage line)
 - `-n` -> sample minimum lengths such as `3`, `4`, `8`, `16`, `32`
 
 These suggestions keep PowerShell from falling back to unrelated file completion while you are entering numeric values.

@@ -19,7 +19,7 @@ if (-not (Get-Variable -Name StringsCompletionCatalog -Scope Script -ErrorAction
             @{ Token = '/?'; Description = 'Show Strings help.'; TakesValue = $false }
         )
         ByteHints   = @('256', '512', '1024', '4096', '65536')
-        OffsetHints = @('0', '512', '4096', '65536', '0x1000')
+        OffsetHints = @('512', '4096', '65536', '1048576')
         LengthHints = @('3', '4', '8', '16', '32')
     }
 }
