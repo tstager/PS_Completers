@@ -14,7 +14,7 @@ if (-not (Get-Variable -Name OhMyPoshCompletionCache -Scope Script -ErrorAction 
 function Get-OhMyPoshExecutable {
     if (-not $script:OhMyPoshCompletionCache.ExecutableProbed) {
         $script:OhMyPoshCompletionCache.ExecutableProbed = $true
-        $command = Get-Command -Name 'oh-my-posh.exe', 'oh-my-posh' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $command = Get-Command -Name 'oh-my-posh.exe', 'oh-my-posh' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
         if ($command) {
             $script:OhMyPoshCompletionCache.ExecutablePath = $command.Source
         }
@@ -26,11 +26,13 @@ function Get-OhMyPoshExecutable {
 function Get-OhMyPoshFallbackHelp {
     param([string[]]$CommandPath)
 
-    $help = @{ Commands = @(); Flags = @(); Positionals = @() }
+    $help = @{ Commands = @(); Flags = @(); Positionals = @(); PositionalTips = @{} }
     if ($CommandPath.Count -eq 0) {
         foreach ($name in 'antigravity', 'auth', 'cache', 'claude', 'config', 'copilot', 'debug', 'disable', 'enable', 'font', 'get', 'help', 'init', 'notice', 'print', 'shell', 'stream', 'toggle', 'upgrade', 'version') {
             $help.Commands += @{ Text = $name; Tip = "oh-my-posh $name" }
         }
+    } elseif (($CommandPath -join ' ') -eq 'init') {
+        $help.Positionals = @('bash', 'zsh', 'fish', 'powershell', 'pwsh', 'cmd', 'nu', 'elvish', 'xonsh', 'yash')
     }
 
     $help.Flags = @(
@@ -66,9 +68,16 @@ function Get-OhMyPoshHelp {
         }
 
         if (-not [string]::IsNullOrWhiteSpace($text)) {
-            $help = @{ Commands = @(); Flags = @(); Positionals = @() }
+            $help = @{ Commands = @(); Flags = @(); Positionals = @(); PositionalTips = @{} }
             $section = ''
+            $placeholder = $false
+            $bullets = [ordered]@{}
             foreach ($line in ($text -split '\r?\n')) {
+                if ($line -match '^- ([A-Za-z0-9_-]+): (.+)$') {
+                    $bullets[$Matches[1]] = $Matches[2].Trim()
+                    continue
+                }
+
                 if ($line -match '^(Usage|Available Commands|Flags|Global Flags):') {
                     $section = $Matches[1]
                     continue
@@ -83,6 +92,8 @@ function Get-OhMyPoshHelp {
                     'Usage' {
                         if ($line -match '\[([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)+)\]') {
                             $help.Positionals = @($Matches[1] -split '\|')
+                        } elseif ($line -match '\[(?!flags\]|command\])[A-Za-z0-9_-]+\]') {
+                            $placeholder = $true
                         }
                     }
                     'Available Commands' {
@@ -96,6 +107,12 @@ function Get-OhMyPoshHelp {
                         }
                     }
                 }
+            }
+
+            # A single [placeholder] (auth [service]) documents its values as '- name: description' bullets.
+            if ($placeholder -and $help.Positionals.Count -eq 0 -and $bullets.Count -gt 0) {
+                $help.Positionals = @($bullets.Keys)
+                $help.PositionalTips = @{} + $bullets
             }
         }
     }
@@ -186,6 +203,7 @@ function Complete-OhMyPosh {
 
     $commandPath = @()
     $pendingFlag = $null
+    $operandCount = 0
     $help = Get-OhMyPoshHelp -CommandPath @()
     foreach ($token in $tokens) {
         if ($null -ne $pendingFlag) {
@@ -198,15 +216,20 @@ function Complete-OhMyPosh {
                 continue
             }
             $flag = Get-OhMyPoshFlag -Help $help -Token $token
-            if ($flag -and -not [string]::IsNullOrEmpty($flag.Type)) {
+            # An option this command does not list may take a value, so its slot stays a value slot.
+            if (-not $flag) {
+                $pendingFlag = @{ Long = $token; Short = ''; Type = 'unknown'; Tip = '' }
+            } elseif (-not [string]::IsNullOrEmpty($flag.Type)) {
                 $pendingFlag = $flag
             }
             continue
         }
 
-        if (@($help.Commands | Where-Object { $_.Text -eq $token }).Count -gt 0) {
+        if ($operandCount -eq 0 -and @($help.Commands | Where-Object { $_.Text -eq $token }).Count -gt 0) {
             $commandPath += $token
             $help = Get-OhMyPoshHelp -CommandPath $commandPath
+        } else {
+            $operandCount++
         }
     }
 
@@ -222,18 +245,22 @@ function Complete-OhMyPosh {
     }
 
     if ($valueFlag) {
+        if ($valueFlag.Type -eq 'unknown') {
+            return @()
+        }
+
         if ($valueFlag.Long -in '--config', '--data') {
             return @(Get-OhMyPoshPathCompletions -Prefix $valuePrefix -Attached $attached)
         }
 
         $values = switch ($valueFlag.Long) {
-            '--shell' { @('pwsh', 'powershell', 'bash', 'zsh', 'fish', 'cmd', 'nu', 'elvish', 'xonsh', 'tcsh') }
+            '--shell' { (Get-OhMyPoshHelp -CommandPath @('init')).Positionals }
             default { @() }
         }
 
         return @(
             foreach ($value in $values) {
-                if ($value.StartsWith($valuePrefix, [System.StringComparison]::Ordinal)) {
+                if ($value.StartsWith($valuePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                     [System.Management.Automation.CompletionResult]::new($attached + $value, $value, 'ParameterValue', $valueFlag.Tip)
                 }
             }
@@ -251,24 +278,32 @@ function Complete-OhMyPosh {
 
     if ($wordToComplete.StartsWith('-')) {
         foreach ($flag in $help.Flags) {
-            foreach ($text in @($flag.Long, $flag.Short)) {
-                if (-not [string]::IsNullOrEmpty($text) -and $text.StartsWith($wordToComplete, [System.StringComparison]::Ordinal)) {
-                    & $add $text 'ParameterName' $flag.Tip
-                }
+            # Long names match case-insensitively; short flags stay ordinal so a case-distinct pair never cross-matches.
+            if ($flag.Long.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
+                & $add $flag.Long 'ParameterName' $flag.Tip
+            }
+            if (-not [string]::IsNullOrEmpty($flag.Short) -and $flag.Short.StartsWith($wordToComplete, [System.StringComparison]::Ordinal)) {
+                & $add $flag.Short 'ParameterName' $flag.Tip
             }
         }
         return @($results.ToArray())
     }
 
+    # Commands and the [a|b] / [service] operand take only the first operand slot.
+    if ($operandCount -gt 0) {
+        return @()
+    }
+
     foreach ($command in $help.Commands) {
-        if ($command.Text.StartsWith($wordToComplete, [System.StringComparison]::Ordinal)) {
+        if ($command.Text.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
             & $add $command.Text 'ParameterValue' $command.Tip
         }
     }
 
     foreach ($value in $help.Positionals) {
-        if ($value.StartsWith($wordToComplete, [System.StringComparison]::Ordinal)) {
-            & $add $value 'ParameterValue' ("oh-my-posh " + ($commandPath -join ' ') + " " + $value)
+        if ($value.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $tip = if ($help.PositionalTips.ContainsKey($value)) { $help.PositionalTips[$value] } else { "oh-my-posh " + ($commandPath -join ' ') + " " + $value }
+            & $add $value 'ParameterValue' $tip
         }
     }
 

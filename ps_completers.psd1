@@ -656,7 +656,7 @@
         @{
             Path    = 'OhMyPosh_completer/OhMyPosh_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:FAFD3C1113FDA9B505B2D6F09DFE06048D1C52E548EEB7F8E4D8D17DFC40D371'
+            Hash    = 'SHA256:34F0EB6F37D22213F550BA84ACFC2B07F94F2C61BCCCF925DF7096F4E0384990'
             Targets = @(
                 @{ CommandName = 'oh-my-posh.exe'; Native = $true }
                 @{ CommandName = 'oh-my-posh'; Native = $true }
