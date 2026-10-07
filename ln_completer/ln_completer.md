@@ -85,7 +85,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - `--backup=`: `none`, `off`, `numbered`, `t`, `existing`, `nil`, `simple`, `never` (attached form only; `--backup[=CONTROL]` takes an optional argument, so `ln --backup none` would read `none` as TARGET)
 - `-S`, `--suffix`: `~`, `<suffix>`
-- `-t`, `--target-directory`: filesystem paths
+- `-t`, `--target-directory`: directories only, typed `ProviderContainer` (ln rejects a file there with "target is not a directory")
 
 ## Representative validation scenarios
 

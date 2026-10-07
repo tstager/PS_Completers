@@ -139,7 +139,10 @@ function Get-LnCurrentToken {
 }
 
 function Get-LnPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$ContainersOnly
+    )
 
     $cleanInput = Remove-LnOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
@@ -165,6 +168,9 @@ function Get-LnPathCompletions {
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
+    if ($ContainersOnly) {
+        $items = $items | Where-Object { $_.PSIsContainer }
+    }
 
     foreach ($item in $items) {
         $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
@@ -240,17 +246,17 @@ function Get-LnOptionValueCompletions {
         @{ Text = '~'; Tip = 'Default backup suffix.' }
         @{ Text = '<suffix>'; Tip = 'Backup suffix.' }
     )
-    $table['-t'] = 'path'
-    $table['--target-directory'] = 'path'
+    $table['-t'] = 'directory'
+    $table['--target-directory'] = 'directory'
     if (-not $table.ContainsKey($option)) {
         return @()
     }
 
     $spec = $table[$option]
-    if ($spec -is [string] -and $spec -eq 'path') {
+    if ($spec -is [string] -and $spec -eq 'directory') {
         return @(
-            foreach ($result in Get-LnPathCompletions -InputPath $prefix) {
-                New-LnCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+            foreach ($result in Get-LnPathCompletions -InputPath $prefix -ContainersOnly) {
+                New-LnCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
             }
         )
     }

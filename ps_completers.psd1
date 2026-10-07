@@ -564,7 +564,7 @@
         @{
             Path    = 'ln_completer/ln_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7A6086F786420447FD366A4B239B0E35BC6F279216992F02D14D8E4FE6E7EB0E'
+            Hash    = 'SHA256:C7A60B129C395BEC83A67B2B76537753F4617524AF7F51C46A26FCFB4186C62F'
             Targets = @(
                 @{ CommandName = 'ln'; Native = $true }
                 @{ CommandName = 'ln.exe'; Native = $true }
