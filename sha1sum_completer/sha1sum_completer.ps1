@@ -198,8 +198,48 @@ function Get-Sha1sumOptionDescription {
     'Option for sha1sum.'
 }
 
+function Test-Sha1sumCheckMode {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # True when another word on the line selects verify mode: -c, a short cluster containing c,
+    # or --check and its unambiguous abbreviations (--c, --ch, ...). Words after '--' are files.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($CursorPosition -ge $element.Extent.StartOffset -and $CursorPosition -le $element.Extent.EndOffset) {
+            continue
+        }
+
+        $text = if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $element.Value } else { $element.Extent.Text }
+        if ($text -ceq '--') {
+            break
+        }
+
+        if (($text -cmatch '^-[A-Za-z]+$' -and $text.Contains('c')) -or ($text.Length -ge 3 -and '--check'.StartsWith($text, [System.StringComparison]::Ordinal))) {
+            return $true
+        }
+    }
+
+    $false
+}
+
+function Get-Sha1sumExcludedOptionSet {
+    param([bool]$Checking)
+
+    # The tool rejects verify-only options when hashing, and hash-output options when verifying.
+    if ($Checking) {
+        return @('-c', '--check', '--tag', '-z', '--zero', '-b', '--binary', '-t', '--text')
+    }
+
+    @('-w', '--warn', '--status', '--quiet', '--strict', '--ignore-missing')
+}
+
 function Complete-Sha1sumShortFlagCluster {
-    param([string]$CurrentWord)
+    param(
+        [string]$CurrentWord,
+        [bool]$Checking
+    )
 
     # Every sha1sum option is a boolean switch, so '-cw' is '-c -w'; extend a cluster of known
     # short flags with each flag not yet in it.
@@ -215,10 +255,11 @@ function Complete-Sha1sumShortFlagCluster {
         }
     }
 
+    $excluded = Get-Sha1sumExcludedOptionSet -Checking ($Checking -or 'c' -cin $usedLetters)
     @(
         foreach ($flag in $shortFlags) {
             $letter = $flag.Substring(1)
-            if ($letter -cin $usedLetters) {
+            if ($letter -cin $usedLetters -or $flag -cin $excluded) {
                 continue
             }
 
@@ -246,9 +287,11 @@ function Complete-Sha1sum {
     }
 
     if ($currentWord.StartsWith('-')) {
+        $checking = Test-Sha1sumCheckMode -CommandAst $commandAst -CursorPosition $cursorPosition
+        $excluded = Get-Sha1sumExcludedOptionSet -Checking $checking
         $optionMatches = @(
             foreach ($option in Get-Sha1sumCompletionOptions) {
-                if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
+                if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal) -and $option -cnotin $excluded) {
                     New-Sha1sumCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-Sha1sumOptionDescription -Option $option)
                 }
             }
@@ -257,7 +300,7 @@ function Complete-Sha1sum {
             return $optionMatches
         }
 
-        return Complete-Sha1sumShortFlagCluster -CurrentWord $currentWord
+        return Complete-Sha1sumShortFlagCluster -CurrentWord $currentWord -Checking $checking
     }
 
     Get-Sha1sumPathCompletions -InputPath $currentWord
