@@ -102,7 +102,7 @@ function Resolve-CurlCommandName {
         return $catalog.CommandName
     }
 
-    $command = Get-Command -Name curl.exe, curl -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name curl.exe, curl -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $catalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -151,6 +151,20 @@ function ConvertTo-CurlQuotedValue {
     }
 
     $Value
+}
+
+function ConvertTo-CurlQuotedArgument {
+    # Renders a value as one quoted PowerShell argument in the given quote style.
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    }
+
+    "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
 }
 
 function Test-CurlPathLikeInput {
@@ -217,6 +231,50 @@ function Get-CurlArgumentTokens {
     }
 
     $tokens
+}
+
+function Get-CurlAtFileWord {
+    # Reads an '@file' value under the cursor from the parsed command elements:
+    # $wordToComplete loses the '@' when PowerShell splits a bare '@.\x' into
+    # '@' and '.\x', and it keeps a typed quote. Returns $null for other words.
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    $elements = @($CommandAst.CommandElements | Select-Object -Skip 1)
+    for ($index = 0; $index -lt $elements.Count; $index++) {
+        $extent = $elements[$index].Extent
+        if ($CursorPosition -le $extent.StartOffset -or $CursorPosition -gt $extent.EndOffset) {
+            continue
+        }
+
+        $text = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        $quote = ''
+        $splitAt = $false
+        if ($text -match '^[''"]') {
+            $quote = $text.Substring(0, 1)
+            $text = $text.Substring(1)
+            if ($text.EndsWith($quote)) {
+                $text = $text.Substring(0, $text.Length - 1)
+            }
+
+            $text = if ($quote -eq "'") { $text.Replace("''", "'") } else { $text -replace '`(.)', '$1' }
+        } elseif ($index -gt 0 -and $elements[$index - 1].Extent.Text -eq '@' -and $elements[$index - 1].Extent.EndOffset -eq $extent.StartOffset) {
+            $text = '@' + $text
+            $splitAt = $true
+        } else {
+            $text = $text -replace '`(.)', '$1'
+        }
+
+        if (-not $text.StartsWith('@')) {
+            return $null
+        }
+
+        return [pscustomobject]@{ Value = $text; Quote = $quote; SplitAt = $splitAt }
+    }
+
+    $null
 }
 
 function Get-CurlValueKind {
@@ -408,7 +466,8 @@ function Get-CurlPathCompletions {
     param(
         [string]$InputPath,
         [string]$Prefix = '',
-        [switch]$DirectoriesOnly
+        [switch]$DirectoriesOnly,
+        [string]$Quote = ''
     )
 
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
@@ -430,7 +489,7 @@ function Get-CurlPathCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
@@ -450,8 +509,13 @@ function Get-CurlPathCompletions {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-CurlQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
-        $completionText = $Prefix + $completionText
+        if ($Quote) {
+            # The prefix and path form one argument quoted as a whole.
+            $completionText = ConvertTo-CurlQuotedArgument -Value ($Prefix + $completionText) -Quote $Quote
+        } else {
+            $completionText = ConvertTo-CurlQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
+            $completionText = $Prefix + $completionText
+        }
 
         New-CurlCompletionResult -CompletionText $completionText -ListItemText $item.Name -ResultType 'ParameterValue' -ToolTip $item.FullName
     }
@@ -487,6 +551,11 @@ function Get-CurlEnumValueResults {
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
 
     foreach ($value in @($Values)) {
+        # An empty value list (curl absent, so no protocols) binds as a single $null.
+        if ([string]::IsNullOrEmpty($value)) {
+            continue
+        }
+
         if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
             New-CurlCompletionResult -CompletionText ($Prefix + $value) -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
@@ -594,6 +663,45 @@ function Get-CurlProtocolListValueResults {
     New-CurlLiteralValueResults -CurrentValue $typedValue -Placeholder '<protocols>' -ToolTip $ToolTip -Prefix $Prefix
 }
 
+function Get-CurlUploadFlagValueResults {
+    param(
+        [string]$CurrentValue,
+        [string]$ToolTip,
+        [string]$Prefix = ''
+    )
+
+    $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    if ($typedValue -match '^[''"]') {
+        return New-CurlLiteralValueResults -CurrentValue $typedValue -Placeholder '<flags>' -ToolTip $ToolTip -Prefix $Prefix
+    }
+
+    $segment = $typedValue
+    if ($typedValue -match ',([^,]*)$') {
+        # PowerShell parses 'a,b' as an array and replaces only the segment after the last comma.
+        $segment = $matches[1]
+        $Prefix = ''
+    }
+
+    # curl negates a flag with a leading '-'; flag names are case-sensitive.
+    $modifier = ''
+    $namePrefix = $segment
+    if ($segment.StartsWith('-')) {
+        $modifier = '-'
+        $namePrefix = $segment.Substring(1)
+    }
+
+    $results = @(foreach ($value in @('answered', 'deleted', 'draft', 'flagged', 'seen')) {
+            if ($value.StartsWith($namePrefix, [System.StringComparison]::Ordinal)) {
+                New-CurlCompletionResult -CompletionText ($Prefix + $modifier + $value) -ResultType 'ParameterValue' -ToolTip $ToolTip
+            }
+        })
+    if ($results.Count -gt 0) {
+        return $results
+    }
+
+    New-CurlLiteralValueResults -CurrentValue $segment -Placeholder '<flags>' -ToolTip $ToolTip -Prefix $Prefix
+}
+
 function Get-CurlVariableValueResults {
     param(
         [string]$CurrentValue,
@@ -638,14 +746,35 @@ function Get-CurlAtFileValueResults {
         [string]$CurrentValue,
         [string]$Placeholder,
         [string]$ToolTip,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [string]$Quote = '',
+        [switch]$SplitAt
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
     if ($typedValue.StartsWith('@')) {
-        $results = @(Get-CurlPathCompletions -InputPath $typedValue.Substring(1) -Prefix ($Prefix + '@'))
+        $pathInput = $typedValue.Substring(1)
+        $results = @(if ($SplitAt) {
+            # The '@' already sits in the buffer as a token of its own; complete the path after it.
+            Get-CurlPathCompletions -InputPath $pathInput
+        } elseif ($Prefix) {
+            Get-CurlPathCompletions -InputPath $pathInput -Prefix ($Prefix + '@')
+        } else {
+            # A leading '@' would start a splat, so the whole value is emitted quoted.
+            $valueQuote = if ($Quote) { $Quote } else { "'" }
+            Get-CurlPathCompletions -InputPath $pathInput -Prefix '@' -Quote $valueQuote
+        })
+
         if ($results.Count -gt 0) {
             return $results
+        }
+
+        if ($SplitAt) {
+            return New-CurlLiteralValueResults -CurrentValue $pathInput -Placeholder $Placeholder -ToolTip $ToolTip
+        }
+
+        if (-not $Prefix) {
+            return @(New-CurlCompletionResult -CompletionText (ConvertTo-CurlQuotedArgument -Value $typedValue -Quote $valueQuote) -ListItemText $typedValue -ResultType 'ParameterValue' -ToolTip $ToolTip)
         }
     }
 
@@ -665,7 +794,9 @@ function Get-CurlValueCompletions {
     param(
         [pscustomobject]$OptionSpec,
         [string]$CurrentValue,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [string]$Quote = '',
+        [switch]$SplitAt
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
@@ -712,13 +843,13 @@ function Get-CurlValueCompletions {
             return @(Get-CurlPathValueResults -CurrentValue $typedValue -Placeholder '<certificate>' -ToolTip $toolTip -Prefix $Prefix)
         }
         'HeaderOrFile' {
-            return @(Get-CurlAtFileValueResults -CurrentValue $typedValue -Placeholder '<header-or-@file>' -ToolTip $toolTip -Prefix $Prefix)
+            return @(Get-CurlAtFileValueResults -CurrentValue $typedValue -Placeholder '<header-or-@file>' -ToolTip $toolTip -Prefix $Prefix -Quote $Quote -SplitAt:$SplitAt)
         }
         'VariableSpec' {
             return @(Get-CurlVariableValueResults -CurrentValue $typedValue -ToolTip $toolTip -Prefix $Prefix)
         }
         'DataValue' {
-            return @(Get-CurlAtFileValueResults -CurrentValue $typedValue -Placeholder '<data-or-@file>' -ToolTip $toolTip -Prefix $Prefix)
+            return @(Get-CurlAtFileValueResults -CurrentValue $typedValue -Placeholder '<data-or-@file>' -ToolTip $toolTip -Prefix $Prefix -Quote $Quote -SplitAt:$SplitAt)
         }
         'DataOrFilename' {
             if (Test-CurlPathLikeInput -Value $typedValue) {
@@ -756,10 +887,10 @@ function Get-CurlValueCompletions {
             return @(Get-CurlEnumOrLiteralValueResults -Values @('default', '1.0', '1.1', '1.2', '1.3') -CurrentValue $typedValue -Placeholder '<VERSION>' -ToolTip $toolTip -Prefix $Prefix)
         }
         'UploadFlags' {
-            return @(Get-CurlEnumOrLiteralValueResults -Values @('append', 'create', 'failifexist', 'overwrite') -CurrentValue $typedValue -Placeholder '<flags>' -ToolTip $toolTip -Prefix $Prefix)
+            return @(Get-CurlUploadFlagValueResults -CurrentValue $typedValue -ToolTip $toolTip -Prefix $Prefix)
         }
         'KerberosLevel' {
-            return @(Get-CurlEnumOrLiteralValueResults -Values @('clear', 'safe', 'conf', 'cred') -CurrentValue $typedValue -Placeholder '<level>' -ToolTip $toolTip -Prefix $Prefix)
+            return @(Get-CurlEnumOrLiteralValueResults -Values @('clear', 'safe', 'confidential', 'private') -CurrentValue $typedValue -Placeholder '<level>' -ToolTip $toolTip -Prefix $Prefix)
         }
         'FileMode' {
             return @(Get-CurlEnumOrLiteralValueResults -Values @('0600', '0644', '0660', '0755') -CurrentValue $typedValue -Placeholder '<mode>' -ToolTip $toolTip -Prefix $Prefix)
@@ -852,6 +983,16 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
         $optionSpec = Get-CurlOptionSpecByToken -Token $optionName
         if ($optionSpec -and $optionSpec.ValueKind) {
             return @(Get-CurlValueCompletions -OptionSpec $optionSpec -CurrentValue $valuePrefix -Prefix ($optionName + '='))
+        }
+    }
+
+    $atWord = Get-CurlAtFileWord -CommandAst $commandAst -CursorPosition $cursorPosition
+    if ($atWord) {
+        # A split-off '@' is part of the value being typed, not a value of its own.
+        $atTokens = if ($atWord.SplitAt) { @($tokensBeforeCurrent | Select-Object -First (@($tokensBeforeCurrent).Count - 1)) } else { $tokensBeforeCurrent }
+        $atOption = Get-CurlPendingOption -TokensBeforeCurrent $atTokens
+        if ($atOption -and $atOption.ValueKind -in 'DataValue', 'HeaderOrFile') {
+            return @(Get-CurlValueCompletions -OptionSpec $atOption -CurrentValue $atWord.Value -Quote $atWord.Quote -SplitAt:$atWord.SplitAt)
         }
     }
 

@@ -39,6 +39,16 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
         }
     }
 
+    $atWord = Get-CurlAtFileWord -CommandAst $commandAst -CursorPosition $cursorPosition
+    if ($atWord) {
+        # A split-off '@' is part of the value being typed, not a value of its own.
+        $atTokens = if ($atWord.SplitAt) { @($tokensBeforeCurrent | Select-Object -First (@($tokensBeforeCurrent).Count - 1)) } else { $tokensBeforeCurrent }
+        $atOption = Get-CurlPendingOption -TokensBeforeCurrent $atTokens
+        if ($atOption -and $atOption.ValueKind -in 'DataValue', 'HeaderOrFile') {
+            return @(Get-CurlValueCompletions -OptionSpec $atOption -CurrentValue $atWord.Value -Quote $atWord.Quote -SplitAt:$atWord.SplitAt)
+        }
+    }
+
     $pendingOption = Get-CurlPendingOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($pendingOption) {
         return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $wordToComplete)
@@ -90,10 +100,12 @@ The parsed catalog is cached in script scope and built lazily on first completio
 
 The completer uses the placeholder text from curl help plus a small static overlay to decide when to:
 
-- offer enum values such as `DER`, `PEM`, `P12`, `multicwd`, `singlecwd`, `active`, `passive`, and TLS version hints
+- offer enum values such as `DER`, `PEM`, `P12`, `multicwd`, `singlecwd`, `active`, `passive`, TLS version hints, and the `--krb` levels `clear`, `safe`, `confidential`, `private`
+- complete `--upload-flags` as a comma list of `answered`, `deleted`, `draft`, `flagged`, `seen`, each optionally negated with a leading `-` (curl's own spelling; the names are case-sensitive)
 - complete protocol-bearing values like `http://`, `https://`, or protocol lists for `--proto`
 - complete file paths for options like `--config`, `--output`, `--trace`, `--key`, `--cacert`, and `--output-dir`
 - treat `-d`, `--data`, `-H`, `--header`, `--proxy-header`, and `--variable` specially when the value uses `@file`-style syntax
+- read a separate `@file` value for `-d`/`-H` and their long forms from the parsed command elements: a leading `@` would start a PowerShell splat, so `'@.\` and `"@.\` complete to whole quoted values in the typed quote style (`'@.\data.json'`), and a bare `@` completes to single-quoted values
 - emit the documented `<placeholder>` for any other value-taking option, so a value slot never falls back to the option list
 
 ### Inline long-option values
@@ -108,6 +120,8 @@ curl --help
 curl --proto=
 curl --config .\
 curl -d @
+curl -d '@.\
+curl --upload-flags seen,-
 curl https
 ```
 
@@ -122,3 +136,4 @@ curl https
 - The completer does not attempt to model every curl option as repeatable vs singleton; it favors broad option discovery over strict deduplication.
 - Free-form values such as headers, request methods, credentials, and URL templates intentionally use placeholder-oriented completion instead of speculative parsing.
 - Short options with attached values are not specially parsed; value-aware completion is focused on space-separated forms and `--long=value`.
+- An unquoted `@.\` is not valid PowerShell: the parser splits it into an `@` token and `.\`, and completion can only replace the `.\` part, so that spelling completes the path after the `@` but the line still needs the `@` value quoted to run. Type `'@.\` instead.

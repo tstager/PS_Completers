@@ -221,7 +221,7 @@
         @{
             Path    = 'curl_completer/curl_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:445E34D07AA80FD53A2BEDF617B2727B4DEC3E371466783C697D66306CDA6BF4'
+            Hash    = 'SHA256:441F72DEF3F229D2504AD5F5535D5B8CC289C6D80797B0FC86F26D8591A9F872'
             Targets = @(
                 @{ CommandName = 'curl'; Native = $true }
                 @{ CommandName = 'curl.exe'; Native = $true }
