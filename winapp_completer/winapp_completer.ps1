@@ -9,8 +9,11 @@
     option values, and positional value slots.
 
     A small static overlay supplies enum choices that the schema does not carry
-    (IfExists, SdkInstallMode, ManifestTemplates).  File / directory slots use
-    the built-in filename completer; free-form slots emit a typed placeholder.
+    (IfExists, SdkInstallMode, ManifestTemplates), plus the value sets and path
+    slots that schema descriptions only spell out in prose.  File / directory
+    slots use the built-in filename completer; free-form slots emit a typed
+    placeholder.  A node may carry subcommands alongside its own options and
+    operands (find-api); both are offered until a subcommand is chosen.
 
     The completer never invokes winapp more than once (probe-once) and never
     throws: if winapp is missing or the schema cannot be parsed, completion is a
@@ -47,41 +50,88 @@ function Initialize-WinAppCompleterData {
     }
 
     # Closed value sets the schema spells out only inside description strings
-    # (typed System.String), keyed by '<command path> <canonical option>'.
+    # (typed System.String), keyed by '<command path> <canonical option>' or
+    # '<command path> <argument>'.  An entry also covers every subcommand below
+    # that path (see Get-WinAppOverlayEntry), so '--on' serves the whole tree.
     $script:WinAppValueChoices = @{
-        'find-ui --source'      = @('gallery', 'toolkit', 'reactor', 'core')
-        'new --template'        = @('winui', 'winui-navview', 'winui-mvvm', 'winui-lib', 'winui-unittest')
-        'new --template-version' = @('latest', 'installed')
-        'run --arch'            = @('x64', 'arm64', 'x86')
-        'run --configuration'   = @('Debug', 'Release')
-        'run --runtime'         = @('win-x64', 'win-arm64', 'win-x86')
-        'ui scroll --direction' = @('up', 'down', 'left', 'right')
-        'ui scroll --to'        = @('top', 'bottom')
-        'ui send-keys --via'    = @('post-message', 'send-input')
-        'ui touch --direction'  = @('right', 'left', 'up', 'down')
-        'ui touch --gesture'    = @('tap', 'double-tap', 'long-press', 'swipe', 'pinch', 'stretch')
+        '--on'                       = @('sandbox', 'local')
+        'find-ui --source'           = @('gallery', 'toolkit', 'reactor', 'core')
+        'new --template'             = @('winui', 'winui-navview', 'winui-tabview', 'winui-mvvm', 'winui-lib', 'winui-unittest',
+                                         'reactor', 'reactor-mvu', 'reactor-navview', 'reactor-tabview')
+        'run --arch'                 = @('x64', 'arm64', 'x86')
+        'run --runtime'              = @('win-x64', 'win-arm64', 'win-x86')
+        'target <target>'            = @('sandbox')
+        'ui invoke --action'         = @('invoke', 'select', 'toggle', 'toggle-on', 'toggle-off', 'expand', 'collapse')
+        'ui scroll --direction'      = @('up', 'down', 'left', 'right')
+        'ui scroll --to'             = @('top', 'bottom')
+        'ui send-keys --via'         = @('post-message', 'send-input')
+        'ui touch --direction'       = @('right', 'left', 'up', 'down')
+        'ui touch --gesture'         = @('tap', 'double-tap', 'long-press', 'swipe', 'pinch', 'stretch')
+        'unregister --arch'          = @('x64', 'arm64', 'x86')
+        'unregister --runtime'       = @('win-x64', 'win-arm64', 'win-x86')
+    }
+
+    # Open value sets: documented well-known values the slot also accepts
+    # free-form text beside (a project name, a custom build configuration, an
+    # explicit template-pack version).  Keyed and inherited the same way.
+    $script:WinAppOpenValueChoices = @{
+        'find-api --project'         = @('sdk')
+        'new --template-version'     = @('latest', 'installed')
+        'package --configuration'    = @('Debug', 'Release')
+        'run --configuration'        = @('Debug', 'Release')
+        'unregister --configuration' = @('Debug', 'Release')
     }
 
     # Path-valued options and operands the schema types as System.String, keyed
-    # the same way ('<command path> <argument>' for a positional).
+    # and inherited the same way.  Only slots on this machine are listed (target
+    # pull <source> and target push <destination> are paths on the target).
     $script:WinAppPathValues = @{
+        'create-external-catalog <input-folder>' = 'Directory'
+        'find-api --project-dir'                 = 'Directory'
         'package --executable'                   = 'File'
         'run --executable'                       = 'File'
         'run --project'                          = 'Any'
+        'target pull <destination>'              = 'Any'
+        'target push <source>'                   = 'Any'
+        'target record --output'                 = 'File'
+        'target screenshot --output'             = 'File'
         'ui record --output'                     = 'File'
         'ui screenshot --output'                 = 'File'
-        'create-external-catalog <input-folder>' = 'Directory'
     }
 
     try {
-        $command = Get-Command -Name winapp -CommandType Application -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name winapp -CommandType Application -ErrorAction Ignore |
             Select-Object -First 1
         if ($null -eq $command) { return }
 
         $exePath = if ($command.Source) { $command.Source } else { $command.Path }
         if ([string]::IsNullOrWhiteSpace($exePath)) { return }
 
-        $schemaJson = & $exePath --cli-schema 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
+        # Bounded child: stdin closed, both streams drained asynchronously, killed after 10 s
+        # so a hung winapp can never stall the completion thread.
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $exePath
+        [void]$startInfo.ArgumentList.Add('--cli-schema')
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(10000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+                return
+            }
+            $schemaJson = $outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+        } finally {
+            $process.Dispose()
+        }
         if ([string]::IsNullOrWhiteSpace($schemaJson)) { return }
 
         $script:WinAppTree = $schemaJson | ConvertFrom-Json
@@ -289,13 +339,15 @@ function Write-WinAppOptionValue {
     # 1. Enum overlay, then the description-documented value sets and the
     #    path-valued strings keyed by command path.
     $enumVals = Get-WinAppEnumChoices -ValueType $valueType
-    $overlayKey = ($CommandPath + ' ' + $canonical).Trim()
-    if (-not $enumVals -and $script:WinAppValueChoices.ContainsKey($overlayKey)) {
-        $enumVals = $script:WinAppValueChoices[$overlayKey]
+    if (-not $enumVals) {
+        $enumVals = Get-WinAppOverlayEntry -Table $script:WinAppValueChoices -CommandPath $CommandPath -Slot $canonical
     }
-    if (-not $enumVals -and $script:WinAppPathValues.ContainsKey($overlayKey)) {
-        Write-WinAppPathValue -Kind $script:WinAppPathValues[$overlayKey] -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
-        return
+    if (-not $enumVals) {
+        $pathKind = Get-WinAppOverlayEntry -Table $script:WinAppPathValues -CommandPath $CommandPath -Slot $canonical
+        if ($pathKind) {
+            Write-WinAppPathValue -Kind $pathKind -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+            return
+        }
     }
     if ($enumVals) {
         $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
@@ -305,6 +357,25 @@ function Write-WinAppOptionValue {
             } else {
                 New-WinAppCompletion $_ -Tooltip $tip
             }
+        }
+        return
+    }
+
+    # 1b. Open value sets: the well-known values plus the slot placeholder on an
+    #     empty word.  Typed text that matches no known value is echoed back so
+    #     it stays a free-form value instead of falling back to filenames.
+    $openVals = Get-WinAppOverlayEntry -Table $script:WinAppOpenValueChoices -CommandPath $CommandPath -Slot $canonical
+    if ($openVals) {
+        $typedPattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
+        $matched = @($openVals | Where-Object { $_ -like $typedPattern })
+        foreach ($value in $matched) {
+            New-WinAppCompletion "$InlinePrefix$value" -ListItemText $value -Tooltip "$canonical value: $value"
+        }
+        $ph = if ($helpName) { "<$helpName>" } else { "<$($canonical.TrimStart('-'))>" }
+        if ([string]::IsNullOrEmpty($WordToComplete)) {
+            New-WinAppCompletion "$InlinePrefix$ph" -ListItemText $ph -Tooltip "Value for $canonical (free-form)"
+        } elseif ($matched.Count -eq 0) {
+            New-WinAppCompletion "$InlinePrefix$WordToComplete" -ListItemText $WordToComplete -Tooltip "$ph for $canonical (free-form)"
         }
         return
     }
@@ -494,9 +565,17 @@ function Write-WinAppPositionalValue {
     $valueType = if (Test-WinAppNodeProperty $argNode 'valueType') { $argNode.valueType } else { '' }
     $name      = $Slot.Name
 
-    $overlayKey = ($CommandPath + ' <' + $name + '>').Trim()
-    if ($script:WinAppPathValues.ContainsKey($overlayKey)) {
-        Write-WinAppPathValue -Kind $script:WinAppPathValues[$overlayKey] -WordToComplete $WordToComplete
+    $pathKind = Get-WinAppOverlayEntry -Table $script:WinAppPathValues -CommandPath $CommandPath -Slot "<$name>"
+    if ($pathKind) {
+        Write-WinAppPathValue -Kind $pathKind -WordToComplete $WordToComplete
+        return
+    }
+    $choices = Get-WinAppOverlayEntry -Table $script:WinAppValueChoices -CommandPath $CommandPath -Slot "<$name>"
+    if ($choices) {
+        $typedPattern = [System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*'
+        $choices | Where-Object { $_ -like $typedPattern } | ForEach-Object {
+            New-WinAppCompletion $_ -Tooltip "<$name> value: $_"
+        }
         return
     }
     if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
@@ -537,13 +616,19 @@ function Write-WinAppSubcommandList {
     }
 }
 
-# A container is a node that has subcommands and no own options/arguments.
-function Test-WinAppIsContainer {
-    param($Node)
-    if (-not (Test-WinAppNodeProperty $Node 'subcommands')) { return $false }
-    if (Test-WinAppNodeProperty $Node 'options')   { return $false }
-    if (Test-WinAppNodeProperty $Node 'arguments') { return $false }
-    return $true
+# Looks up an overlay entry for a slot ('--option' or '<argument>') on the
+# command path, then on each ancestor, so one entry on a parent covers every
+# subcommand that repeats the slot (find-api --project-dir, target <target>, the
+# recursive root --on).  Returns $null when no entry exists.
+function Get-WinAppOverlayEntry {
+    param([hashtable]$Table, [string]$CommandPath, [string]$Slot)
+
+    $parts = @($CommandPath -split ' ' | Where-Object { $_ })
+    for ($depth = $parts.Count; $depth -ge 0; $depth--) {
+        $key = (@($parts | Select-Object -First $depth) + $Slot) -join ' '
+        if ($Table.ContainsKey($key)) { return $Table[$key] }
+    }
+    return $null
 }
 
 #endregion
@@ -663,21 +748,29 @@ function Complete-WinAppNative {
     if ($allElements.Count -eq 0) { return }
 
     # -------------------------------------------------------------------------
-    # Build the committed argument list using Extent.Text for every node so the
-    # walk is safe under StrictMode (CommandParameterAst lacks a .Value property).
+    # Build the committed argument list.  A string constant (bare, '...' or
+    # "...") walks as its value -- the string winapp receives -- so a quoted
+    # "members" still names a subcommand.  Anything else walks as Extent.Text
+    # (CommandParameterAst lacks .Value under StrictMode; expandable strings
+    # are not resolved).
     # -------------------------------------------------------------------------
-    $allArgs = @(foreach ($el in ($allElements | Select-Object -Skip 1)) {
-        $el.Extent.Text
+    $argElements = @($allElements | Select-Object -Skip 1)
+    $allArgs = @(foreach ($el in $argElements) {
+        if ($el -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $el.Value
+        } else {
+            $el.Extent.Text
+        }
     })
 
-    # Exclude the word being completed from the committed positionals, but keep
-    # it for flags so Test-WinAppOptionTakesValue can set expectingValue.
-    if ($allArgs.Count -gt 0 -and $allArgs[-1] -eq $WordToComplete) {
+    # Exclude the word being completed (matched on its raw text) from the
+    # committed positionals, but keep it for flags so Test-WinAppOptionTakesValue
+    # can set expectingValue.
+    if ($argElements.Count -gt 0 -and $argElements[-1].Extent.Text -eq $WordToComplete) {
         if ($WordToComplete -like '-*') {
             $committedArgs = $allArgs
         } else {
-            $cnt = $allArgs.Count - 2
-            $committedArgs = if ($cnt -lt 0) { @() } else { $allArgs[0..$cnt] }
+            $committedArgs = @($allArgs | Select-Object -First ($allArgs.Count - 1))
         }
     } else {
         $committedArgs = $allArgs
@@ -709,26 +802,18 @@ function Complete-WinAppNative {
             continue
         }
 
-        # Positional token: descend the tree where possible (by name or alias).
-        if ($null -eq $cmd1) {
-            $resolved = Resolve-WinAppSubcommandName -Node $script:WinAppTree -Token $token
-            if ($resolved) {
-                $cmd1 = $resolved
-                continue
-            }
-            $positionalCount++
-            continue
-        }
-
+        # Positional token: descend into a subcommand (by name or alias) whenever
+        # the current node has one by that name, even after the node's own
+        # operands -- 'find-api foo members' binds members, as System.CommandLine
+        # does.  Each node counts only its own operands.
         if ($null -eq $cmd2) {
-            $c1node = Get-WinAppNode -Cmd1 $cmd1
-            $resolved = if (Test-WinAppIsContainer $c1node) { Resolve-WinAppSubcommandName -Node $c1node -Token $token } else { $null }
+            $parent   = Get-WinAppNode -Cmd1 $cmd1
+            $resolved = Resolve-WinAppSubcommandName -Node $parent -Token $token
             if ($resolved) {
-                $cmd2 = $resolved
+                if ($null -eq $cmd1) { $cmd1 = $resolved } else { $cmd2 = $resolved }
+                $positionalCount = 0
                 continue
             }
-            $positionalCount++
-            continue
         }
 
         $positionalCount++
@@ -771,13 +856,17 @@ function Complete-WinAppNative {
     # 4.  Subcommand / positional completion
     # =========================================================================
 
-    # 4a. Container node (cert / manifest / ui) awaiting its subcommand.
-    if ((Test-WinAppIsContainer $currentNode) -and $null -eq $cmd2) {
+    # 4a. Subcommands of the current node until one is chosen.  A node without
+    #     operands of its own (the root, cert, ui, target) stops here; one that
+    #     also takes operands (find-api [<query>...] <subcommand>) falls through
+    #     so its operand slot and options are offered alongside.
+    if ($null -eq $cmd2 -and (Test-WinAppNodeProperty $currentNode 'subcommands')) {
         Write-WinAppSubcommandList -Node $currentNode -WordToComplete $WordToComplete
-        return
+        if (-not (Test-WinAppNodeProperty $currentNode 'arguments')) { return }
     }
 
-    # 4b. Leaf node -> positional slot completion (+ option list when empty word).
+    # 4b. Node with operands -> positional slot completion (+ option list when
+    #     the word is empty).
     if (Test-WinAppNodeProperty $currentNode 'arguments') {
         $slot = Get-WinAppPositionalSlot -Node $currentNode -ConsumedCount $positionalCount
         Write-WinAppPositionalValue -Slot $slot -WordToComplete $WordToComplete -CommandPath $commandPath
@@ -789,20 +878,13 @@ function Complete-WinAppNative {
     }
 
     # 4c. Leaf node with no positionals but its own options -> offer options on
-    #     an empty word so `winapp <leaf> <Tab>` is useful.
+    #     an empty word so `winapp <leaf> <Tab>` is useful.  A passthrough leaf
+    #     (no subcommands, arguments, or options, e.g. 'store') offers nothing.
     if ($cmd1 -and (Test-WinAppNodeProperty $currentNode 'options')) {
         if ([string]::IsNullOrEmpty($WordToComplete)) {
             Write-WinAppOptionList -Node $currentNode -WordToComplete ''
         }
-        return
     }
-
-    # 4d. A command is resolved but it is a passthrough leaf (no subcommands,
-    #     arguments, or options, e.g. 'store') -> nothing to offer.
-    if ($cmd1) { return }
-
-    # 4e. Root (nothing resolved) -> top-level subcommands.
-    Write-WinAppSubcommandList -Node $script:WinAppTree -WordToComplete $WordToComplete
 }
 
 #endregion

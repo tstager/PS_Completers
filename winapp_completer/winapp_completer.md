@@ -46,10 +46,18 @@ itself, so it stays correct as the (public-preview) CLI evolves:
 - A small **static enum overlay** supplies the choice sets the schema does not
   carry (the schema reports enum option types but not their values), plus two
   overlays keyed by command path for values the schema types as `System.String`:
-  the closed sets its descriptions spell out (`ui scroll --direction`,
-  `ui touch --gesture`, `run --arch`, `new --template`, `find-ui --source`, ...)
-  and the path-valued strings (`run --executable`, `run --project`,
-  `ui screenshot --output`, the `create-external-catalog <input-folder>` operand).
+  the closed sets its descriptions spell out (`--on`, `ui invoke --action`,
+  `ui touch --gesture`, `run`/`unregister --arch`, `new --template`,
+  `target <target>`, `find-ui --source`, ...) and the path-valued strings
+  (`run --executable`, `ui`/`target screenshot --output`, `find-api --project-dir`,
+  the `create-external-catalog <input-folder>` operand, ...). An entry on a
+  command path also covers every subcommand below it, so `--on` serves the whole
+  tree and `find-api --project-dir` serves all six `find-api` subcommands.
+  Open slots (`find-api --project`, `package`/`run`/`unregister --configuration`,
+  `new --template-version`) offer their well-known values plus a placeholder
+  (`sdk` · `<project>`, `Debug` · `Release` · `<configuration>`); typed text
+  that matches none is kept as a free-form value instead of falling back to
+  filenames.
 - Declared subcommand aliases (`pack` for `package`, `run-buildtool` for `tool`)
   are offered alongside the canonical names and resolve to the same node.
 - If winapp is missing or the schema cannot be parsed, completion is a **graceful
@@ -64,31 +72,40 @@ there is no stale static fallback to maintain.
 
 ### Top-level commands
 
-`cert` · `create-debug-identity` · `create-external-catalog` · `get-winapp-path`
-· `init` · `manifest` · `package` (alias `pack`) · `restore` · `run` · `sign` ·
-`store` · `tool` (alias `run-buildtool`) · `ui` · `unregister` · `update`
+As of winapp 0.7.1 (read live from the schema, so this list is informational):
 
-The command tree is exactly three levels deep. Only `cert`, `manifest`, and `ui`
-are **containers** (they have subcommands and no own options); every other
-top-level command is a **leaf** with its own options and/or positional arguments.
+`az-sign` · `cert` · `create-debug-identity` · `create-external-catalog` ·
+`embed-identity` · `find-api` · `find-ui` · `get-winapp-path` · `init` ·
+`manifest` · `new` · `package` (alias `pack`) · `restore` · `run` · `sign` ·
+`store` · `target` · `tool` (alias `run-buildtool`) · `ui` · `unregister` · `update`
+
+The command tree is three levels deep. `cert`, `manifest`, `target`, and `ui`
+are **containers** (subcommands only). `find-api` has subcommands **and** its
+own `[<query>...]` operand and options: until a subcommand is chosen the
+completer offers both, and a subcommand name binds even after query words
+(`winapp find-api foo members` resolves `members`, as winapp itself does). Every
+other top-level command is a **leaf** with its own options and/or positional
+arguments.
 
 ### Subcommand trees
 
-| Container | Subcommands |
+| Command | Subcommands |
 | --- | --- |
 | `cert` | `generate` · `info` · `install` |
+| `find-api` | `check-property` · `enums` · `members` · `packages` · `refresh` · `stats` |
 | `manifest` | `add-alias` · `generate` · `update-assets` |
-| `ui` | `click` · `focus` · `get-focused` · `get-property` · `get-value` · `inspect` · `invoke` · `list-windows` · `screenshot` · `scroll` · `scroll-into-view` · `search` · `set-value` · `status` · `wait-for` |
+| `target` | `exec` · `pull` · `push` · `record` · `screenshot` · `snapshot` |
+| `ui` | `click` · `drag` · `focus` · `get-focused` · `get-property` · `get-value` · `hover` · `inspect` · `invoke` · `list-windows` · `pen` · `record` · `screenshot` · `scroll` · `scroll-into-view` · `search` · `send-keys` · `set-value` · `status` · `touch` · `wait-for` · `yield` |
 
 ### Global recursive options
 
-These apply at **every** depth and are unioned into every option list. All are
-switches (they never consume the next token):
+These apply at **every** depth and are unioned into every option list:
 
 | Option | Type | Aliases |
 | --- | --- | --- |
 | `--cli-schema` | switch | — |
 | `--help`       | switch | `-?` · `-h` · `/?` · `/h` |
+| `--on`         | `sandbox` · `local` | — |
 | `--version`    | switch | — |
 
 ### Options and aliases
@@ -148,6 +165,11 @@ value type. Trailing array arguments repeat for additional slots.
 | `package <input-folder...>` | directory (repeating — `DirectoryInfo[]` for MSIX bundles) |
 | `run <input-folder> [app-args...]` | directory, then `<app-args>` |
 | `sign <file-path> <cert-path>` | file, file |
+| `find-api [query...]` | `<query>` placeholder, offered alongside the six subcommands |
+| `find-api members` / `enums [type...]` · `check-property <type> [property...]` | `<type>` / `<property>` placeholders |
+| `target <subcommand> <target>` | `sandbox` |
+| `target push <target> <source> <destination>` | `sandbox`, local path, `<destination>` (on the target) |
+| `target pull <target> <source> <destination>` | `sandbox`, `<source>` (on the target), local path |
 | `ui <subcommand> [selector]` | `<selector>` placeholder |
 | `ui set-value <selector> <value>` | `<selector>`, `<value>` placeholders |
 
@@ -201,12 +223,16 @@ gracefully (no crash).
 # SdkInstallMode enum
 (TabExpansion2 'winapp init --setup-sdks ' 25).CompletionMatches.CompletionText
 
-# ui subcommands (15)
+# ui subcommands (22 on winapp 0.7.1)
 (TabExpansion2 'winapp ui ' 10).CompletionMatches.CompletionText
 
 # cert / manifest containers
 (TabExpansion2 'winapp cert ' 12).CompletionMatches.CompletionText
 (TabExpansion2 'winapp manifest ' 16).CompletionMatches.CompletionText
+
+# find-api: subcommands + <query> + options, then each subcommand's own options
+(TabExpansion2 'winapp find-api ' 16).CompletionMatches.CompletionText
+(TabExpansion2 'winapp find-api members --fi' 28).CompletionMatches.CompletionText
 
 # Enum slots
 (TabExpansion2 'winapp cert generate --if-exists ' 33).CompletionMatches.CompletionText

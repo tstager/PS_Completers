@@ -1487,7 +1487,7 @@
         @{
             Path    = 'winapp_completer/winapp_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:C2CA870E75520745E217A5262E90C942D18E62837824D3E092109CCE8D47807D'
+            Hash    = 'SHA256:C8D23CF4F36582160089DB3C498856C065E036D19E9DA8DEE1EFF16A5A40BD3D'
             Targets = @(
                 @{ CommandName = 'winapp'; Native = $true }
                 @{ CommandName = 'winapp.exe'; Native = $true }
