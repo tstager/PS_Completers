@@ -33,7 +33,10 @@ All three share the same completer scriptblock.
 
 ### Top-level commands
 
-`mcp` · `extensions` · `auth` · `hooks` · `hook` · `channel`
+`mcp` · `extensions` · `hooks` · `hook` · `channel`
+
+`auth` is not offered: upstream replaced it with a stub that only prints
+"qwen auth has been removed." (configure providers with `/auth` instead).
 
 ### Level-2 subcommands
 
@@ -41,7 +44,6 @@ All three share the same completer scriptblock.
 | --- | --- |
 | `mcp`        | `add` · `remove` · `list` · `reconnect` |
 | `extensions` | `install` · `uninstall` · `list` · `update` · `disable` · `enable` · `link` · `new` · `settings` |
-| `auth`       | `qwen-oauth` · `coding-plan` · `status` |
 | `channel`    | `start` · `stop` · `status` · `pairing` · `configure-weixin` |
 | `hooks` / `hook` | *(no subcommands; see quirks)* |
 
@@ -54,43 +56,46 @@ All three share the same completer scriptblock.
 
 ### Global flags (selected)
 
-All flags from `qwen --help` are included.  Key corrections vs the previous version:
+All non-hidden options from upstream `TOP_LEVEL_GLOBAL_OPTIONS` and
+`DEFAULT_COMMAND_OPTIONS` (QwenLM/qwen-code `packages/cli/src/config/top-level-options.ts`)
+are included, plus `--help`, `--version` and the `--add-dir` alias.  Enum choices:
 
-| Flag | Type | Previous (wrong) | Now (correct) |
-| --- | --- | --- | --- |
-| `--web-search-default` | `[string]` choices `dashscope\|tavily\|google` | was a boolean switch | fixed |
-| `--telemetry` | `[boolean]` | missing | added |
-| `--telemetry-log-prompts` | `[boolean]` | missing | added |
-| `--chat-recording` | `[boolean]` | missing | added |
-| `--acp` | `[boolean]` | missing | added |
-| `--experimental-lsp` | `[boolean]` | missing | added |
-| `--openai-logging` | `[boolean]` | missing | added |
-| `--screen-reader` | `[boolean]` | missing | added |
-| `--include-partial-messages` | `[boolean]` | missing | added |
-| `--checkpointing` | `[boolean]` | missing | added |
-| `--max-session-turns` | `[number]` | was in generic value list | typed as number |
+| Flag | Choices |
+| --- | --- |
+| `--approval-mode` | `plan` · `default` · `auto` · `auto-edit` · `yolo` |
+| `--auth-type` | `openai` · `openai-responses` · `anthropic` · `qwen-oauth` · `gemini` · `vertex-ai` |
+| `--channel` | `VSCode` · `ACP` · `SDK` · `CI` · `desktop` · `daemon` |
+| `--sandbox` / `-s` | `true` · `false` · `docker` · `podman` · `sandbox-exec` *(a string option since 2026-10; yargs takes the next word as its value unless it starts with `-`; declared by the default command only, so it is neither offered nor read as `--sandbox` after a subcommand such as `extensions install`)* |
+| `--input-format` | `text` · `stream-json` |
+| `--output-format` / `-o` | `text` · `json` · `stream-json` |
+| `--telemetry-target` | `local` · `gcp` |
+| `--telemetry-otlp-protocol` | `grpc` · `http` |
+
+`--web-search-default`, `--tavily-api-key`, `--google-api-key`,
+`--google-search-engine-id` and `--checkpointing` no longer exist upstream and
+are not offered.
 
 ### Context-specific flags
 
 | Context | Extra flags |
 | --- | --- |
-| `mcp add` | `--scope` (user\|project) · `--transport` (stdio\|sse\|http) · `--env` · `--header` · `--timeout` · `--trust` · `--description` · `--include-tools` · `--exclude-tools` |
+| `mcp add` | `--scope` (user\|project) · `--transport` (stdio\|sse\|http) · `--env` · `--header` · `--timeout` · `--trust` · `--description` · `--include-tools` · `--exclude-tools` · `--oauth-client-id` · `--oauth-client-secret` · `--oauth-redirect-uri` · `--oauth-authorization-url` · `--oauth-token-url` · `--oauth-scopes` |
 | `mcp reconnect` | `--all` |
-| `extensions install` | `--ref` · `--auto-update` · `--pre-release` · `--registry` · `--consent` |
+| `extensions install` | `--ref` · `--auto-update` · `--pre-release` · `--registry` · `--consent` · `--scope` (user\|project\|workspace) |
 | `extensions update` | `--all` |
 | `extensions disable` | `--scope` *(free-form string, default "User")* |
 | `extensions enable` | `--scope` *(free-form string)* |
 | `extensions settings set` | `--scope` (user\|workspace) |
-| `auth coding-plan` | `--region` · `--key` |
 
 ### Value slot completion
 
 | Slot type | Behaviour |
 | --- | --- |
 | Enum flags | Offers the known choices |
-| Path flags (`--telemetry-outfile`) | `CompleteFilename` |
+| Path flags (`--telemetry-outfile` · `--mcp-config` · `--json-file` · `--input-file`) | `CompleteFilename` |
 | Dir flags (`--openai-logging-dir` · `--include-directories` · `--add-dir`) | `CompleteFilename` (file system, user filters) |
-| Number flags (`--max-session-turns`) | `<n>` placeholder to suppress filesystem fallback |
+| Number flags (`--max-session-turns` · `--json-fd` · `--max-tool-calls` · `--max-subagent-depth`) | `<n>` placeholder to suppress filesystem fallback |
+| A word starting with `-` after a value flag | Completed as a flag, matching yargs (only a negative number is taken as a value) |
 | String / array flags | `<value>` placeholder to suppress filesystem fallback |
 
 ### Positional completion
@@ -110,7 +115,7 @@ All flags from `qwen --help` are included.  Key corrections vs the previous vers
 ## Inline `--flag=value` syntax
 
 All enum and path flags support the `--flag=value` inline syntax.  Typing
-`qwen --approval-mode=` followed by Tab offers `plan`, `default`, `auto-edit`, `yolo`.
+`qwen --approval-mode=` followed by Tab offers `plan`, `default`, `auto`, `auto-edit`, `yolo`.
 
 ## Known runtime quirks
 
@@ -138,8 +143,7 @@ they would otherwise conflict with global aliases:
 - `qwen mcp add -e` → `--env`
 - `qwen mcp add -H` → `--header`
 - `qwen mcp reconnect -a` → `--all`
-- `qwen auth coding-plan -r` → `--region`
-- `qwen auth coding-plan -k` → `--key`
+- `qwen extensions install|update|disable|enable -s` → no meaning (the extensions builders declare no `-s`), so it is not taken as `--sandbox` and its next word completes as a positional
 
 ## Implementation style
 
@@ -152,8 +156,10 @@ they would otherwise conflict with global aliases:
   commands (`extensions new`, `hooks`).
 - **Three command levels** tracked in the state machine (`$sub`, `$subsub`,
   `$sub3`), covering the deepest paths in the CLI tree.
-- **Native convention detection** preserves compatibility with both the
-  ReadLine `CompleteInput` path and the `TabExpansion2` path.
+- **Engine word and cursor**: the word under the cursor is the engine's
+  `$wordToComplete`, and only the command elements that end before the cursor
+  are treated as committed, so Tab in an empty slot in the middle of a line, or
+  on a command that follows another statement, completes that slot.
 
 ## Validation
 
@@ -167,8 +173,8 @@ they would otherwise conflict with global aliases:
 # Enum value: --approval-mode
 (TabExpansion2 'qwen --approval-mode ' 20).CompletionMatches.CompletionText
 
-# Enum value: --web-search-default  (was broken; fixed)
-(TabExpansion2 'qwen --web-search-default ' 26).CompletionMatches.CompletionText
+# Enum value: --sandbox (a string option, not a switch)
+(TabExpansion2 'qwen --sandbox ' 15).CompletionMatches.CompletionText
 
 # Nested: channel pairing subcommands
 (TabExpansion2 'qwen channel pairing ' 22).CompletionMatches.CompletionText

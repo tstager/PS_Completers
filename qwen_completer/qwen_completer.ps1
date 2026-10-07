@@ -19,13 +19,12 @@ function Initialize-QwenCompleterData {
     }
 
     # Top-level subcommands.
-    $script:QwenTopCommands = @('mcp', 'extensions', 'auth', 'hooks', 'hook', 'channel')
+    $script:QwenTopCommands = @('mcp', 'extensions', 'hooks', 'hook', 'channel')
 
     # Level-2 subcommands per top-level command.
     $script:QwenSubSubcommands = @{
         mcp        = @('add', 'remove', 'list', 'reconnect')
         extensions = @('install', 'uninstall', 'list', 'update', 'disable', 'enable', 'link', 'new', 'settings')
-        auth       = @('qwen-oauth', 'coding-plan', 'status')
         channel    = @('start', 'stop', 'status', 'pairing', 'configure-weixin')
         hooks      = @()
         hook       = @()
@@ -44,12 +43,13 @@ function Initialize-QwenCompleterData {
     $script:QwenEnumFlags = @{
         '--telemetry-target'        = @('local', 'gcp')
         '--telemetry-otlp-protocol' = @('grpc', 'http')
-        '--approval-mode'           = @('plan', 'default', 'auto-edit', 'yolo')
-        '--channel'                 = @('VSCode', 'ACP', 'SDK', 'CI')
+        # 'auto' precedes 'auto-edit' so Tab on a typed 'auto' keeps it.
+        '--approval-mode'           = @('plan', 'default', 'auto', 'auto-edit', 'yolo')
+        '--channel'                 = @('VSCode', 'ACP', 'SDK', 'CI', 'desktop', 'daemon')
         '--input-format'            = @('text', 'stream-json')
         '--output-format'           = @('text', 'json', 'stream-json')
-        '--auth-type'               = @('openai', 'anthropic', 'qwen-oauth', 'gemini', 'vertex-ai')
-        '--web-search-default'      = @('dashscope', 'tavily', 'google')   # [string], NOT a switch
+        '--auth-type'               = @('openai', 'openai-responses', 'anthropic', 'qwen-oauth', 'gemini', 'vertex-ai')
+        '--sandbox'                 = @('true', 'false', 'docker', 'podman', 'sandbox-exec')   # [string], NOT a switch
     }
 
     # Boolean / switch flags (accept no value).
@@ -57,17 +57,20 @@ function Initialize-QwenCompleterData {
         '--telemetry'
         '--telemetry-log-prompts'
         '--debug'
+        '--bare'
+        '--safe-mode'
+        '--insecure'
         '--chat-recording'
-        '--sandbox'
         '--yolo'
         '--acp'
         '--experimental-lsp'
+        '--restore-ask-user-question'
         '--openai-logging'
         '--screen-reader'
         '--include-partial-messages'
-        '--checkpointing'
         '--list-extensions'
         '--continue'
+        '--fork-session'
         '--help'
         '--version'
     )
@@ -77,27 +80,33 @@ function Initialize-QwenCompleterData {
         '--telemetry-otlp-endpoint'
         '--proxy'
         '--model'
+        '--advisor'
         '--prompt'
         '--prompt-interactive'
         '--system-prompt'
         '--append-system-prompt'
+        '--output-style'
         '--sandbox-image'
         '--openai-api-key'
         '--openai-base-url'
-        '--tavily-api-key'
-        '--google-api-key'
-        '--google-search-engine-id'
+        '--json-schema'
         '--resume'
         '--session-id'
+        '--worktree'
+        '--max-wall-time'
     )
 
     # Numeric flags.
     $script:QwenNumberFlags = @(
         '--max-session-turns'
+        '--json-fd'
+        '--max-tool-calls'
+        '--max-subagent-depth'
     )
 
     # Array / multi-value flags.
     $script:QwenArrayFlags = @(
+        '--fallback-model'
         '--allowed-mcp-server-names'
         '--allowed-tools'
         '--extensions'
@@ -105,11 +114,15 @@ function Initialize-QwenCompleterData {
         '--add-dir'          # alias for --include-directories (help: --include-directories, --add-dir)
         '--core-tools'
         '--exclude-tools'
+        '--disabled-slash-commands'
     )
 
     # Flags that produce file-path completion.
     $script:QwenPathFlags = @(
         '--telemetry-outfile'
+        '--mcp-config'
+        '--json-file'
+        '--input-file'
     )
 
     # Flags that produce directory-path completion.
@@ -125,14 +138,16 @@ function Initialize-QwenCompleterData {
     $script:QwenContextFlags = @{
         'mcp.add'            = @('--scope', '--transport', '--env', '--header',
                                   '--timeout', '--trust', '--description',
-                                  '--include-tools', '--exclude-tools')
+                                  '--include-tools', '--exclude-tools',
+                                  '--oauth-client-id', '--oauth-client-secret',
+                                  '--oauth-redirect-uri', '--oauth-authorization-url',
+                                  '--oauth-token-url', '--oauth-scopes')
         'mcp.reconnect'      = @('--all')
         'extensions.install' = @('--ref', '--auto-update', '--pre-release',
-                                  '--registry', '--consent')
+                                  '--registry', '--consent', '--scope')
         'extensions.update'  = @('--all')
         'extensions.disable' = @('--scope')
         'extensions.enable'  = @('--scope')
-        'auth.coding-plan'   = @('--region', '--key')
     }
 
     # Context-specific boolean flags (take no value when used in a subcommand).
@@ -147,6 +162,7 @@ function Initialize-QwenCompleterData {
     $script:QwenContextEnumFlags = @{
         'mcp.add.--scope'                  = @('user', 'project')
         'mcp.add.--transport'              = @('stdio', 'sse', 'http')
+        'extensions.install.--scope'       = @('user', 'project', 'workspace')
         'extensions.settings.set.--scope'  = @('user', 'workspace')
     }
 
@@ -204,6 +220,12 @@ function Initialize-QwenCompleterData {
         '-h' = '--help'
     }
 
+    # --sandbox (-s) is declared by the default command ('$0') builder only: no subcommand
+    # accepts it, so inside 'mcp', 'extensions', ... neither form means --sandbox.
+    $script:QwenRootOnlyFlags = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@('--sandbox'), [System.StringComparer]::Ordinal
+    )
+
     $script:QwenContextShortAliases = @{
         'mcp.add'          = @{
             '-s' = '--scope'
@@ -213,10 +235,6 @@ function Initialize-QwenCompleterData {
         }
         'mcp.reconnect'    = @{
             '-a' = '--all'
-        }
-        'auth.coding-plan' = @{
-            '-r' = '--region'
-            '-k' = '--key'
         }
     }
 
@@ -239,7 +257,6 @@ function Initialize-QwenCompleterData {
     $script:QwenCmdDesc = @{
         mcp        = 'Manage MCP servers'
         extensions = 'Manage extensions'
-        auth       = 'Configure authentication (Qwen-OAuth or Alibaba Cloud Coding Plan)'
         hooks      = 'Manage hooks (use /hooks in interactive mode)'
         hook       = 'Alias for hooks'
         channel    = 'Manage messaging channels (Telegram, Discord, etc.)'
@@ -259,9 +276,6 @@ function Initialize-QwenCompleterData {
         'extensions.link'                = 'Link a local development extension (live)'
         'extensions.new'                 = 'Scaffold a new extension from boilerplate'
         'extensions.settings'            = 'Manage extension settings'
-        'auth.qwen-oauth'                = 'Authenticate via Qwen OAuth'
-        'auth.coding-plan'               = 'Authenticate via Alibaba Cloud Coding Plan'
-        'auth.status'                    = 'Show current authentication status'
         'channel.start'                  = 'Start channels (all or named)'
         'channel.stop'                   = 'Stop the channel service'
         'channel.status'                 = 'Show channel service status'
@@ -282,22 +296,29 @@ function Initialize-QwenCompleterData {
         '--telemetry-log-prompts'    = '[boolean] Log prompts for telemetry (deprecated)'
         '--telemetry-outfile'        = '[path]    Write telemetry to file (deprecated)'
         '--debug'                    = '[boolean] Run in debug mode'
+        '--bare'                     = '[boolean] Minimal mode: skip startup auto-discovery'
+        '--safe-mode'                = '[boolean] Disable all customizations for troubleshooting'
+        '--insecure'                 = '[boolean] Skip TLS certificate verification for API connections'
         '--proxy'                    = '[string]  HTTP proxy URL (deprecated)'
         '--chat-recording'           = '[boolean] Enable chat recording to disk'
         '--model'                    = '[string]  Model to use'
+        '--advisor'                  = '[string]  Advisor model selector ("off" disables)'
+        '--fallback-model'           = '[array]   Fallback model(s) for capacity errors (max 3)'
         '--prompt'                   = '[string]  Prompt text (deprecated; use positional)'
         '--prompt-interactive'       = '[string]  Prompt and continue in interactive mode'
         '--system-prompt'            = '[string]  Override session system prompt'
         '--append-system-prompt'     = '[string]  Append to session system prompt'
-        '--sandbox'                  = '[boolean] Enable sandbox mode'
+        '--output-style'             = '[string]  Output style for this run (e.g. Concise, Explanatory)'
+        '--sandbox'                  = '[string]  Run in a sandbox: true|false|docker|podman|sandbox-exec'
         '--sandbox-image'            = '[string]  Sandbox container image URI (deprecated)'
         '--yolo'                     = '[boolean] Auto-accept all actions (YOLO mode)'
-        '--approval-mode'            = '[string]  Tool approval mode: plan|default|auto-edit|yolo'
-        '--checkpointing'            = '[boolean] Enable file-edit checkpointing (deprecated)'
+        '--approval-mode'            = '[string]  Tool approval mode: plan|default|auto|auto-edit|yolo'
         '--acp'                      = '[boolean] Start in ACP mode'
         '--experimental-lsp'         = '[boolean] Enable experimental LSP support'
-        '--channel'                  = '[string]  Channel identifier: VSCode|ACP|SDK|CI'
+        '--restore-ask-user-question' = '[boolean] Re-hang an unanswered ask_user_question on daemon resume'
+        '--channel'                  = '[string]  Channel identifier: VSCode|ACP|SDK|CI|desktop|daemon'
         '--allowed-mcp-server-names' = '[array]   Allowed MCP server names'
+        '--mcp-config'               = '[path]    MCP server config: JSON file path or inline JSON'
         '--allowed-tools'            = '[array]   Tools to allow (bypass confirmation)'
         '--extensions'               = '[array]   Extensions to use (-e)'
         '--list-extensions'          = '[boolean] List available extensions and exit'
@@ -307,20 +328,26 @@ function Initialize-QwenCompleterData {
         '--openai-logging-dir'       = '[path]    Directory for OpenAI API logs'
         '--openai-api-key'           = '[string]  OpenAI API key'
         '--openai-base-url'          = '[string]  OpenAI base URL override'
-        '--tavily-api-key'           = '[string]  Tavily web-search API key'
-        '--google-api-key'           = '[string]  Google Custom Search API key'
-        '--google-search-engine-id'  = '[string]  Google Custom Search Engine ID'
-        '--web-search-default'       = '[string]  Default web search provider: dashscope|tavily|google'
         '--screen-reader'            = '[boolean] Enable screen reader accessibility mode'
         '--input-format'             = '[string]  Input format: text|stream-json'
         '--output-format'            = '[string]  Output format: text|json|stream-json'
         '--include-partial-messages' = '[boolean] Include partial assistant messages (stream-json)'
+        '--json-fd'                  = '[number]  File descriptor for structured JSON event output'
+        '--json-file'                = '[path]    File for structured JSON event output'
+        '--json-schema'              = '[string]  JSON Schema for the final output (JSON or @path)'
+        '--input-file'               = '[path]    File for receiving remote input commands (JSONL)'
         '--continue'                 = '[boolean] Resume the most recent session'
         '--resume'                   = '[string]  Resume a specific session by ID'
         '--session-id'               = '[string]  Specify session ID for this run'
+        '--fork-session'             = '[boolean] Fork a new session from the resumed one'
+        '--worktree'                 = '[string]  Start the session inside a git worktree (slug or PR)'
         '--max-session-turns'        = '[number]  Maximum session turns'
+        '--max-wall-time'            = '[string]  Run-level wall-clock budget (e.g. 90, 30s, 5m, 1h)'
+        '--max-tool-calls'           = '[number]  Maximum cumulative tool calls for the run'
+        '--max-subagent-depth'       = '[number]  Maximum sub-agent nesting depth'
         '--core-tools'               = '[array]   Core tool paths'
         '--exclude-tools'            = '[array]   Tools to exclude'
+        '--disabled-slash-commands'  = '[array]   Slash command names to hide/disable'
         '--auth-type'                = '[string]  Authentication type'
         '--help'                     = '[boolean] Show help'
         '--version'                  = '[boolean] Show version'
@@ -333,6 +360,12 @@ function Initialize-QwenCompleterData {
         '--trust'                    = '[boolean] Trust server (bypass all tool confirmations)'
         '--description'              = '[string]  Server description'
         '--include-tools'            = '[array]   Tools to include (comma-separated)'
+        '--oauth-client-id'          = '[string]  OAuth client ID for MCP server authentication'
+        '--oauth-client-secret'      = '[string]  OAuth client secret for MCP server authentication'
+        '--oauth-redirect-uri'       = '[string]  OAuth redirect URI'
+        '--oauth-authorization-url'  = '[string]  OAuth authorization URL'
+        '--oauth-token-url'          = '[string]  OAuth token URL'
+        '--oauth-scopes'             = '[array]   OAuth scopes (comma-separated)'
         '--all'                      = '[boolean] Apply to all'
         # Context-specific flags (extensions)
         '--ref'                      = '[string]  Git ref to install from'
@@ -340,9 +373,6 @@ function Initialize-QwenCompleterData {
         '--pre-release'              = '[boolean] Include pre-release versions'
         '--registry'                 = '[string]  Custom npm registry URL'
         '--consent'                  = '[boolean] Acknowledge risks and skip confirmation'
-        # Context-specific flags (auth coding-plan)
-        '--region'                   = '[string]  Region for Coding Plan (china/global)'
-        '--key'                      = '[string]  API key for Coding Plan'
     }
 }
 
@@ -382,7 +412,11 @@ function Resolve-QwenFlagName {
             return $ctxMap[$FlagName]
         }
     }
-    $script:QwenShortAliases[$FlagName] ?? $FlagName
+    $long = $script:QwenShortAliases[$FlagName]
+    if (-not $long -or ($Sub -and $script:QwenRootOnlyFlags.Contains($long))) {
+        return $FlagName
+    }
+    $long
 }
 
 function Get-QwenShortAlias {
@@ -413,6 +447,7 @@ function Test-QwenFlagTakesValue {
         [string]$SubSubSub
     )
     $r = Resolve-QwenFlagName -FlagName $FlagName -Sub $Sub -SubSub $SubSub -SubSubSub $SubSubSub
+    if ($Sub -and $script:QwenRootOnlyFlags.Contains($r)) { return $false }
 
     # Global enum flags always take a value.
     if ($null -ne $script:QwenEnumFlags[$r]) { return $true }
@@ -462,6 +497,7 @@ function Get-QwenEnumValues {
         [string]$SubSubSub
     )
     $r = Resolve-QwenFlagName -FlagName $FlagName -Sub $Sub -SubSub $SubSub -SubSubSub $SubSubSub
+    if ($Sub -and $script:QwenRootOnlyFlags.Contains($r)) { return $null }
 
     # Global enum first.
     $vals = $script:QwenEnumFlags[$r]
@@ -496,6 +532,7 @@ function Get-QwenFlagSet {
     $script:QwenArrayFlags       | ForEach-Object { $null = $set.Add($_) }
     $script:QwenPathFlags        | ForEach-Object { $null = $set.Add($_) }
     $script:QwenDirFlags         | ForEach-Object { $null = $set.Add($_) }
+    if ($Sub) { $set.ExceptWith($script:QwenRootOnlyFlags) }
 
     if ($Sub -and $SubSub) {
         $ctxFlags = $script:QwenContextFlags["$Sub.$SubSub"]
@@ -544,140 +581,29 @@ function Write-QwenLongFlagResults {
 
 function Complete-QwenNative {
     param(
-        $CommandName,
-        $ParameterName,
-        $WordToComplete,
+        [string]$WordToComplete,
         $CommandAst,
-        $FakeBoundParameter
+        [int]$CursorPosition
     )
 
     Initialize-QwenCompleterData
 
-    # -------------------------------------------------------------------------
-    # Detect the native ReadLine calling convention vs TabExpansion2.
-    #
-    # Native convention (ReadLine):
-    #   A) after trailing space: $CommandName='', $ParameterName='<full line>',
-    #      $WordToComplete='<cursor col>'
-    #   B) mid-token: $CommandName='<partial>', $ParameterName='<full line>',
-    #      $WordToComplete='<cursor col>'
-    #
-    # TabExpansion2 native path:
-    #   $CommandName='<wordToComplete>', $ParameterName=<CommandAst object>,
-    #   $WordToComplete='<cursorPosition int>'
-    #
-    # Heuristic: $WordToComplete is a pure integer AND $ParameterName coerces
-    # to something that looks like a command line (starts with a non-space word).
-    # -------------------------------------------------------------------------
-    $isNativeConvention = $WordToComplete -match '^\d+$' -and
-                          $ParameterName  -match '^\s*\S+'
-
-    if ($isNativeConvention) {
-        $nativePartialWord = $CommandName
-        $cursorCol         = [int]$WordToComplete
-
-        # $ParameterName is a CommandAst (TabExpansion2) or a string (ReadLine).
-        # In both cases we need a plain string for parsing and indexing.
-        if ($ParameterName -is [System.Management.Automation.Language.CommandAst]) {
-            # TabExpansion2: we already have the CommandAst — reuse it directly.
-            $CommandAst = $ParameterName
-            $line       = $CommandAst.Extent.Text
-        } else {
-            $line    = [string]$ParameterName
-            $tokens  = $null
-            $parseErrs = $null
-            $parsedAst = [System.Management.Automation.Language.Parser]::ParseInput(
-                             $line, [ref]$tokens, [ref]$parseErrs)
-            if ($parsedAst.EndBlock.Statements.Count -gt 0) {
-                $pipeline = $parsedAst.EndBlock.Statements[0]
-                if ($pipeline -is [System.Management.Automation.Language.PipelineAst] -and
-                    $pipeline.PipelineElements.Count -gt 0 -and
-                    $pipeline.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst]) {
-                    $CommandAst = $pipeline.PipelineElements[0]
-                }
-            }
-        }
-
-        if ($null -ne $CommandAst -and $CommandAst.CommandElements.Count -gt 1) {
-            $lastEl     = $CommandAst.CommandElements[-1]
-            $lastEnd    = $lastEl.Extent.EndOffset
-            # Use Extent.Text universally — works for both CommandParameterAst
-            # and StringConstantExpressionAst, and is safe under StrictMode.
-            $lastTokVal = $lastEl.Extent.Text
-            $cursorPastEnd  = $cursorCol -ge $line.Length
-            $cursorPastTok  = $cursorCol -gt $lastEnd -and
-                              ($cursorCol -gt $line.Length -or
-                               [char]::IsWhiteSpace($line[$cursorCol - 1]))
-            $isCompleteTok  = ($script:QwenTopCommands -contains $lastTokVal) -or
-                              (($lastTokVal -like '-*') -and
-                               $lastTokVal -notlike '*=*' -and
-                               $lastTokVal.Length -gt 1 -and
-                               $lastTokVal -ne '-')
-            $hasTrailingSpace = $cursorPastTok -or
-                              # Cursor at line end with a recognizable complete token means the
-                              # user pressed Tab after finishing that token (no space typed yet).
-                              # Only treat as trailing-space when cursor is actually PAST the
-                              # token's own end offset; when cursor == lastEnd the token is
-                              # still being completed as a prefix.
-                              ($cursorPastEnd -and $isCompleteTok -and $cursorCol -gt $lastEnd)
-
-            if ($hasTrailingSpace) {
-                $WordToComplete = ''
-            } elseif (-not [string]::IsNullOrEmpty($nativePartialWord)) {
-                $WordToComplete = $nativePartialWord
-            } else {
-                $pfx = if ($cursorCol -le $line.Length) {
-                           $line.Substring(0, $cursorCol)
-                       } else { $line }
-                $trimmed = $pfx.TrimEnd()
-                $spc     = $trimmed.LastIndexOf(' ')
-                if ($spc -ge 0) {
-                    $WordToComplete = $trimmed.Substring($spc + 1)
-                } else {
-                    $fspc = $trimmed.IndexOf(' ')
-                    $WordToComplete = if ($fspc -ge 0) {
-                                         $trimmed.Substring($fspc + 1)
-                                     } else { '' }
-                }
-            }
-        } else {
-            $WordToComplete = ''
-        }
-    }
-
-    if ($null -eq $WordToComplete) { $WordToComplete = '' }
-    if ($null -eq $CommandAst)     { return }
+    if ($null -eq $CommandAst) { return }
 
     $allElements = @($CommandAst.CommandElements)
     if ($allElements.Count -eq 0) { return }
 
     # -------------------------------------------------------------------------
-    # Build the committed argument list, normalising CommandParameterAst tokens
-    # (--flag) and StringConstantExpressionAst tokens identically.
+    # The word under the cursor is the engine's $WordToComplete (empty in an
+    # empty slot). Committed arguments are the elements that end before the
+    # cursor; extents and the cursor are both absolute offsets in the input,
+    # so this holds when the command follows another statement. Extent.Text
+    # normalises CommandParameterAst (--flag) and StringConstantExpressionAst
+    # tokens identically and is safe under StrictMode.
     # -------------------------------------------------------------------------
-    function Get-QwenTokenText {
-        param($el)
-        # CommandParameterAst (--flag or -f) may not have a .Value property;
-        # use Extent.Text for all nodes to stay safe under StrictMode.
-        $el.Extent.Text
-    }
-
-    $allArgs = @(foreach ($el in ($allElements | Select-Object -Skip 1)) {
-        Get-QwenTokenText -el $el
+    $committedArgs = @(foreach ($el in ($allElements | Select-Object -Skip 1)) {
+        if ($el.Extent.EndOffset -lt $CursorPosition) { $el.Extent.Text }
     })
-
-    # Exclude the word being completed from committed args (for positionals),
-    # but keep it for flags so Test-QwenFlagTakesValue can set expectingValue.
-    if ($allArgs.Count -gt 0 -and $allArgs[-1] -eq $WordToComplete) {
-        if ($WordToComplete -like '-*') {
-            $committedArgs = $allArgs
-        } else {
-            $cnt = $allArgs.Count - 2
-            $committedArgs = if ($cnt -lt 0) { @() } else { $allArgs[0..$cnt] }
-        }
-    } else {
-        $committedArgs = $allArgs
-    }
 
     # -------------------------------------------------------------------------
     # State machine: walk committed args to determine context.
@@ -694,7 +620,9 @@ function Complete-QwenNative {
         if ($expectingValue) {
             $expectingValue = $false
             $currentFlag    = $null
-            continue
+            # yargs never takes a dash-led word other than a negative number as
+            # a value, so in '--sandbox -p' the -p is a flag of its own.
+            if ($token -notlike '-*' -or $token -match '^-\d') { continue }
         }
 
         if ($token -like '-*') {
@@ -764,7 +692,7 @@ function Complete-QwenNative {
     # =========================================================================
     # 2.  Value completion after space-separated value-taking flag
     # =========================================================================
-    if ($expectingValue) {
+    if ($expectingValue -and ($WordToComplete -notlike '-*' -or $WordToComplete -match '^-\d')) {
         $enumVals = Get-QwenEnumValues -FlagName $currentFlag -Sub $sub -SubSub $subsub -SubSubSub $sub3
         if ($enumVals) {
             $enumVals | Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') } | ForEach-Object {
@@ -921,8 +849,8 @@ function Complete-QwenNative {
 #region -- Registration -------------------------------------------------------------------------
 
 Register-ArgumentCompleter -CommandName @('qwen', 'qwen.cmd', 'qwen.ps1') -Native -ScriptBlock {
-    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameter)
-    Complete-QwenNative -CommandName $commandName -ParameterName $parameterName -WordToComplete $wordToComplete -CommandAst $commandAst -FakeBoundParameter $fakeBoundParameter
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-QwenNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
 }
 
 #endregion
