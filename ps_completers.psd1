@@ -907,7 +907,7 @@
         @{
             Path    = 'ptx_completer/ptx_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:55544241E2DAD2B16C6DD5A59ADEA2C1D72FD9A0CB565892F4F38011BA337941'
+            Hash    = 'SHA256:43B1D0638E44670B36BC6A3907149EA464E4B23C2A5D0B68530280E83C4CF913'
             Targets = @(
                 @{ CommandName = 'ptx'; Native = $true }
                 @{ CommandName = 'ptx.exe'; Native = $true }

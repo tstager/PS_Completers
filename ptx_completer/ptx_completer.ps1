@@ -12,7 +12,7 @@ function Get-PtxCompletionOptions {
     $fallbackOptions = @('--format', '--gnu', '--output', '--width', '--indent', '--no-indent', '--ignore-case', '--references', '--break-file', '--file-prefix', '--output-file', '--silent', '--help', '--version', '-F', '-G', '-M', '-R', '-S', '-T', '-b', '-f', '-g', '-i', '-m', '-o', '-r', '-s', '-t', '-w')
     $commandCandidates = @('ptx.exe', 'ptx')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -190,7 +190,8 @@ function Get-PtxPathCompletions {
 function Get-PtxOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [ref]$IsValueSlot
     )
 
     $option = $null
@@ -246,21 +247,26 @@ function Get-PtxOptionValueCompletions {
     $table['--ignore-file'] = 'path'
     $table['-o'] = 'path'
     $table['--only-file'] = 'path'
-    $table['-g'] = @(
-        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    $gapSizes = @(
+        @{ Text = '1'; Tip = 'Gap of 1 column between output fields.' }
+        @{ Text = '2'; Tip = 'Gap of 2 columns between output fields.' }
+        @{ Text = '3'; Tip = 'Gap of 3 columns between output fields (default).' }
     )
-    $table['--gap-size'] = @(
-        @{ Text = '<number>'; Tip = 'Numeric value.' }
+    $table['-g'] = $gapSizes
+    $table['--gap-size'] = $gapSizes
+    $widths = @(
+        @{ Text = '72'; Tip = 'Output width of 72 columns (default).' }
+        @{ Text = '80'; Tip = 'Output width of 80 columns.' }
+        @{ Text = '100'; Tip = 'Output width of 100 columns (the -t default).' }
+        @{ Text = '132'; Tip = 'Output width of 132 columns.' }
     )
-    $table['-w'] = @(
-        @{ Text = '<number>'; Tip = 'Numeric value.' }
-    )
-    $table['--width'] = @(
-        @{ Text = '<number>'; Tip = 'Numeric value.' }
-    )
+    $table['-w'] = $widths
+    $table['--width'] = $widths
     if (-not $table.ContainsKey($option)) {
         return @()
     }
+
+    $IsValueSlot.Value = $true
 
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
@@ -305,8 +311,9 @@ function Complete-Ptx {
         Get-PtxCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-PtxOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
-    if ($optionValues.Count -gt 0) {
+    $isValueSlot = $false
+    $optionValues = @(Get-PtxOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -IsValueSlot ([ref]$isValueSlot))
+    if ($isValueSlot) {
         return $optionValues
     }
 

@@ -92,7 +92,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - `-F`, `--flag-truncation`, `-M`, `--macro-name`: `<string>`
 - `-S`, `--sentence-regexp`, `-W`, `--word-regexp`: `<regexp>`
 - `-b`, `--break-file`, `-i`, `--ignore-file`, `-o`, `--only-file`: filesystem paths
-- `-g`, `--gap-size`, `-w`, `--width`: `<number>`
+- `-g`, `--gap-size`: `1`, `2`, `3` (default `3`)
+- `-w`, `--width`: `72` (default), `80`, `100` (the `-t` default), `132`
+
+The `<string>` and `<regexp>` placeholders are offered only while the value is empty. Once a value is typed in any non-path value slot, the completer returns only the values that match it and no longer falls through to its own path completion. When nothing matches, PowerShell's built-in filesystem fallback applies as it does for any empty result.
 
 ## Representative validation scenarios
 
