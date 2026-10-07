@@ -8,8 +8,8 @@ It focuses on the safe, validated PsKill surface:
 
 - static switch completion
 - local process-name and PID hints
-- remote `\\computer` placeholder handling
-- username and password placeholders for the remote-login path
+- remote `\\computer` hosts from local state, with a placeholder
+- local user names for `-u`, and a password placeholder for `-p`
 
 ## Registration and command names
 
@@ -47,9 +47,9 @@ The script tracks the documented PsKill syntax:
 
 That lets it:
 
-- surface `\\computer` only as a placeholder
+- offer known hosts in the `\\computer` slot, followed by the `\\computer` placeholder
 - keep `-u` and `-p` visible in switch completion so the remote-auth surface is discoverable
-- still route `-u` and `-p` value completion to placeholder-only remote credential slots
+- route `-u` to local user names and keep `-p` placeholder-only
 
 ### Local process hints
 
@@ -66,24 +66,27 @@ At `pskill ` the completer offers:
 
 - `-t`
 - `-nobanner`
-- `\\computer`
+- known hosts such as `\\%COMPUTERNAME%`, then `\\computer`
 - local process names and PIDs
 
 ### Switch completion
 
 At `pskill -`, the completer stays focused on PsKill switches instead of returning no completions.
 
-### Remote value placeholders
+### Remote host and user values
 
-- `-u` -> `<username>`
+- `\\` -> known hosts filtered by the typed prefix: `\\` plus `%COMPUTERNAME%`, `%LOGONSERVER%` and the servers behind persistent mapped drives (`HKCU\Network\*\RemotePath`). `\\computer` follows only while no host name has been typed. A typed host that matches nothing is kept as typed (a no-op), because an empty answer would hand it to PowerShell's UNC fallback, which queries the network for share names.
+- `-u` -> `%USERNAME%`, `%USERDOMAIN%\%USERNAME%` and the enabled local accounts (read once per session from the local SAM through `[ADSI]'WinNT://<computer>,computer'`), then `<username>`. Names are matched after an opening quote, keep a typed quote, and are single-quoted when they contain spaces or metacharacters.
 - `-p` -> `<password>`
 - remote process slot -> `<process-or-pid>`
 
-No remote process enumeration is attempted.
+No remote host, account or process is ever queried.
 
 ## Dependencies or external command expectations
 
 - `Get-Process` is used for local process hints
+- `-u` reads local account names through ADSI (WinNT provider, local SAM only), cached for the session
+- host names come from environment variables and the HKCU\Network registry key
 - no remote probing is performed
 
 ## Usage / loading example
@@ -105,5 +108,5 @@ Validated with `pwsh -NoProfile` and `TabExpansion2`, including bare-name and `.
 
 ## Limitations / notes
 
-- Remote targets remain placeholder-only.
+- Remote host suggestions are limited to local state; hosts reached only through session (non-persistent) connections are not listed.
 - Local process hints are intentionally short-lived and dynamic.

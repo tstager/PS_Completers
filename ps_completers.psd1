@@ -826,7 +826,7 @@
         @{
             Path    = 'pskill_completer/pskill_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6EF1F3504F5AEE79622ABB0D5823BBAA72D0E5A63DBBD2A98D6E621453983231'
+            Hash    = 'SHA256:4ED552CB7AF1B1232544D9E574FF9497E44C5770DF324C3745587D3E59A08CEE'
             Targets = @(
                 @{ CommandName = 'pskill'; Native = $true }
                 @{ CommandName = 'pskill.exe'; Native = $true }

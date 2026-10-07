@@ -18,6 +18,7 @@ if (-not (Get-Variable -Name PsKillCompletionCatalog -Scope Script -ErrorAction 
         ProcessEntries          = @()
         ProcessCacheUpdated     = $null
         ProcessCacheTtlSeconds  = 2
+        LocalAccounts           = $null
     }
 }
 
@@ -138,6 +139,175 @@ function New-PsKillLiteralValueResults {
     @(
         New-PsKillCompletionResult -CompletionText $CurrentValue -ResultType 'ParameterValue' -ToolTip $ToolTip
     )
+}
+
+function ConvertFrom-PsKillTypedValue {
+    param([string]$Value)
+
+    $quote = ''
+    $text = [string]$Value
+    if ($text.Length -gt 0 -and ($text[0] -eq [char]"'" -or $text[0] -eq [char]'"')) {
+        $quote = [string]$text[0]
+        $text = $text.Substring(1)
+        if ($text.EndsWith($quote)) {
+            $text = $text.Substring(0, $text.Length - 1)
+        }
+    }
+
+    [pscustomobject]@{
+        Text  = $text
+        Quote = $quote
+    }
+}
+
+function ConvertTo-PsKillArgument {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ($Quote -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    $Value
+}
+
+function Get-PsKillKnownHost {
+    # Local, passive sources only: this computer, the logon server and the
+    # servers behind persistent mapped drives. Nothing here touches the network.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $candidates.Add([string]$env:COMPUTERNAME)
+    $candidates.Add([string]$env:LOGONSERVER)
+
+    $networkKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Network')
+    if ($null -ne $networkKey) {
+        try {
+            foreach ($driveName in $networkKey.GetSubKeyNames()) {
+                $driveKey = $networkKey.OpenSubKey($driveName)
+                if ($null -eq $driveKey) {
+                    continue
+                }
+
+                try {
+                    $candidates.Add([string]$driveKey.GetValue('RemotePath'))
+                } finally {
+                    $driveKey.Dispose()
+                }
+            }
+        } finally {
+            $networkKey.Dispose()
+        }
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $hostNames = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in $candidates) {
+        $hostName = $candidate.TrimStart('\').Split('\')[0]
+        if ($hostName -match '^[A-Za-z0-9._-]+$' -and $seen.Add($hostName)) {
+            $hostNames.Add('\\' + $hostName)
+        }
+    }
+
+    @($hostNames.ToArray())
+}
+
+function Get-PsKillHostCompletions {
+    param([string]$CurrentWord)
+
+    $typedHost = [string]$CurrentWord
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($hostName in @(Get-PsKillKnownHost)) {
+        if ($typedHost.Length -gt 0 -and -not $hostName.StartsWith($typedHost, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $results.Add((New-PsKillCompletionResult -CompletionText $hostName -ResultType 'ParameterValue' -ToolTip "Remote computer $hostName"))
+    }
+
+    if ($typedHost.Length -le 2) {
+        $results.Add((New-PsKillCompletionResult -CompletionText '\\computer' -ResultType 'ParameterValue' -ToolTip 'Remote computer placeholder.'))
+    }
+
+    if ($results.Count -eq 0) {
+        # Keep the typed host as a no-op: an empty answer hands '\\host' to
+        # PowerShell's UNC fallback, which goes to the network for share names.
+        $results.Add((New-PsKillCompletionResult -CompletionText $typedHost -ResultType 'ParameterValue' -ToolTip 'Remote computer.'))
+    }
+
+    @($results.ToArray())
+}
+
+function Get-PsKillLocalAccount {
+    if ($null -ne $script:PsKillCompletionCatalog['LocalAccounts']) {
+        return @($script:PsKillCompletionCatalog['LocalAccounts'])
+    }
+
+    $names = [System.Collections.Generic.List[string]]::new()
+    $errorCountBefore = $Error.Count
+    try {
+        # The local SAM through ADSI: a fraction of Get-LocalUser's module-load cost.
+        $computer = [ADSI]('WinNT://' + $env:COMPUTERNAME + ',computer')
+        $null = $computer.Children.SchemaFilter.Add('user')
+        foreach ($entry in $computer.Children) {
+            # 0x2 is ADS_UF_ACCOUNTDISABLE.
+            if (-not ([int]$entry.Properties['UserFlags'].Value -band 2)) {
+                $names.Add([string]$entry.Name)
+            }
+        }
+    } catch {
+        Write-Debug ('pskill completer: cannot list local accounts: ' + $_.Exception.Message)
+    } finally {
+        while ($Error.Count -gt $errorCountBefore) {
+            $Error.RemoveAt(0)
+        }
+    }
+
+    $script:PsKillCompletionCatalog['LocalAccounts'] = @($names.ToArray())
+    @($script:PsKillCompletionCatalog['LocalAccounts'])
+}
+
+function Get-PsKillUserCompletions {
+    param([string]$CurrentWord)
+
+    $typed = ConvertFrom-PsKillTypedValue -Value $CurrentWord
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $candidates.Add([string]$env:USERNAME)
+    if (-not [string]::IsNullOrEmpty($env:USERDOMAIN) -and -not [string]::IsNullOrEmpty($env:USERNAME)) {
+        $candidates.Add($env:USERDOMAIN + '\' + $env:USERNAME)
+    }
+
+    foreach ($accountName in @(Get-PsKillLocalAccount)) {
+        $candidates.Add($accountName)
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($userName in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($userName) -or -not $seen.Add($userName)) {
+            continue
+        }
+
+        if ($typed.Text.Length -gt 0 -and -not $userName.StartsWith($typed.Text, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $results.Add((New-PsKillCompletionResult -CompletionText (ConvertTo-PsKillArgument -Value $userName -Quote $typed.Quote) -ResultType 'ParameterValue' -ToolTip "User name $userName"))
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
+        $results.Add((New-PsKillCompletionResult -CompletionText '<username>' -ResultType 'ParameterValue' -ToolTip 'Remote user name.'))
+    }
+
+    if ($results.Count -eq 0) {
+        return @(New-PsKillLiteralValueResults -CurrentValue $CurrentWord -Placeholder '<username>' -ToolTip 'Remote user name.')
+    }
+
+    @($results.ToArray())
 }
 
 function Get-PsKillProcessCompletions {
@@ -305,7 +475,7 @@ function Complete-PsKill {
 
     switch ($state.ValueContext) {
         '-u' {
-            return @(New-PsKillLiteralValueResults -CurrentValue $currentWord -Placeholder '<username>' -ToolTip 'Remote user name.')
+            return @(Get-PsKillUserCompletions -CurrentWord $currentWord)
         }
         '-p' {
             return @(New-PsKillLiteralValueResults -CurrentValue $currentWord -Placeholder '<password>' -ToolTip 'Remote password.')
@@ -313,9 +483,7 @@ function Complete-PsKill {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('\\')) {
-        return @(
-            New-PsKillCompletionResult -CompletionText '\\computer' -ResultType 'ParameterValue' -ToolTip 'Remote computer placeholder.'
-        )
+        return @(Get-PsKillHostCompletions -CurrentWord $currentWord)
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and $currentWord.StartsWith('-')) {
@@ -333,7 +501,10 @@ function Complete-PsKill {
                 $results.Add((New-PsKillCompletionResult -CompletionText '<process-name>' -ResultType 'ParameterValue' -ToolTip 'Remote process name.'))
                 $results.Add((New-PsKillCompletionResult -CompletionText '<pid>' -ResultType 'ParameterValue' -ToolTip 'Remote process ID.'))
             } else {
-                $results.Add((New-PsKillCompletionResult -CompletionText '\\computer' -ResultType 'ParameterValue' -ToolTip 'Remote computer placeholder.'))
+                foreach ($item in @(Get-PsKillHostCompletions -CurrentWord '')) {
+                    $results.Add($item)
+                }
+
                 foreach ($item in @(Get-PsKillProcessCompletions -CurrentWord '')) {
                     $results.Add($item)
                 }
