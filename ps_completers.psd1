@@ -1061,7 +1061,7 @@
         @{
             Path    = 'sbx_completer/sbx_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:DD1D646208E5D56C9376858EFABFACD3CA2E5904320DAFEA241F7E8BBE947E16'
+            Hash    = 'SHA256:86BA7A52B0BA8748D97F461B0964D27D9D6EACF0C29772ED284AF66487F2AA92'
             Targets = @(
                 @{ CommandName = 'sbx'; Native = $true }
                 @{ CommandName = 'sbx.exe'; Native = $true }

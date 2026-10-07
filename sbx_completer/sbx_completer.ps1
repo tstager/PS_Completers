@@ -4,10 +4,10 @@ Registers Docker Sandboxes (`sbx`) tab-completion through the installed `sbx` ex
 
 .DESCRIPTION
 This script registers importer-safe native completers for `sbx` and `sbx.exe`.
-The generated completion script (`sbx completion powershell`) is resolved lazily
-at completion time, cached, and then invoked through the installed Docker
-Sandboxes CLI's own PowerShell completer, so subcommands, flags and sandbox
-names always match the installed `sbx` version.
+Each Tab speaks cobra's completion protocol directly: the typed command line is
+projected to literal arguments without evaluating anything, `sbx __complete` is
+started as a child process, and its answer becomes the completion list, so
+subcommands, flags and sandbox names always match the installed `sbx` version.
 
 Run once per session, or dot-source it from your PowerShell profile.
 #>
@@ -25,7 +25,102 @@ function Get-SbxCommandPath {
     $script:SbxCommandPath
 }
 
-function Get-SbxGeneratedCompletionScript {
+function ConvertTo-SbxArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). A leading '@' or '#' would
+    # start a splat or a comment.
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
+function Get-SbxCompletionRequest {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # Project the typed line to literal argv without evaluating anything the user typed:
+    # string constants by value, every other element (sub-expressions, variables, splats)
+    # by its raw text. Elements at or after the cursor are dropped, as cobra expects.
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $current = $null
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -ge $CursorPosition) {
+            break
+        }
+
+        if ($element.Extent.EndOffset -ge $CursorPosition) {
+            $current = $element
+            break
+        }
+
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $arguments.Add($element.Value)
+        } else {
+            $arguments.Add($element.Extent.Text)
+        }
+    }
+
+    $quote = ''
+    if ($null -eq $current) {
+        $word = ''
+    } elseif ($current -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+        $current.Extent.EndOffset -eq $CursorPosition) {
+        $word = $current.Value
+        $quote = switch ($current.StringConstantType) {
+            'BareWord' { '' }
+            { $_ -in 'SingleQuoted', 'SingleQuotedHereString' } { "'" }
+            default { '"' }
+        }
+    } else {
+        $word = $current.Extent.Text.Substring(0, $CursorPosition - $current.Extent.StartOffset)
+    }
+
+    # An attached '--flag=value' completes the value; cobra answers with bare values.
+    $prefix = ''
+    if ($word -cmatch '^(--[^=]+=)(.*)$') {
+        $prefix = $Matches[1]
+        $word = $Matches[2]
+    }
+
+    if (-not $quote -and $word.Length -gt 0 -and $word[0] -in "'", '"') {
+        $quote = [string]$word[0]
+        $word = $word.Substring(1)
+        if ($word.EndsWith($quote)) {
+            $word = $word.Substring(0, $word.Length - 1)
+        }
+    }
+
+    # A cursor after whitespace still sends the empty word being completed.
+    $arguments.Add($prefix + $word)
+
+    [pscustomobject]@{
+        Arguments = $arguments.ToArray()
+        Prefix    = $prefix
+        Quote     = $quote
+        Word      = $word
+    }
+}
+
+function Invoke-SbxCompleteCommand {
+    param([string[]]$Arguments)
+
     # A completion callback must stay silent: diagnostics go to the verbose stream only.
     $sbxCommandPath = Get-SbxCommandPath
     if ([string]::IsNullOrWhiteSpace($sbxCommandPath)) {
@@ -34,65 +129,87 @@ function Get-SbxGeneratedCompletionScript {
     }
 
     try {
-        $completionScript = $null | & $sbxCommandPath completion powershell 2>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
+        # ArgumentList hands each argument to sbx verbatim: no shell, no re-parsing.
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new($sbxCommandPath)
+        $startInfo.ArgumentList.Add('__complete')
+        foreach ($argument in $Arguments) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.Environment['SBX_ACTIVE_HELP'] = '0'
 
-        if ([string]::IsNullOrWhiteSpace($completionScript)) {
-            Write-Verbose 'sbx returned an empty completion script.'
-            return $null
+        # A child inherits the process start directory, which Set-Location never updates.
+        $location = Get-Location -PSProvider FileSystem -ErrorAction Ignore
+        if ($null -ne $location) {
+            $startInfo.WorkingDirectory = $location.ProviderPath
         }
 
-        return $completionScript
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                Write-Verbose 'sbx __complete timed out.'
+                $process.Kill($true)
+                return $null
+            }
+
+            $outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+        } finally {
+            $process.Dispose()
+        }
     } catch {
-        Write-Verbose ("Failed to load sbx completion: {0}" -f $_.Exception.Message)
+        Write-Verbose ("sbx __complete failed: {0}" -f $_.Exception.Message)
         $null
     }
 }
 
-function Get-SbxCompletionInvoker {
-    $cachedInvoker = Get-Variable -Name SbxCompletionInvoker -Scope Script -ErrorAction Ignore
-    if ($null -ne $cachedInvoker) {
-        return $cachedInvoker.Value
+function Get-SbxCobraCompletion {
+    param([psobject]$Request)
+
+    $output = Invoke-SbxCompleteCommand -Arguments $Request.Arguments
+    if ([string]::IsNullOrWhiteSpace($output)) {
+        return
     }
 
-    # A failed discovery is cached too, so a machine without sbx pays for it once per session.
-    if (Get-Variable -Name SbxCompletionUnavailable -Scope Script -ErrorAction Ignore) {
-        return $null
+    $lines = @($output -split '\r?\n' | Where-Object { $_ -ne '' })
+    $directive = 0
+    if ($lines.Count -eq 0 -or $lines[-1] -notmatch '^:(\d+)$' -or -not [int]::TryParse($Matches[1], [ref]$directive)) {
+        return
     }
 
-    $completionScript = Get-SbxGeneratedCompletionScript
-    if ([string]::IsNullOrWhiteSpace($completionScript)) {
-        $script:SbxCompletionUnavailable = $true
-        return $null
+    # Error (1) means no completions; FilterFileExt (8) and FilterDirs (16) ask the shell for
+    # paths. Returning nothing leaves those to PowerShell's own path completion, as does an
+    # empty answer under the default directive. An empty answer under NoFileComp (4) cannot
+    # suppress that fallback: PowerShell rejects an empty completion text.
+    if (($directive -band (1 -bor 8 -bor 16)) -ne 0) {
+        return
     }
 
-    # The upstream script registers only the bare 'sbx' name; registration is owned by this file.
-    $completionScript = $completionScript -replace (
-        "(?m)^\s*Register-ArgumentCompleter\s+-CommandName\s+'sbx'\s+-ScriptBlock\s+\$\{__sbxCompleterBlock\}\s*\r?$"
-    ), ''
+    $candidates = foreach ($line in @($lines | Select-Object -First ($lines.Count - 1))) {
+        $value, $description = $line.Split("`t", 2)
+        if ($value.Length -gt 0 -and $value.StartsWith($Request.Word, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [pscustomobject]@{
+                Value       = $value
+                Description = if ($description) { $description } else { $value }
+            }
+        }
+    }
 
-    # With no suggestions and the default directive (file completion allowed, e.g. 'sbx cp <path>')
-    # $Values is $null, and '$null | ForEach-Object' still runs once, so the block would build a
-    # CompletionResult from a null name and leave an exception in $Error on every such Tab.
-    $completionScript = $completionScript -replace (
-        '(?m)^(\s*)\$Values \| ForEach-Object \{\s*$'
-    ), '$1$$Values | Where-Object { $$null -ne $$_ } | ForEach-Object {'
+    # KeepOrder (32) preserves sbx's ordering; otherwise sort like cobra's own scripts.
+    if (($directive -band 32) -eq 0) {
+        $candidates = $candidates | Sort-Object -Property Value
+    }
 
-    # cobra's block dereferences properties of an empty pipeline when there are no suggestions; run it
-    # outside this script's strict mode so those accesses stay silent.
-    $completionInvokerSource = @"
-Set-StrictMode -Off
-$completionScript
-
-& `${__sbxCompleterBlock} @args
-"@
-
-    try {
-        $script:SbxCompletionInvoker = [scriptblock]::Create($completionInvokerSource)
-        return $script:SbxCompletionInvoker
-    } catch {
-        Write-Verbose ("Failed to prepare sbx completion: {0}" -f $_.Exception.Message)
-        $script:SbxCompletionUnavailable = $true
-        $null
+    foreach ($candidate in $candidates) {
+        $completionText = $Request.Prefix + (ConvertTo-SbxArgument -Value $candidate.Value -Quote $Request.Quote)
+        [System.Management.Automation.CompletionResult]::new($completionText, $candidate.Value, 'ParameterValue', $candidate.Description)
     }
 }
 
@@ -165,13 +282,14 @@ function Get-SbxFlagValueCompletion {
 
     foreach ($value in $Slot.Values) {
         if ($value.StartsWith($Slot.Value, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $completionText = '{0}{1}{2}{1}' -f $Slot.Prefix, $Slot.Quote, $value
+            $completionText = $Slot.Prefix + (ConvertTo-SbxArgument -Value $value -Quote $Slot.Quote)
             [System.Management.Automation.CompletionResult]::new($completionText, $value, 'ParameterValue', $value)
         }
     }
 }
 
 function Invoke-SbxCompletion {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'cobra needs the word cut from the CommandAst element at the cursor; wordToComplete spans past the cursor and drops quotes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -180,24 +298,13 @@ function Invoke-SbxCompletion {
 
     $flagValueSlot = Get-SbxFlagValueSlot -CommandAst $commandAst -CursorPosition $cursorPosition
 
-    # cobra has no values for an attached '--flag=' here, and its block faults on that empty answer.
+    # cobra registers no values for the table's flags, so the attached form skips the round-trip.
     if ($null -ne $flagValueSlot -and $flagValueSlot.Attached) {
         return Get-SbxFlagValueCompletion -Slot $flagValueSlot
     }
 
-    $results = @()
-    $completionInvoker = Get-SbxCompletionInvoker
-    if ($null -ne $completionInvoker) {
-        # cobra's block lets the child process's 'Completion ended with directive' banner reach stderr;
-        # redirecting the whole invocation keeps the console clean. Its "" sentinel
-        # (ShellCompDirectiveNoFileComp) is dropped: PowerShell rejects an empty completion text.
-        try {
-            $results = @(& $completionInvoker $wordToComplete $commandAst $cursorPosition 2>$null |
-                    Where-Object { -not ($_ -is [string] -and $_.Length -eq 0) })
-        } catch {
-            Write-Verbose ("sbx completion block failed: {0}" -f $_.Exception.Message)
-        }
-    }
+    $request = Get-SbxCompletionRequest -CommandAst $commandAst -CursorPosition $cursorPosition
+    $results = @(Get-SbxCobraCompletion -Request $request)
 
     if ($results.Count -eq 0 -and $null -ne $flagValueSlot) {
         return Get-SbxFlagValueCompletion -Slot $flagValueSlot
