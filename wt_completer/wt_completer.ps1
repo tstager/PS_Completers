@@ -74,6 +74,16 @@ function Get-WtSettingsNames {
 function Get-WtValueCompletionData {
     param([string]$Option)
 
+    if ($Option -cin '-w', '--window') {
+        # Reserved window ids; any other integer id or window name is also accepted.
+        return @(
+            @{ Text = 'new'; Display = 'new'; Type = 'ParameterValue'; Tooltip = 'Always run this command in a new window' }
+            @{ Text = 'last'; Display = 'last'; Type = 'ParameterValue'; Tooltip = 'Always run this command in the most recently used window' }
+            @{ Text = '-1'; Display = '-1'; Type = 'ParameterValue'; Tooltip = 'Always run this command in a new window (same as new)' }
+            @{ Text = '0'; Display = '0'; Type = 'ParameterValue'; Tooltip = 'Always run this command in the most recently used window (same as last)' }
+        )
+    }
+
     $kind = if ($Option -in '-p', '--profile') { 'profiles' } elseif ($Option -eq '--colorScheme') { 'schemes' } else { $null }
     if (-not $kind) {
         return @()
@@ -304,10 +314,18 @@ function Complete-WtNative {
 
     $selectedSubcommand = $null
     $expectingValueOption = $null
+    # new-tab/split-pane (and the implicit top-level new-tab) pass everything from the first
+    # positional up to the next ';' to the child commandline.
+    $inCommandline = $false
     foreach ($token in $completedTokens) {
         if ($token -eq ';') {
             $selectedSubcommand = $null
             $expectingValueOption = $null
+            $inCommandline = $false
+            continue
+        }
+
+        if ($inCommandline) {
             continue
         }
 
@@ -327,12 +345,26 @@ function Complete-WtNative {
                 continue
             }
 
+            if (-not $token.StartsWith('-')) {
+                $inCommandline = $true
+            }
+
             continue
         }
 
-        if ($subcommandValueOptions[$selectedSubcommand] -contains $token) {
+        $isNewTerminal = $selectedSubcommand -in 'new-tab', 'split-pane'
+        # A top-level value option repeated after new-tab/split-pane still consumes its value,
+        # so '1,1' in 'nt --pos 1,1' is not the start of the child commandline.
+        if ($subcommandValueOptions[$selectedSubcommand] -contains $token -or ($isNewTerminal -and $topLevelValueOptions -contains $token)) {
             $expectingValueOption = $token
         }
+        elseif ($isNewTerminal -and -not $token.StartsWith('-')) {
+            $inCommandline = $true
+        }
+    }
+
+    if ($inCommandline) {
+        return
     }
 
     # Attached --opt=value: the option selects the value slot, the rest is the prefix.
