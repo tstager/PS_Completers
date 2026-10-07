@@ -92,6 +92,15 @@ option accepts are listed. Store names that contain spaces (`AAD Token Issuer`,
 `Local NonRemovable Certificates`) are emitted quoted, so accepting one produces
 a single operand.
 
+Path, store and policy values keep the quote the word was opened with: a word
+started with `'` or `"` is matched without that quote and every candidate is
+re-emitted in the same style (`''` doubled inside single quotes; `` ` ``, `"`
+and `$` backtick-escaped inside double quotes). A bare candidate is quoted with
+single quotes when it contains whitespace or an argument-mode metacharacter
+(`{ } ( ) ; , | & < > ' " `` ` `` $`, or a leading `@` / `#`), so the
+`CatRoot\{GUID}\` folders and the `{GUID}` policy sample are never parsed as a
+script block.
+
 For certificate-store modes, the completer reads store names from:
 
 - `Cert:\LocalMachine` for `-t` and `-tv`

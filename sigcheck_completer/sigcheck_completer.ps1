@@ -69,6 +69,18 @@ function New-SigcheckCompletionResult {
     )
 }
 
+function Get-SigcheckQuoteChar {
+    param([string]$Value)
+
+    # The quote the user opened the word with ('' when the word is bare), so
+    # completions re-emit the same quoting style.
+    if (-not [string]::IsNullOrEmpty($Value) -and ($Value[0] -eq [char]39 -or $Value[0] -eq [char]34)) {
+        return [string]$Value[0]
+    }
+
+    ''
+}
+
 function Remove-SigcheckOuterQuotes {
     param([string]$Value)
 
@@ -76,29 +88,57 @@ function Remove-SigcheckOuterQuotes {
         return ''
     }
 
-    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
-        return $Value.Substring(1, $Value.Length - 2)
+    $quoteChar = Get-SigcheckQuoteChar -Value $Value
+    if ($quoteChar -eq "'") {
+        # An odd run of trailing quotes ends with the closing quote; '' inside
+        # a single-quoted string is one literal quote.
+        $inner = $Value.Substring(1)
+        $trailing = $inner.Length - $inner.TrimEnd([char]39).Length
+        if ($trailing % 2 -eq 1) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+
+        return $inner.Replace("''", "'")
     }
 
-    $Value.TrimStart('"')
+    if ($quoteChar -eq '"') {
+        $inner = $Value.Substring(1)
+        if ($inner.EndsWith('"') -and -not $inner.EndsWith('`"')) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+
+        return $inner -replace '`(.)', '$1'
+    }
+
+    $Value
 }
 
 function ConvertTo-SigcheckQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Whitespace or an argument-mode metacharacter (braces start a script
+    # block, so CatRoot\{GUID}\ must be quoted too) needs quoting; a bare
+    # word without one stays bare unless the user already opened a quote.
+    if ([string]::IsNullOrEmpty($QuoteChar)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -eq '"') {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    }
+
+    "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
 }
 
 function Get-SigcheckTokenState {
@@ -206,7 +246,7 @@ function Get-SigcheckPathCompletions {
     )
 
     $typedValue = Remove-SigcheckOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $quoteChar = Get-SigcheckQuoteChar -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
     $parentPath = '.'
@@ -225,16 +265,12 @@ function Get-SigcheckPathCompletions {
         }
     }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-    } catch {
-        $items = @()
-    }
+    $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
 
     $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($seedPath in $Seed) {
         if ([string]::IsNullOrWhiteSpace($typedValue) -or $seedPath.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $seedText = ConvertTo-SigcheckQuotedValue -Value $seedPath -AlwaysQuote $alwaysQuote
+            $seedText = ConvertTo-SigcheckQuotedValue -Value $seedPath -QuoteChar $quoteChar
             if ($seenPaths.Add($seedText)) {
                 [void]$results.Add((New-SigcheckCompletionResult -CompletionText $seedText -ListItemText $seedPath -ResultType 'ParameterValue' -ToolTip $ToolTip))
             }
@@ -258,7 +294,7 @@ function Get-SigcheckPathCompletions {
             $candidate += '\'
         }
 
-        $completionText = ConvertTo-SigcheckQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-SigcheckQuotedValue -Value $candidate -QuoteChar $quoteChar
         if (-not $seenPaths.Add($completionText)) {
             continue
         }
@@ -451,7 +487,10 @@ function Complete-Sigcheck {
                     continue
                 }
 
-                [void]$results.Add((New-SigcheckCompletionResult -CompletionText $sample -ListItemText $sample -ResultType 'ParameterValue' -ToolTip 'Policy GUID or policy file path.'))
+                # A bare {GUID} would parse as a script block, so it goes through the
+                # quoting helper; the <...> placeholder stays as typed.
+                $sampleText = if ($sample.StartsWith('<')) { $sample } else { ConvertTo-SigcheckQuotedValue -Value $sample -QuoteChar (Get-SigcheckQuoteChar -Value $currentWord) }
+                [void]$results.Add((New-SigcheckCompletionResult -CompletionText $sampleText -ListItemText $sample -ResultType 'ParameterValue' -ToolTip 'Policy GUID or policy file path.'))
             }
 
             $pathResults = Get-SigcheckPathCompletions -CurrentWord $currentWord -ToolTip 'Policy file path.' -Placeholder '<policy-file>'
@@ -471,7 +510,7 @@ function Complete-Sigcheck {
                 Update-SigcheckStoreNames
                 $typedValue = Remove-SigcheckOuterQuotes -Value $currentWord
                 $storeNames = if ($state.StoreMode -eq 'user') { $script:SigcheckCompletionCatalog.UserStoreNames } else { $script:SigcheckCompletionCatalog.MachineStoreNames }
-                $alwaysQuote = $currentWord.StartsWith('"')
+                $quoteChar = Get-SigcheckQuoteChar -Value $currentWord
                 foreach ($storeName in @('*') + $storeNames + @('<store-name>')) {
                     if (-not [string]::IsNullOrWhiteSpace($typedValue) -and
                         -not $storeName.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -479,7 +518,7 @@ function Complete-Sigcheck {
                     }
 
                     # Store names such as 'AAD Token Issuer' contain spaces.
-                    $storeText = if ($storeName -eq '*') { $storeName } else { ConvertTo-SigcheckQuotedValue -Value $storeName -AlwaysQuote $alwaysQuote }
+                    $storeText = if ($storeName -eq '*' -or $storeName.StartsWith('<')) { $storeName } else { ConvertTo-SigcheckQuotedValue -Value $storeName -QuoteChar $quoteChar }
                     [void]$results.Add((New-SigcheckCompletionResult -CompletionText $storeText -ListItemText $storeName -ResultType 'ParameterValue' -ToolTip 'Certificate store name or * for all stores.'))
                 }
             }
