@@ -148,7 +148,7 @@
         @{
             Path    = 'code_insiders_completer/code_insiders_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5949BEC318EBEAD6665CBC6D300DDBBBDA1811BE03BAD0CC61A37A922AEE13EC'
+            Hash    = 'SHA256:2724FC5E8AC55708682336566C0E3410FEF678C7F06FF2429AE2326FA2BF7386'
             Targets = @(
                 @{ CommandName = 'code-insiders'; Native = $true }
                 @{ CommandName = 'code-insiders.cmd'; Native = $true }

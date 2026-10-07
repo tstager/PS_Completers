@@ -9,8 +9,9 @@ It uses a hybrid static-first model:
 - static command metadata derived from the local VS Code Insiders CLI help surface
 - nested routing for `chat`, `serve-web`, `agent` (`host`, `ps`, `stop`, `kill`, `logs`, `endpoints`), `tunnel`, `tunnel user`, and `tunnel service`
 - cached local extension ID discovery from `code-insiders.cmd --list-extensions`
+- profile names for `--profile` and `chat --profile`, read from the local `storage.json`
 - real file and directory completion for path-bearing switches
-- placeholder-oriented suggestions for prompts, locales, JSON, profiles, names, and other free-form values
+- placeholder-oriented suggestions for prompts, locales, JSON, names, and other free-form values
 
 ## Registration and command names
 
@@ -78,6 +79,10 @@ That local cache is used for:
 - `--enable-proposed-api`
 - `--install-extension` when an extension ID prefix is already being typed
 
+### Profile names
+
+`--profile` (root and `chat`, separate or attached `--profile=`) offers `Default` plus every `userDataProfiles` name in `%APPDATA%\Code - Insiders\User\globalStorage\storage.json`, then a trailing `<profile>` placeholder for a new name. The CLI resolves profiles by exact, case-sensitive name (`Profile 'rust' not found.`), so the completer emits the stored spelling; typed prefixes match case-insensitively. The file is read with .NET APIs (no process) and cached until its write time changes; a missing or half-written file yields just `Default`. Names with whitespace or argument-mode metacharacters are quoted (single quotes by default, the user's own quote character when one was typed).
+
 ### Path and placeholder handling
 
 Real path completion is used for switches such as:
@@ -94,7 +99,6 @@ Attached `--option=value` completion keeps the `--option=` prefix on every resul
 Free-form slots intentionally use placeholders (for an empty value) to suppress noisy filesystem fallback, including:
 
 - `chat <prompt>`
-- `--profile`
 - `--locale`
 - `--category`
 - `--add-mcp`
@@ -122,6 +126,7 @@ code-insiders.cmd --install-extension
 
 ## Limitations / notes
 
-- The completer does not attempt to enumerate profile names or extension categories.
+- The completer does not attempt to enumerate extension categories.
+- Profile names come from the default user-data directory; a `--user-data-dir` on the same line is not consulted. `Default` is the English display name of the built-in profile; a localized VS Code uses a translated name.
 - `--goto` uses a placeholder-oriented `file:line[:character]` value model and only performs direct path completion while the token still looks like a plain path.
 - The tunnel subcommand help is surfaced through `code-insiders tunnel ...`, even though the underlying help text references `code-tunnel-insiders.exe`.

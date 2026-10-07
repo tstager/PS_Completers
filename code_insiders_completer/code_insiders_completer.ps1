@@ -11,8 +11,9 @@
     - nested `tunnel`, `tunnel user`, and `tunnel service` command routing
     - enum-aware value completion for `--log`, `--sync`, `--locate-shell-integration-path`, and `chat --mode`
     - cached local extension ID completion from `--list-extensions`
+    - profile name completion for `--profile`, read from the local storage.json
     - file and directory completion for path-bearing options
-    - placeholder-oriented suggestions for free-form values like prompts, JSON, locales, and profiles
+    - placeholder-oriented suggestions for free-form values like prompts, JSON, and locales
 
     The script is safe to dot-source multiple times and keeps its top level
     compatible with `Import-CompleterScript`.
@@ -319,6 +320,8 @@ function Get-CodeInsidersCompletionCache {
             CommandPathProbed       = $false
             ExtensionIds            = @()
             ExtensionIdsLoadedAt    = [datetime]::MinValue
+            ProfileNames            = @()
+            ProfileNamesStamp       = $null
         }
     }
 
@@ -472,6 +475,81 @@ function Get-CodeInsidersExtensionIds {
     )
     $cache.ExtensionIdsLoadedAt = Get-Date
     $cache.ExtensionIds
+}
+
+function Get-CodeInsidersProfileNames {
+    # --profile resolves by exact, case-sensitive name against the profiles VS Code keeps in
+    # storage.json (userDataProfiles). The built-in profile is always present as 'Default'
+    # (its English display name). A passive file read keyed on the file's write time, no process;
+    # .NET file APIs keep a cold Tab from paying for the Management module autoload.
+    $cache = Get-CodeInsidersCompletionCache
+    $storageFile = if ([string]::IsNullOrWhiteSpace($env:APPDATA)) { $null } else { [System.IO.FileInfo]::new([System.IO.Path]::Combine($env:APPDATA, 'Code - Insiders', 'User', 'globalStorage', 'storage.json')) }
+    $stamp = if ($storageFile -and $storageFile.Exists) { $storageFile.FullName + '|' + $storageFile.LastWriteTimeUtc.Ticks } else { 'missing' }
+    if ($cache.ProfileNamesStamp -eq $stamp) {
+        return $cache.ProfileNames
+    }
+
+    $names = New-Object System.Collections.Generic.List[string]
+    [void]$names.Add('Default')
+    if ($stamp -ne 'missing') {
+        $errorCountBefore = $Error.Count
+        try {
+            $storage = [System.IO.File]::ReadAllText($storageFile.FullName) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            if ($storage -is [System.Collections.IDictionary] -and $storage.ContainsKey('userDataProfiles')) {
+                foreach ($userProfile in @($storage['userDataProfiles'])) {
+                    if ($userProfile -is [System.Collections.IDictionary] -and $userProfile['name'] -is [string] -and -not [string]::IsNullOrWhiteSpace($userProfile['name']) -and -not $names.Contains($userProfile['name'])) {
+                        [void]$names.Add($userProfile['name'])
+                    }
+                }
+            }
+        } catch {
+            Write-Debug ('code-insiders completer: cannot read profiles from storage.json: ' + $_.Exception.Message)
+        } finally {
+            # A storage.json mid-write is an expected miss, not a fault to leave in $Error.
+            while ($Error.Count -gt $errorCountBefore) {
+                $Error.RemoveAt(0)
+            }
+        }
+    }
+
+    $cache.ProfileNames = @($names.ToArray())
+    $cache.ProfileNamesStamp = $stamp
+    $cache.ProfileNames
+}
+
+function Get-CodeInsidersProfileResults {
+    param(
+        [string]$CurrentValue,
+        [string]$Prefix = ''
+    )
+
+    $quoteChar = if (-not [string]::IsNullOrEmpty($CurrentValue) -and ($CurrentValue[0] -eq [char]34 -or $CurrentValue[0] -eq [char]39)) { [string]$CurrentValue[0] } else { '' }
+    $typedValue = Remove-CodeInsidersOuterQuotes -Value $CurrentValue
+    $results = New-Object System.Collections.Generic.List[object]
+
+    # Real profile names lead so a single Tab inserts one; the placeholder stays last for a new name.
+    foreach ($name in @(Get-CodeInsidersProfileNames)) {
+        if (-not $name.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $completionText = if ($quoteChar -eq '"') {
+            '"' + $name.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+        } elseif ($quoteChar -or $name -match '[\s{}();,|&<>''"`$]' -or $name -match '^[@#]') {
+            "'" + $name.Replace("'", "''") + "'"
+        } else {
+            $name
+        }
+
+        [void]$results.Add((New-CodeInsidersCompletionResult -CompletionText ($Prefix + $completionText) -ToolTip 'Profile name.' -ListItemText $name))
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
+        [void]$results.Add((New-CodeInsidersCompletionResult -CompletionText ($Prefix + '<profile>') -ToolTip 'Profile name.' -ListItemText '<profile>'))
+    }
+
+    # Profile names are case-sensitive in the CLI, so no case-insensitive dedupe here.
+    @($results.ToArray())
 }
 
 function Get-CodeInsidersCommandState {
@@ -817,7 +895,7 @@ function Get-CodeInsidersValueResults {
             return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<dir>' -ToolTip 'Directory path.' -Prefix $Prefix
         }
         'GotoTarget' { return Get-CodeInsidersGotoResults -CurrentValue $CurrentValue -Prefix $Prefix }
-        'Profile' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<profile>' -ToolTip 'Profile name.' -Prefix $Prefix }
+        'Profile' { return Get-CodeInsidersProfileResults -CurrentValue $CurrentValue -Prefix $Prefix }
         'Locale' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<locale>' -ToolTip 'Locale such as en-US or zh-TW.' -Prefix $Prefix }
         'Category' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<category>' -ToolTip 'Extension category filter.' -Prefix $Prefix }
         'Json' { return New-CodeInsidersLiteralValueResults -CurrentValue $CurrentValue -Placeholder '{"name":"server-name","command":...}' -ToolTip 'MCP server definition JSON.' -Prefix $Prefix }
