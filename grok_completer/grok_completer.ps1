@@ -110,11 +110,11 @@ function Get-GrokValueKind {
         return 'None'
     }
 
-    if ($Metavar -match '^(CWD|DIR|DIRECTORY|FOLDER)$' -or $Metavar -match '_DIR$' -or $Description -match '\bdirectory\b') {
+    if ($Metavar -match '^(CWD|DIR|DIRECTORY|FOLDER|REL)$' -or $Metavar -match '_DIR$' -or $Description -match '\bdirectory\b') {
         return 'Directory'
     }
 
-    if ($Metavar -match '^(FILE|PATH|FILES|PATHS)$' -or $Metavar -match '_(FILE|PATH)$' -or $Description -match '\bfile\b') {
+    if ($Metavar -match '^(FILE|PATH|FILES|PATHS|OUTPUT)$' -or $Metavar -match '_(FILE|PATH)$' -or $Description -match '\b(file|path)\b') {
         return 'Path'
     }
 
