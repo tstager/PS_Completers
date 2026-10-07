@@ -258,7 +258,8 @@ function Get-ScoopCompletionCache {
             AliasNamesLoadedAt     = [datetime]::MinValue
             CacheAppNames          = @()
             CacheAppNamesLoadedAt  = [datetime]::MinValue
-            ScoopRootPath          = $null
+            ScoopConfig            = $null
+            ScoopConfigLoadedAt    = [datetime]::MinValue
             ManifestAppNames       = @()
             ManifestAppNamesLoadedAt = [datetime]::MinValue
             ConfigSpecs            = @()
@@ -279,7 +280,7 @@ function Resolve-ScoopCommandName {
     $cache.ExecutablePath = $null
 
     foreach ($name in @('scoop.cmd', 'scoop', 'scoop.ps1')) {
-        $command = Get-Command -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        $command = Get-Command -Name $name -ErrorAction Ignore | Select-Object -First 1
         if ($command) {
             $cache.ExecutablePath = if ($command.Source) { $command.Source } else { $command.Name }
             break
@@ -289,41 +290,27 @@ function Resolve-ScoopCommandName {
     $cache.ExecutablePath
 }
 
-function Invoke-ScoopCapture {
-    param([string[]]$Arguments)
-
-    $commandName = Resolve-ScoopCommandName
-    if ([string]::IsNullOrWhiteSpace($commandName)) {
-        return @()
-    }
-
-    try {
-        @(& $commandName @Arguments 2>$null 3>$null 4>$null 5>$null 6>$null | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' })
-    } catch {
-        @()
-    }
-}
-
-function Get-ScoopRootPath {
-    $cache = Get-ScoopCompletionCache
-    if (-not [string]::IsNullOrWhiteSpace($cache.ScoopRootPath)) {
-        return $cache.ScoopRootPath
-    }
-
+function Get-ScoopInstallRoot {
+    # The root scoop itself runs from (<root>\shims\scoop.*), like lib/core.ps1's "$PSScriptRoot\..\..\..\..".
     $commandName = Resolve-ScoopCommandName
     if (-not [string]::IsNullOrWhiteSpace($commandName)) {
         $shimDirectory = Split-Path -Path $commandName -Parent
-        if (-not [string]::IsNullOrWhiteSpace($shimDirectory)) {
-            $leaf = Split-Path -Path $shimDirectory -Leaf
-            if ($leaf -ieq 'shims') {
-                $cache.ScoopRootPath = Split-Path -Path $shimDirectory -Parent
-                return $cache.ScoopRootPath
-            }
+        if (-not [string]::IsNullOrWhiteSpace($shimDirectory) -and (Split-Path -Path $shimDirectory -Leaf) -ieq 'shims') {
+            return Split-Path -Path $shimDirectory -Parent
         }
     }
 
-    $cache.ScoopRootPath = Join-Path -Path $HOME -ChildPath 'scoop'
-    $cache.ScoopRootPath
+    $null
+}
+
+function Get-ScoopRootPath {
+    # Same precedence as lib/core.ps1's $scoopdir: $env:SCOOP, root_path, the install root, then ~\scoop.
+    @(
+        $env:SCOOP
+        Get-ScoopConfigText -Name 'root_path'
+        Get-ScoopInstallRoot
+        Join-Path -Path ([System.Environment]::GetFolderPath('UserProfile')) -ChildPath 'scoop'
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
 }
 
 function Remove-ScoopOuterQuotes {
@@ -334,16 +321,6 @@ function Remove-ScoopOuterQuotes {
     }
 
     $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function Remove-ScoopAnsiEscapeSequences {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    [regex]::Replace($Value, '\x1b\[[0-9;?]*[ -/]*[@-~]', '')
 }
 
 function ConvertTo-ScoopQuotedValue {
@@ -429,43 +406,59 @@ function Get-ScoopArgumentTokens {
     $tokens
 }
 
-function ConvertFrom-ScoopTableFirstColumn {
-    param([object[]]$Lines)
+function Get-ScoopConfig {
+    # Scoop's own config.json, read for directory overrides and alias names only (never values).
+    $cache = Get-ScoopCompletionCache
+    if (Test-ScoopCacheFresh -LoadedAt $cache.ScoopConfigLoadedAt -TtlSeconds $cache.RuntimeCacheTtlSeconds) {
+        return $cache.ScoopConfig
+    }
 
-    $values = New-Object System.Collections.Generic.List[string]
-    $inTable = $false
+    # Same lookup as lib/core.ps1: the portable <install root>\config.json wins over the per-user file.
+    $configHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path -Path ([System.Environment]::GetFolderPath('UserProfile')) -ChildPath '.config' }
+    $configPath = Join-Path -Path $configHome -ChildPath 'scoop\config.json'
+    $installRoot = Get-ScoopInstallRoot
+    if ($installRoot -and (Test-Path -LiteralPath (Join-Path -Path $installRoot -ChildPath 'config.json') -PathType Leaf)) {
+        $configPath = Join-Path -Path $installRoot -ChildPath 'config.json'
+    }
 
-    foreach ($line in @($Lines)) {
-        if ($null -eq $line) {
-            continue
-        }
-
-        if ($line -isnot [string] -and $line.PSObject.Properties['Name']) {
-            $name = [string]$line.Name
-            if (-not [string]::IsNullOrWhiteSpace($name)) {
-                [void]$values.Add($name)
-            }
-            continue
-        }
-
-        $line = Remove-ScoopAnsiEscapeSequences -Value $line.ToString()
-        if (-not $inTable) {
-            if ($line -match '^\s*Name\b') {
-                $inTable = $true
-            }
-            continue
-        }
-
-        if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^\s*-{2,}') {
-            continue
-        }
-
-        if ($line -match '^\s*(?<name>\S+)') {
-            [void]$values.Add($matches['name'])
+    $cache.ScoopConfig = $null
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try {
+            $cache.ScoopConfig = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            Write-Debug "scoop config '$configPath' could not be read: $($_.Exception.Message)"
         }
     }
 
-    Get-ScoopUniqueStrings -Items @($values.ToArray())
+    $cache.ScoopConfigLoadedAt = Get-Date
+    $cache.ScoopConfig
+}
+
+function Get-ScoopConfigText {
+    param([string]$Name)
+
+    $config = Get-ScoopConfig
+    if ($null -eq $config) {
+        return $null
+    }
+
+    $property = $config.PSObject.Properties[$Name]
+    if ($property -and $property.Value -is [string] -and -not [string]::IsNullOrWhiteSpace($property.Value)) {
+        return $property.Value
+    }
+
+    $null
+}
+
+function Get-ScoopBaseDirectory {
+    # The user root plus the global root, resolved like lib/core.ps1's $scoopdir and $globaldir.
+    $globalPath = @(
+        $env:SCOOP_GLOBAL
+        Get-ScoopConfigText -Name 'global_path'
+        Join-Path -Path ([System.Environment]::GetFolderPath('CommonApplicationData')) -ChildPath 'scoop'
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+
+    @((Get-ScoopRootPath), $globalPath)
 }
 
 function Get-ScoopInstalledApps {
@@ -474,7 +467,16 @@ function Get-ScoopInstalledApps {
         return $cache.InstalledApps
     }
 
-    $cache.InstalledApps = ConvertFrom-ScoopTableFirstColumn -Lines (Invoke-ScoopCapture -Arguments @('list'))
+    # Mirrors 'scoop list' (installed_apps for user then global), which skips scoop itself.
+    $names = foreach ($baseDirectory in @(Get-ScoopBaseDirectory)) {
+        foreach ($directory in @(Get-ChildItem -LiteralPath (Join-Path -Path $baseDirectory -ChildPath 'apps') -Directory -ErrorAction Ignore)) {
+            if ($directory.Name -ne 'scoop') {
+                $directory.Name
+            }
+        }
+    }
+
+    $cache.InstalledApps = Get-ScoopUniqueStrings -Items $names
     $cache.InstalledAppsLoadedAt = Get-Date
     $cache.InstalledApps
 }
@@ -485,10 +487,19 @@ function Get-ScoopKnownBuckets {
         return $cache.KnownBuckets
     }
 
-    $names = foreach ($line in @(Invoke-ScoopCapture -Arguments @('bucket', 'known'))) {
-        $trimmed = (Remove-ScoopAnsiEscapeSequences -Value $line).Trim()
-        if ($trimmed -match '^[A-Za-z0-9._-]+$') {
-            $trimmed
+    # 'scoop bucket known' prints the property names of the buckets.json shipped with scoop itself, in file order.
+    $installRoot = Get-ScoopInstallRoot
+    if (-not $installRoot) {
+        $installRoot = Get-ScoopRootPath
+    }
+    $bucketsFile = Join-Path -Path $installRoot -ChildPath 'apps\scoop\current\buckets.json'
+    $names = @()
+    if (Test-Path -LiteralPath $bucketsFile -PathType Leaf) {
+        try {
+            $knownRepos = [System.IO.File]::ReadAllText($bucketsFile) | ConvertFrom-Json -ErrorAction Stop
+            $names = @($knownRepos.PSObject.Properties | ForEach-Object { $_.Name })
+        } catch {
+            Write-Debug "scoop buckets.json '$bucketsFile' could not be read: $($_.Exception.Message)"
         }
     }
 
@@ -503,7 +514,12 @@ function Get-ScoopCurrentBuckets {
         return $cache.CurrentBuckets
     }
 
-    $cache.CurrentBuckets = ConvertFrom-ScoopTableFirstColumn -Lines (Invoke-ScoopCapture -Arguments @('bucket', 'list'))
+    # Mirrors Get-LocalBucket: the bucket directories, known buckets first in buckets.json order.
+    $bucketsDirectory = Join-Path -Path (Get-ScoopRootPath) -ChildPath 'buckets'
+    $local = @(Get-ChildItem -LiteralPath $bucketsDirectory -Directory -ErrorAction Ignore | ForEach-Object { $_.Name })
+    $known = @(Get-ScoopKnownBuckets | Where-Object { $local -contains $_ })
+
+    $cache.CurrentBuckets = Get-ScoopUniqueStrings -Items ($known + $local)
     $cache.CurrentBucketsLoadedAt = Get-Date
     $cache.CurrentBuckets
 }
@@ -514,7 +530,13 @@ function Get-ScoopShimNames {
         return $cache.ShimNames
     }
 
-    $cache.ShimNames = ConvertFrom-ScoopTableFirstColumn -Lines (Invoke-ScoopCapture -Arguments @('shim', 'list'))
+    # Mirrors 'scoop shim list': *.shim and *.ps1 base names under the user and global shims directories.
+    $names = foreach ($baseDirectory in @(Get-ScoopBaseDirectory)) {
+        Get-ChildItem -LiteralPath (Join-Path -Path $baseDirectory -ChildPath 'shims') -Recurse -File -Include '*.shim', '*.ps1' -ErrorAction Ignore |
+            ForEach-Object { $_.BaseName }
+    }
+
+    $cache.ShimNames = Get-ScoopUniqueStrings -Items $names
     $cache.ShimNamesLoadedAt = Get-Date
     $cache.ShimNames
 }
@@ -525,13 +547,14 @@ function Get-ScoopAliasNames {
         return $cache.AliasNames
     }
 
-    $lines = Invoke-ScoopCapture -Arguments @('alias', 'list')
-    if (@($lines) -match 'No alias found') {
-        $cache.AliasNames = @()
-    } else {
-        $cache.AliasNames = ConvertFrom-ScoopTableFirstColumn -Lines $lines
+    # 'scoop alias list' prints the names of the config 'alias' object, sorted; any other JSON value has no aliases.
+    $names = @()
+    $config = Get-ScoopConfig
+    if ($null -ne $config -and $config.PSObject.Properties['alias'] -and $config.alias -is [System.Management.Automation.PSCustomObject]) {
+        $names = @($config.alias.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
     }
 
+    $cache.AliasNames = Get-ScoopUniqueStrings -Items $names
     $cache.AliasNamesLoadedAt = Get-Date
     $cache.AliasNames
 }
@@ -542,9 +565,18 @@ function Get-ScoopCacheAppNames {
         return $cache.CacheAppNames
     }
 
-    $lines = Invoke-ScoopCapture -Arguments @('cache', 'show')
-    $names = ConvertFrom-ScoopTableFirstColumn -Lines $lines
-    if (-not $names -or $names.Count -eq 0) {
+    # Mirrors 'scoop cache show': '<app>#<version>#<hash>' files in $SCOOP_CACHE, cache_path or <root>\cache.
+    $cacheDirectory = @(
+        $env:SCOOP_CACHE
+        Get-ScoopConfigText -Name 'cache_path'
+        Join-Path -Path (Get-ScoopRootPath) -ChildPath 'cache'
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+
+    $names = Get-ScoopUniqueStrings -Items @(
+        Get-ChildItem -LiteralPath $cacheDirectory -File -Filter '*#*' -ErrorAction Ignore |
+            ForEach-Object { $_.Name.Substring(0, $_.Name.IndexOf('#')) }
+    )
+    if (@($names).Count -eq 0) {
         $names = Get-ScoopInstalledApps
     }
 
@@ -949,8 +981,9 @@ function Get-ScoopInstallTargetResults {
     param([string]$CurrentValue)
 
     $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    # Empty word: the placeholder plus the (small) installed list, like the ManifestApp slot.
     if ([string]::IsNullOrWhiteSpace($value)) {
-        return New-ScoopLiteralValueResults -CurrentValue '' -Placeholder '<app-or-manifest>' -ToolTip 'Scoop app name, local manifest path, or manifest URL.'
+        return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Scoop app name, local manifest path, or manifest URL.' -SuggestWhenEmpty
     }
 
     if ($value -match '^[A-Za-z][A-Za-z0-9+.-]*://') {

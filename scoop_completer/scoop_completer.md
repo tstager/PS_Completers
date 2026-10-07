@@ -54,14 +54,16 @@ The completer hard-codes Scoop's stable top-level commands and nested verb famil
 
 ### Cached local value sources
 
-When a slot benefits from real local state, the completer uses cached local-only discovery:
+When a slot benefits from real local state, the completer reads the same files Scoop's own list verbs read, without starting a `scoop` process (cached for 60 seconds):
 
-- `scoop list` for installed apps
-- `scoop bucket list` and `scoop bucket known` for bucket names
-- `scoop shim list` for shim names
-- `scoop alias list` for alias names
-- `scoop cache show` for cache entries
+- installed apps (`scoop list`): the directories under `<root>\apps` and `<global>\apps`, excluding `scoop`
+- bucket names: `<install>\apps\scoop\current\buckets.json` (`scoop bucket known`) and the directories under `<root>\buckets` (`scoop bucket list`)
+- shim names (`scoop shim list`): `*.shim` and `*.ps1` base names under `<root>\shims` and `<global>\shims`
+- alias names (`scoop alias list`): the sorted names under `alias` in Scoop's `config.json` (the portable `<install>\config.json`, else `$XDG_CONFIG_HOME` or `~\.config\scoop\config.json`); an `alias` value that is not a JSON object yields no names, and no config values are ever offered
+- cache entries (`scoop cache show`): `<app>#<version>#...` files in `$SCOOP_CACHE`, `cache_path`, or `<root>\cache`
 - the active Scoop root's `buckets\*\bucket\*.json` tree for locally available manifest names
+
+The directories follow Scoop's `lib\core.ps1`: `<install>` is the root Scoop itself runs from (the parent of the `shims` directory holding the `scoop` shim on `PATH`); `<root>` is `$SCOOP`, the `root_path` config value, `<install>`, or `~\scoop`; `<global>` is `$SCOOP_GLOBAL`, the `global_path` config value, or `%ProgramData%\scoop`.
 
 ### Enum and config value hints
 
@@ -112,7 +114,7 @@ scoop shim add myshim .\
 ## Limitations / notes
 
 - The completer does not call `scoop search` during completion, so remote or very broad app discovery is not attempted on every keypress.
-- Local bucket manifest names are only offered after the user has started typing a prefix, to avoid dumping a very large list on empty input.
+- Local bucket manifest names are only offered after the user has started typing a prefix, to avoid dumping a very large list on empty input; on an empty word `install` and `download` offer the `<app-or-manifest>` placeholder plus the installed apps.
 - `app@version` completes the versions found under `<root>\apps\<app>\` (excluding `current`) plus the manifest's `version`; `bucket/app` scopes the manifest scan to that bucket.
 - `--option=value` is deliberately not completed because scoop's `getopt` rejects that form (`Option --arch=64bit not recognized`); only the space-separated `--arch <value>` form is offered.
 - Every subcommand offers `-h`/`--help`/`/?`, and the root offers `-v`/`--version` too, mirroring `bin\scoop.ps1`'s dispatch.
