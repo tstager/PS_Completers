@@ -345,7 +345,7 @@
         @{
             Path    = 'expr_completer/expr_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7B43B0D5108C7A508B1064D4A9C4D8ABB1A7355A11E6C57D5A2DE96B7079D3C2'
+            Hash    = 'SHA256:E6C2DBC335D050449C32522E3CB49C8A48A64F3E05F92E30A9D28134A7E62A2A'
             Targets = @(
                 @{ CommandName = 'expr'; Native = $true }
                 @{ CommandName = 'expr.exe'; Native = $true }

@@ -12,7 +12,7 @@ function Get-ExprCompletionOptions {
     $fallbackOptions = @('--help', '--version')
     $commandCandidates = @('expr.exe', 'expr')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -109,23 +109,168 @@ function Get-ExprCurrentToken {
     $Fallback
 }
 
-function Get-ExprValueCompletions {
-    param([string]$Prefix)
-
-    $keywords = @(
-        @{ Text = 'match'; Tip = 'match STRING REGEX: anchored pattern match.' }
-        @{ Text = 'substr'; Tip = 'substr STRING POS LENGTH: substring of STRING.' }
-        @{ Text = 'index'; Tip = 'index STRING CHARS: index in STRING of any CHARS.' }
-        @{ Text = 'length'; Tip = 'length STRING: length of STRING.' }
+function ConvertTo-ExprArgument {
+    param(
+        [string]$Text,
+        [string]$Quote
     )
 
+    if ([string]::IsNullOrEmpty($Quote)) {
+        if ($Text -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+            return $Text
+        }
+        $Quote = "'"
+    }
+
+    if ($Quote -eq '"') {
+        return '"' + ($Text -replace '([`"$])', '`$1') + '"'
+    }
+
+    "'" + $Text.Replace("'", "''") + "'"
+}
+
+function Get-ExprValueCompletions {
+    param(
+        [string]$Prefix,
+        [switch]$Operator,
+        [switch]$CloseParen
+    )
+
+    $quote = ''
+    if ($Prefix.Length -gt 0 -and ($Prefix[0] -eq "'" -or $Prefix[0] -eq '"')) {
+        $quote = [string]$Prefix[0]
+        $Prefix = $Prefix.Substring(1)
+        if ($Prefix.EndsWith($quote, [System.StringComparison]::Ordinal)) {
+            $Prefix = $Prefix.Substring(0, $Prefix.Length - 1)
+        }
+    }
+
+    $entries = if ($Operator) {
+        @(
+            @{ Text = '|'; Tip = 'ARG1 | ARG2: ARG1 if it is neither null nor 0, otherwise ARG2.' }
+            @{ Text = '&'; Tip = 'ARG1 & ARG2: ARG1 if neither argument is null or 0, otherwise 0.' }
+            @{ Text = '<'; Tip = 'ARG1 < ARG2: ARG1 is less than ARG2.' }
+            @{ Text = '<='; Tip = 'ARG1 <= ARG2: ARG1 is less than or equal to ARG2.' }
+            @{ Text = '='; Tip = 'ARG1 = ARG2: ARG1 is equal to ARG2.' }
+            @{ Text = '!='; Tip = 'ARG1 != ARG2: ARG1 is unequal to ARG2.' }
+            @{ Text = '>='; Tip = 'ARG1 >= ARG2: ARG1 is greater than or equal to ARG2.' }
+            @{ Text = '>'; Tip = 'ARG1 > ARG2: ARG1 is greater than ARG2.' }
+            @{ Text = '+'; Tip = 'ARG1 + ARG2: arithmetic sum of ARG1 and ARG2.' }
+            @{ Text = '-'; Tip = 'ARG1 - ARG2: arithmetic difference of ARG1 and ARG2.' }
+            @{ Text = '*'; Tip = 'ARG1 * ARG2: arithmetic product of ARG1 and ARG2. The Windows expr builds expand a bare * as a file wildcard, so it only works where * matches no file.' }
+            @{ Text = '/'; Tip = 'ARG1 / ARG2: arithmetic quotient of ARG1 divided by ARG2.' }
+            @{ Text = '%'; Tip = 'ARG1 % ARG2: arithmetic remainder of ARG1 divided by ARG2.' }
+            @{ Text = ':'; Tip = 'STRING : REGEXP: anchored pattern match of REGEXP in STRING.' }
+            if ($CloseParen) {
+                @{ Text = ')'; Tip = '( EXPRESSION ): close the parenthesized expression.' }
+            }
+        )
+    } else {
+        @(
+            @{ Text = 'match'; Tip = 'match STRING REGEX: anchored pattern match.' }
+            @{ Text = 'substr'; Tip = 'substr STRING POS LENGTH: substring of STRING.' }
+            @{ Text = 'index'; Tip = 'index STRING CHARS: index in STRING of any CHARS.' }
+            @{ Text = 'length'; Tip = 'length STRING: length of STRING.' }
+            @{ Text = '('; Tip = '( EXPRESSION ): value of EXPRESSION.' }
+            @{ Text = '+'; Tip = '+ TOKEN: interpret TOKEN as a string, even if it is a keyword like match or an operator like /.' }
+        )
+    }
+
     @(
-        foreach ($keyword in $keywords) {
-            if ($keyword.Text.StartsWith($Prefix, [System.StringComparison]::Ordinal)) {
-                New-ExprCompletionResult -CompletionText $keyword.Text -ListItemText $keyword.Text -ResultType 'ParameterValue' -ToolTip $keyword.Tip
+        foreach ($entry in $entries) {
+            if ($entry.Text.StartsWith($Prefix, [System.StringComparison]::Ordinal)) {
+                New-ExprCompletionResult -CompletionText (ConvertTo-ExprArgument -Text $entry.Text -Quote $quote) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
+}
+
+function Get-ExprGrammarState {
+    param([string[]]$Words)
+
+    $arity = @{
+        'match'  = @('<string>', '<regexp>')
+        'substr' = @('<string>', '<pos>', '<length>')
+        'index'  = @('<string>', '<chars>')
+        'length' = @('<string>')
+    }
+    $state = @{ Mode = 'Operand'; Slot = ''; SlotTip = ''; ParenOpen = $false; First = $true; Terminal = $false }
+    $frames = [System.Collections.Generic.List[object]]::new()
+
+    $start = 0
+    if ($Words.Count -gt 0) {
+        if ($Words[0] -ceq '--help' -or $Words[0] -ceq '--version') {
+            $state.Terminal = $true
+            return $state
+        }
+        if ($Words[0] -ceq '--') {
+            $start = 1
+        }
+    }
+    if ($Words.Count -gt 0) {
+        $state.First = $false
+    }
+
+    for ($i = $start; $i -lt $Words.Count; $i++) {
+        $word = $Words[$i]
+        $primaryDone = $false
+        switch ($state.Mode) {
+            'Operand' {
+                if ($arity.Keys -ccontains $word) {
+                    $frames.Add(@{ Keyword = $word; Index = 0 })
+                } elseif ($word -ceq '(') {
+                    $frames.Add(@{ Keyword = '('; Index = 0 })
+                } elseif ($word -ceq '+') {
+                    $state.Mode = 'Token'
+                } else {
+                    $primaryDone = $true
+                }
+            }
+            'Token' {
+                $primaryDone = $true
+            }
+            'Operator' {
+                if (@('|', '&', '<', '<=', '=', '!=', '>=', '>', '+', '-', '*', '/', '%', ':') -ccontains $word) {
+                    $state.Mode = 'Operand'
+                } elseif ($word -ceq ')' -and $frames.Count -gt 0 -and $frames[$frames.Count - 1].Keyword -ceq '(') {
+                    $frames.RemoveAt($frames.Count - 1)
+                    $primaryDone = $true
+                } else {
+                    $state.Terminal = $true
+                    return $state
+                }
+            }
+        }
+
+        if ($primaryDone) {
+            $state.Mode = 'Operator'
+            while ($frames.Count -gt 0 -and $frames[$frames.Count - 1].Keyword -cne '(') {
+                $frame = $frames[$frames.Count - 1]
+                $frame.Index++
+                if ($frame.Index -lt $arity[$frame.Keyword].Count) {
+                    $state.Mode = 'Operand'
+                    break
+                }
+                $frames.RemoveAt($frames.Count - 1)
+            }
+        }
+    }
+
+    if ($frames.Count -gt 0) {
+        $top = $frames[$frames.Count - 1]
+        if ($top.Keyword -ceq '(') {
+            $state.ParenOpen = $true
+        } elseif ($state.Mode -eq 'Operand') {
+            $state.Slot = $arity[$top.Keyword][$top.Index]
+            $state.SlotTip = "$($state.Slot) argument of $($top.Keyword) $(($arity[$top.Keyword] -join ' ').ToUpperInvariant() -replace '[<>]', '')."
+        }
+    }
+    if ($state.Mode -eq 'Token') {
+        $state.Slot = '<token>'
+        $state.SlotTip = '+ TOKEN: TOKEN is taken as a string, even if it is a keyword or an operator.'
+    }
+
+    $state
 }
 
 function Get-ExprOptionDescription {
@@ -152,11 +297,42 @@ function Complete-Expr {
         Get-ExprCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
+    $priorWords = @(
+        foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+            if ($element.Extent.EndOffset -ge $cursorPosition) {
+                break
+            }
+            if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                $element.Value
+            } else {
+                $element.Extent.Text
+            }
+        }
+    )
+    $state = Get-ExprGrammarState -Words $priorWords
+
+    if ($state.Terminal) {
+        return
+    }
+
+    if ($state.Mode -eq 'Operator') {
+        return Get-ExprValueCompletions -Prefix $currentWord -Operator -CloseParen:$state.ParenOpen
+    }
+
+    if ($state.Slot) {
+        if ([string]::IsNullOrEmpty($currentWord)) {
+            return New-ExprCompletionResult -CompletionText $state.Slot -ListItemText $state.Slot -ResultType 'ParameterValue' -ToolTip $state.SlotTip
+        }
+        if ($state.Slot -ceq '<token>') {
+            return
+        }
+    }
+
     if ([string]::IsNullOrEmpty($currentWord)) {
         return Get-ExprValueCompletions -Prefix ''
     }
 
-    if ($currentWord.StartsWith('-')) {
+    if ($currentWord.StartsWith('-') -and $state.First) {
         return @(
             foreach ($option in Get-ExprCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
