@@ -247,7 +247,7 @@ function Get-NpmExecutablePath {
     (Get-NpmCompletionCache).ExecutablePath = $null
 
     foreach ($commandName in @('npm.cmd', 'npm', 'npm.exe')) {
-        $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $commandName -ErrorAction Ignore
         if ($command) {
             (Get-NpmCompletionCache).ExecutablePath = $command.Source
             break
@@ -688,6 +688,14 @@ function Get-NpmCanonicalSubcommands {
     param([string[]]$Path)
 
     $cacheKey = Get-NpmCacheKey -Path $Path
+
+    # A nested path without its own StaticTree entry is a leaf verb whose help
+    # data is the parent's (Get-NpmHelpData); those commands are the parent's
+    # verbs, not this verb's operands.
+    if (@($Path).Count -gt 1 -and -not (Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
+        return
+    }
+
     $staticCommands = if ((Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
         @((Get-NpmCompletionCache).StaticTree[$cacheKey])
     } else {
@@ -1468,14 +1476,6 @@ function Complete-NpmNative {
         return
     }
 
-    if ([string]::IsNullOrEmpty($currentToken) -or $currentToken.StartsWith('-')) {
-        foreach ($optionSuggestion in @(Get-NpmOptionSuggestions -Path $state.Path -WordToComplete $currentToken)) {
-            if ($null -ne $optionSuggestion) {
-                [void]$suggestions.Add($optionSuggestion)
-            }
-        }
-    }
-
     if (-not $state.AfterDoubleDash -and -not $currentToken.StartsWith('-') -and $state.Positionals.Count -eq 0) {
         $subcommandAliases = Get-NpmCommandAliasMap -Path $state.Path
         foreach ($subcommand in @(Get-NpmSubcommands -Path $state.Path)) {
@@ -1502,6 +1502,16 @@ function Complete-NpmNative {
         foreach ($positionalSuggestion in @(Get-NpmPositionalSuggestions -Path $state.Path -Positionals $state.Positionals -AfterDoubleDash $state.AfterDoubleDash)) {
             if ($null -ne $positionalSuggestion) {
                 [void]$suggestions.Add($positionalSuggestion)
+            }
+        }
+    }
+
+    # Options follow the commands and operands on an empty word, and npm
+    # parses everything after `--` as an operand.
+    if (-not $state.AfterDoubleDash -and ([string]::IsNullOrEmpty($currentToken) -or $currentToken.StartsWith('-'))) {
+        foreach ($optionSuggestion in @(Get-NpmOptionSuggestions -Path $state.Path -WordToComplete $currentToken)) {
+            if ($null -ne $optionSuggestion) {
+                [void]$suggestions.Add($optionSuggestion)
             }
         }
     }

@@ -618,7 +618,7 @@
         @{
             Path    = 'npm_completer/npm_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E624CF054A58334DB8F0BA7E7913A445A3CEF8F0CB6468292BB77B91A8AAB501'
+            Hash    = 'SHA256:4F49C412E79272E9458CF7654DC4B5170545D50DE7F520770EB2EEE58281A8B7'
             Targets = @(
                 @{ CommandName = 'npm'; Native = $true }
                 @{ CommandName = 'npm.ps1'; Native = $true }

@@ -88,6 +88,8 @@ The root path is parsed too: the `All commands:` block of `npm --help` is unione
 
 This lets the completer stay closer to the installed npm version than a purely hard-coded table.
 
+A nested verb without its own static entry (`dist-tag add`, `config get`, `token list`, `trust github`) is a leaf: it borrows its parent's help for options, but never the parent's verbs, so its operand slot offers only the operand values the script knows (`npm dist-tag add <TAB>` lists installed packages, not `add`/`rm`/`ls`).
+
 ### 5. Local metadata completion
 
 The script supplements help parsing with project-local data:
@@ -265,4 +267,5 @@ npm install --workspace <TAB>
 - Package name suggestions come from local `node_modules`, not from the registry.
 - `npm pkg` property-path suggestions only recurse four levels deep and only sample the first few array entries.
 - Workspace, installed-package, and config-key suggestions reflect local filesystem and local npm command output, so they may be empty outside a project or before dependencies are installed.
-- After `--`, the completer stops offering the positional suggestions handled by the script.
+- After `--`, everything is an operand to npm, so the completer offers no options, subcommands, or positional values there.
+- On an empty word, subcommands and operand values are listed first and options last; typing `-` lists only options.
