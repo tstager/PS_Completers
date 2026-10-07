@@ -10,26 +10,38 @@ function Get-StatCompletionOptions {
     }
 
     $fallbackOptions = @('-L', '--dereference', '-f', '--file-system', '-t', '--terse', '-c', '--format', '--printf', '-h', '--help', '-V', '--version', '-r', '-s')
-    $commandCandidates = @('stat.exe', 'stat')
-    foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
-        if ($null -eq $command) {
-            continue
-        }
-
+    # Application-only lookup: a missing name never triggers module auto-load discovery.
+    # The fallback list cached below is the session's negative cache when stat is absent.
+    $command = Get-Command -Name 'stat.exe', 'stat' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    $helpOutput = ''
+    if ($null -ne $command) {
         try {
             $helpOutput = $null | & $command.Source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String
         } catch {
-            continue
+            $helpOutput = ''
         }
+    }
 
-        if ([string]::IsNullOrWhiteSpace($helpOutput)) {
-            continue
-        }
-
+    if (-not [string]::IsNullOrWhiteSpace($helpOutput)) {
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        $sequences = @{
+            File       = [System.Collections.Generic.List[object]]::new()
+            FileSystem = [System.Collections.Generic.List[object]]::new()
+        }
+        $section = $null
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            # GNU prints '  %a   desc', uutils prints '  -`%a`: desc'; a non-blank, non-sequence line ends the block.
+            if ($line -match 'format sequences for file systems') {
+                $section = 'FileSystem'
+            } elseif ($line -match 'format sequences for files') {
+                $section = 'File'
+            } elseif ($null -ne $section -and $line -match '^\s*-?`?(?<seq>%[A-Za-z])`?:?\s+(?<tip>\S.*)$') {
+                $sequences[$section].Add(@{ Text = $Matches['seq']; Tip = $Matches['tip'].Trim() })
+            } elseif (-not [string]::IsNullOrWhiteSpace($line)) {
+                $section = $null
+            }
+
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
@@ -39,12 +51,12 @@ function Get-StatCompletionOptions {
                 }
                 if ($normalized -match '^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$') {
                     [void]$options.Add($normalized)
-                if (-not $descriptions.ContainsKey($normalized)) {
-                    $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
-                    if ($description -and $description -ne $line.Trim()) {
-                        $descriptions[$normalized] = $description
+                    if (-not $descriptions.ContainsKey($normalized)) {
+                        $description = ($line -replace '^\s*(?:-{1,2}[A-Za-z0-9][A-Za-z0-9-]*(?:[=\[]\S*)?[,\s]+)+', '').Trim()
+                        if ($description -and $description -ne $line.Trim()) {
+                            $descriptions[$normalized] = $description
+                        }
                     }
-                }
                 }
             }
         }
@@ -52,6 +64,7 @@ function Get-StatCompletionOptions {
         if ($options.Count -gt 0) {
             Set-Variable -Name 'StatCompletionOptions' -Value (@($options | Sort-Object)) -Scope Script
             Set-Variable -Name 'StatCompletionDescriptions' -Value $descriptions -Scope Script
+            Set-Variable -Name 'StatFormatSequences' -Value $sequences -Scope Script
             return (Get-Variable -Name 'StatCompletionOptions' -Scope Script).Value
         }
     }
@@ -188,6 +201,68 @@ function Get-StatPathCompletions {
     }
 }
 
+function Get-StatFormatSequence {
+    param([bool]$FileSystem)
+
+    $null = Get-StatCompletionOptions
+    $key = if ($FileSystem) { 'FileSystem' } else { 'File' }
+    $cache = Get-Variable -Name 'StatFormatSequences' -Scope Script -ErrorAction Ignore
+    $values = if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value[$key].Count -gt 0) {
+        $cache.Value[$key]
+    } elseif ($FileSystem) {
+        @(
+            @{ Text = '%a'; Tip = 'Free blocks available to non-superuser.' }
+            @{ Text = '%b'; Tip = 'Total data blocks in file system.' }
+            @{ Text = '%c'; Tip = 'Total file nodes in file system.' }
+            @{ Text = '%d'; Tip = 'Free file nodes in file system.' }
+            @{ Text = '%f'; Tip = 'Free blocks in file system.' }
+            @{ Text = '%i'; Tip = 'File system ID in hex.' }
+            @{ Text = '%l'; Tip = 'Maximum length of filenames.' }
+            @{ Text = '%n'; Tip = 'File name.' }
+            @{ Text = '%s'; Tip = 'Block size (for faster transfers).' }
+            @{ Text = '%S'; Tip = 'Fundamental block size (for block counts).' }
+            @{ Text = '%t'; Tip = 'File system type in hex.' }
+            @{ Text = '%T'; Tip = 'File system type in human readable form.' }
+        )
+    } else {
+        @(
+            @{ Text = '%n'; Tip = 'File name.' }
+            @{ Text = '%s'; Tip = 'Size in bytes.' }
+            @{ Text = '%a'; Tip = 'Permission bits in octal.' }
+            @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
+            @{ Text = '%U'; Tip = 'Owner name.' }
+            @{ Text = '%F'; Tip = 'File type.' }
+            @{ Text = '%y'; Tip = 'Last modification, human readable.' }
+            @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
+            @{ Text = '%i'; Tip = 'Inode number.' }
+        )
+    }
+
+    @($values) + @(@{ Text = '<format>'; Tip = 'Custom stat format.' })
+}
+
+function Test-StatFileSystemMode {
+    param([System.Management.Automation.Language.CommandAst]$commandAst)
+
+    # -f, a long prefix of --file-system, or a short cluster with f before any c (letters after c are its value).
+    foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+        $text = $element.Extent.Text
+        if ($text -eq '--') {
+            return $false
+        }
+
+        if ($text -cmatch '^-[A-Za-z]+$' -and ($text -csplit 'c', 2)[0].Contains('f')) {
+            return $true
+        }
+
+        if ($text.Length -ge 4 -and '--file-system'.StartsWith($text, [System.StringComparison]::Ordinal)) {
+            return $true
+        }
+    }
+
+    $false
+}
+
 function Get-StatOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -218,42 +293,10 @@ function Get-StatOptionValueCompletions {
         @{ Text = 'never'; Tip = 'Never use cached attributes.' }
         @{ Text = 'default'; Tip = 'Let the system decide.' }
     )
-    $table['-c'] = @(
-        @{ Text = '%n'; Tip = 'File name.' }
-        @{ Text = '%s'; Tip = 'Size in bytes.' }
-        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
-        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
-        @{ Text = '%U'; Tip = 'Owner name.' }
-        @{ Text = '%F'; Tip = 'File type.' }
-        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
-        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
-        @{ Text = '%i'; Tip = 'Inode number.' }
-        @{ Text = '<format>'; Tip = 'Custom stat format.' }
-    )
-    $table['--format'] = @(
-        @{ Text = '%n'; Tip = 'File name.' }
-        @{ Text = '%s'; Tip = 'Size in bytes.' }
-        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
-        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
-        @{ Text = '%U'; Tip = 'Owner name.' }
-        @{ Text = '%F'; Tip = 'File type.' }
-        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
-        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
-        @{ Text = '%i'; Tip = 'Inode number.' }
-        @{ Text = '<format>'; Tip = 'Custom stat format.' }
-    )
-    $table['--printf'] = @(
-        @{ Text = '%n'; Tip = 'File name.' }
-        @{ Text = '%s'; Tip = 'Size in bytes.' }
-        @{ Text = '%a'; Tip = 'Permission bits in octal.' }
-        @{ Text = '%A'; Tip = 'Permission bits, human readable.' }
-        @{ Text = '%U'; Tip = 'Owner name.' }
-        @{ Text = '%F'; Tip = 'File type.' }
-        @{ Text = '%y'; Tip = 'Last modification, human readable.' }
-        @{ Text = '%Y'; Tip = 'Last modification, seconds since epoch.' }
-        @{ Text = '%i'; Tip = 'Inode number.' }
-        @{ Text = '<format>'; Tip = 'Custom stat format.' }
-    )
+    $formatSequences = { Get-StatFormatSequence -FileSystem (Test-StatFileSystemMode -commandAst $commandAst) }
+    $table['-c'] = $formatSequences
+    $table['--format'] = $formatSequences
+    $table['--printf'] = $formatSequences
     if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
         return @()
     }

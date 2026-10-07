@@ -58,7 +58,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. The tool is looked up once per session as an application only (`stat.exe`/`stat` on `PATH`), so a missing tool costs one lookup and never triggers module auto-load discovery; the static fallback list is then cached as the session's answer, and the format-sequence slots are served from the static tables without another lookup. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
@@ -68,7 +68,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ## Option values
 
 - `--cached`: `always`, `never`, `default`
-- `-c`, `--format`, `--printf`: `%n`, `%s`, `%a`, `%A`, `%U`, `%F`, `%y`, `%Y`, `%i`, `<format>`
+- `-c`, `--format`, `--printf`: the format sequences parsed from the same `--help` text (GNU `  %a   desc` and uutils ``  -`%a`: desc`` shapes), with the help description as tooltip, plus `<format>`. When `-f`, a prefix of `--file-system`, or a short cluster with `f` before any `c` (such as `-Lf`) appears before `--`, the file-system sequence block is offered instead of the file block. Static fallbacks (9 file sequences, the 12 file-system sequences) apply when the tool is absent.
 
 ## Representative validation scenarios
 
@@ -77,12 +77,15 @@ stat -
 stat --
 stat --cached 
 stat --cached=
+stat -c %
+stat -f -c 
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--cached` shows its documented values in both the separate and the attached form
+- `-c %` lists every documented file format sequence; with `-f` on the line it lists the file-system sequences
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
