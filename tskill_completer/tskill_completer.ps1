@@ -13,6 +13,9 @@ if (-not (Get-Variable -Name TskillCompletionCatalog -Scope Script -ErrorAction 
         SessionIds               = @()
         SessionCacheUpdated      = $null
         SessionCacheTtlSeconds   = 20
+        ServerNames              = @()
+        ServerCacheUpdated       = $null
+        ServerCacheTtlSeconds    = 20
     }
 }
 
@@ -197,15 +200,50 @@ function Get-TskillSessionIdCompletions {
         }
 }
 
+function Update-TskillServerNameCache {
+    $lastUpdated = $script:TskillCompletionCatalog.ServerCacheUpdated
+    if ($null -ne $lastUpdated) {
+        $cacheAge = (Get-Date) - $lastUpdated
+        if ($cacheAge.TotalSeconds -lt $script:TskillCompletionCatalog.ServerCacheTtlSeconds) {
+            return
+        }
+    }
+
+    $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $serverNames = [System.Collections.Generic.List[string]]::new()
+    $candidates = @($env:COMPUTERNAME)
+    $rdpServersKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Terminal Server Client\Servers')
+    if ($null -ne $rdpServersKey) {
+        try {
+            $candidates += @($rdpServersKey.GetSubKeyNames())
+        } finally {
+            $rdpServersKey.Dispose()
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and $nameSet.Add($candidate)) {
+            $serverNames.Add($candidate)
+        }
+    }
+
+    $script:TskillCompletionCatalog.ServerNames = @($serverNames)
+    $script:TskillCompletionCatalog.ServerCacheUpdated = Get-Date
+}
+
 function Get-TskillServerValueCompletions {
     param([string]$CurrentWord)
 
-    $typedValue = $CurrentWord.Substring(8)
-    if ([string]::IsNullOrEmpty($typedValue)) {
-        return @(New-TskillCompletionResult -CompletionText '/SERVER:' -ResultType 'ParameterName' -ToolTip 'Remote server name')
-    }
+    Update-TskillServerNameCache
 
-    @()
+    $optionText = $CurrentWord.Substring(0, 8)
+    $typedValue = $CurrentWord.Substring(8)
+    $script:TskillCompletionCatalog.ServerNames |
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*') } |
+        ForEach-Object {
+            $toolTip = if ($_ -eq $env:COMPUTERNAME) { "Server $_ (this computer)" } else { "Server $_ (Remote Desktop history)" }
+            New-TskillCompletionResult -CompletionText "$optionText$_" -ResultType 'ParameterValue' -ToolTip $toolTip
+        }
 }
 
 function Complete-Tskill {

@@ -1350,7 +1350,7 @@
         @{
             Path    = 'tskill_completer/tskill_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:96E018AFECB80DAA3D19BE22B248094BC32EA1FD790C11AC0F29E8D03C5AB55C'
+            Hash    = 'SHA256:901BE401F80F55DA6E7A07D2D99CC3CB85BD3B88CA523313B024A50BA71F3EB1'
             Targets = @(
                 @{ CommandName = 'tskill'; Native = $true }
                 @{ CommandName = 'tskill.exe'; Native = $true }

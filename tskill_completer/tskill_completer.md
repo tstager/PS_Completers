@@ -9,7 +9,7 @@ It is a lightweight completer that focuses on:
 - the documented switch tokens
 - the first positional process target
 - inline `/ID:` session values
-- inline `/SERVER:` placeholders
+- inline `/SERVER:` host names
 
 ## Registration and command names
 
@@ -90,10 +90,12 @@ When the current token starts with `/ID:`, the completer suggests session IDs in
 
 ### `/SERVER:` completion
 
-When the current token starts with `/SERVER:`:
+When the current token starts with `/SERVER:`, the completer suggests host names in inline form, filtered by the text after the colon and keeping the typed `/SERVER:` prefix:
 
-- if no server name has been typed yet, the script returns the literal `/SERVER:` token with a tooltip of `Remote server name`
-- if text has already been typed after the colon, the script returns no hostname suggestions
+- `$env:COMPUTERNAME` (this computer)
+- the Remote Desktop history hosts stored as subkeys of `HKCU:\Software\Microsoft\Terminal Server Client\Servers`
+
+The list is read locally (no network access) and cached for 20 seconds.
 
 ## Dependencies or external command expectations
 
@@ -102,6 +104,7 @@ This completer expects:
 - `tskill.exe` or `tskill` to be available, otherwise it returns no completions
 - `Get-Process` for process-name and process-ID suggestions
 - `qwinsta.exe` or `query.exe` for session ID discovery used by `/ID:`
+- the current user's Remote Desktop history in the registry for `/SERVER:` host names (optional; only `$env:COMPUTERNAME` is offered without it)
 
 ## Usage / loading example
 
@@ -111,13 +114,14 @@ This completer expects:
 tskill <TAB>
 tskill /<TAB>
 tskill /ID:<TAB>
+tskill /SERVER:<TAB>
 tskill notepad <TAB>
 ```
 
 ## Limitations / notes
 
 - `/ID:` and `/SERVER:` are handled as inline options with a colon, not as separate option/value tokens.
-- `/SERVER:` does not enumerate remote host names.
+- `/SERVER:` offers only this computer and hosts from the Remote Desktop history; it does not browse the network.
 - After one positional process target has already been supplied, the completer stops offering additional positional suggestions.
 - Process and session suggestions are cached briefly to reduce repeated system queries while staying fairly current.
 
