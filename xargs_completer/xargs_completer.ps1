@@ -1,6 +1,6 @@
 # xargs tab completion for PowerShell
-# Registers a native PowerShell argument completer for xargs.exe using the documented
-# coreutils option surface and lightweight value-aware completion.
+# Registers a native PowerShell argument completer for xargs.exe using the option surface
+# of the xargs that resolves on PATH (its --help, cached) and lightweight value-aware completion.
 
 Set-StrictMode -Version 2.0
 
@@ -28,7 +28,8 @@ function New-XargsCompletionResult {
     )
 }
 
-function Get-XargsOptionSpecs {
+function Get-XargsStaticOptionTable {
+    # GNU findutils surface; also the value-kind source for options the live help lists.
     @(
         [pscustomobject]@{ Token = '-0'; LongToken = '--null'; Description = 'Items are separated by a null, not whitespace'; ValueKind = 'NoValue' },
         [pscustomobject]@{ Token = '-a'; LongToken = '--arg-file'; Description = 'Read arguments from FILE, not standard input'; ValueKind = 'FilePath' },
@@ -52,6 +53,144 @@ function Get-XargsOptionSpecs {
         [pscustomobject]@{ Token = ''; LongToken = '--help'; Description = 'Display help and exit'; ValueKind = 'NoValue' },
         [pscustomobject]@{ Token = ''; LongToken = '--version'; Description = 'Output version information and exit'; ValueKind = 'NoValue' }
     )
+}
+
+function Get-XargsHelpText {
+    param([string]$CommandPath)
+
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $CommandPath
+        [void]$startInfo.ArgumentList.Add('--help')
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        try {
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            [void]$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(5000)) {
+                try { $process.Kill($true) } catch { Write-Debug -Message $_.Exception.Message }
+                return ''
+            }
+
+            if ($outputTask.Wait(1000)) {
+                return ($outputTask.Result -replace '\e\[[0-9;?]*[ -/]*[@-~]', '')
+            }
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        Write-Debug -Message "xargs --help probe failed: $($_.Exception.Message)"
+    }
+
+    ''
+}
+
+function ConvertFrom-XargsHelpText {
+    param([string]$HelpText)
+
+    $staticTable = @(Get-XargsStaticOptionTable)
+    $specs = New-Object System.Collections.Generic.List[object]
+    foreach ($line in $HelpText -split '\r?\n') {
+        # Option rows start within a few columns; wrapped description lines are indented much deeper.
+        if ($line -notmatch '^ {1,8}(?<spec>-\S.*?)(?: {2,}(?<desc>\S.*))?$') {
+            continue
+        }
+
+        $description = $matches['desc']
+        if ($matches['spec'] -notmatch '^(?:(?<short>-[A-Za-z0-9])(?=[,\s\[]|$))?,?\s*(?<long>--[A-Za-z0-9][A-Za-z0-9-]*)?(?<arg>.*)$') {
+            continue
+        }
+
+        $short = $matches['short']
+        $long = $matches['long']
+        $argument = $matches['arg'].Trim()
+        if (-not $short -and -not $long) {
+            continue
+        }
+
+        $known = $null
+        foreach ($option in $staticTable) {
+            if (($long -and [string]::Equals($option.LongToken, $long, [System.StringComparison]::Ordinal)) -or ($short -and [string]::Equals($option.Token, $short, [System.StringComparison]::Ordinal))) {
+                $known = $option
+                break
+            }
+        }
+
+        if ($known) {
+            $valueKind = $known.ValueKind
+            $description = $known.Description
+        } elseif ($argument -and -not $argument.StartsWith('[')) {
+            $valueKind = 'Value'
+        } else {
+            $valueKind = 'NoValue'
+        }
+
+        [void]$specs.Add([pscustomobject]@{
+                Token       = if ($short) { $short } else { '' }
+                LongToken   = if ($long) { $long } else { '' }
+                Description = $description
+                ValueKind   = $valueKind
+                Placeholder = if ($argument) { '<' + ($argument -replace '[\[\]<>=]', '').ToLowerInvariant() + '>' } else { '' }
+            })
+    }
+
+    @($specs.ToArray())
+}
+
+function Get-XargsOptionSpecs {
+    # The option table follows the xargs that resolves on PATH (uutils and GNU findutils differ).
+    $cache = Get-Variable -Name 'XargsOptionSpecCache' -Scope Script -ErrorAction Ignore
+    if ($null -ne $cache -and $null -ne $cache.Value -and $cache.Value.Path -eq $env:PATH) {
+        if (-not $cache.Value.Source -or [System.IO.File]::GetLastWriteTimeUtc($cache.Value.Source) -eq $cache.Value.WriteTime) {
+            return $cache.Value.Specs
+        }
+    }
+
+    # A PATH scan in PATHEXT order; Get-Command spends seconds searching modules when xargs is absent.
+    $source = $null
+    $extensions = @($env:PATHEXT -split ';' | Where-Object { $_ })
+    foreach ($directory in @($env:PATH -split ';' | Where-Object { $_ })) {
+        if (-not [System.IO.Directory]::Exists($directory)) {
+            continue
+        }
+
+        $candidates = [System.IO.Directory]::GetFiles($directory, 'xargs.*', [System.IO.EnumerationOptions]::new())
+        if ($candidates.Count -eq 0) {
+            continue
+        }
+
+        foreach ($extension in $extensions) {
+            $source = $candidates | Where-Object { [System.IO.Path]::GetExtension($_) -eq $extension } | Select-Object -First 1
+            if ($source) {
+                break
+            }
+        }
+
+        if ($source) {
+            break
+        }
+    }
+
+    $writeTime = [datetime]::MinValue
+    $specs = @()
+    if ($source) {
+        $writeTime = [System.IO.File]::GetLastWriteTimeUtc($source)
+        $specs = @(ConvertFrom-XargsHelpText -HelpText (Get-XargsHelpText -CommandPath $source))
+    }
+
+    if ($specs.Count -eq 0) {
+        $specs = @(Get-XargsStaticOptionTable)
+    }
+
+    Set-Variable -Name 'XargsOptionSpecCache' -Value @{ Path = $env:PATH; Source = $source; WriteTime = $writeTime; Specs = $specs } -Scope Script
+    $specs
 }
 
 function Get-XargsOptionSpecByToken {
@@ -184,6 +323,7 @@ function Get-XargsValueSuggestions {
         'ReplaceTextAttached' { '<R>' }
         'EofString' { '<eof-string>' }
         'VarName' { '<var>' }
+        'Value' { $OptionSpec.Placeholder }
         default { $null }
     }
 

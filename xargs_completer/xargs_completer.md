@@ -4,7 +4,7 @@
 
 `xargs_completer.ps1` registers a standalone native PowerShell completer for `xargs` and `xargs.exe`.
 
-The option catalog models GNU findutils `xargs`, which is the build Git for Windows puts on `PATH`. Two `xargs` binaries commonly coexist on Windows (Git's findutils build and the uutils coreutils package); the catalog is the findutils surface, which is a superset of the uutils options that matter for completion.
+Two `xargs` binaries commonly coexist on Windows (the uutils coreutils package and Git's GNU findutils build), and their option surfaces differ: uutils 0.10.0 has `-h`/`-V` but rejects `-o`, `-p`, `--process-slot-var` and `--show-limits`. The completer therefore reads the option list from the `--help` of whichever `xargs` resolves first on `PATH`, and keeps a hand-written GNU findutils table as the fallback when no `xargs` is installed or its help cannot be parsed.
 
 It covers:
 
@@ -57,6 +57,12 @@ It also enables `Set-StrictMode -Version 2.0`.
 
 ### Options
 
+`Get-XargsOptionSpecs` locates `xargs` by scanning `PATH` in `PATHEXT` order, runs `xargs --help` once (stdin closed, output drained asynchronously, killed after 5 s, ANSI-stripped) and parses the option column. Value kinds and tooltips for known options come from the static table; an option the table does not know gets a `<metavar>` placeholder when its help shows a mandatory value. The result is cached per session, keyed on `PATH` and the binary's last-write time, so a cold Tab costs about 150-200 ms and a warm one a few milliseconds. With uutils 0.10.0 that yields:
+
+- `-a`/`--arg-file`, `-d`/`--delimiter`, `-x`/`--exit`, `-n`/`--max-args`, `-L`/`--max-lines`, `-l`, `-P`/`--max-procs`, `-r`/`--no-run-if-empty`, `-0`/`--null`, `-s`/`--max-chars`, `-t`/`--verbose`, `-i`/`--replace`, `-I`, `-E`, `-e`/`--eof`, `-h`/`--help`, `-V`/`--version`
+
+The static fallback (GNU findutils 4.x) is:
+
 - `-0`/`--null`, `-a`/`--arg-file FILE`, `-d`/`--delimiter CHAR`, `-E END`, `-e`/`--eof[=END]`, `-I R`, `-i`/`--replace[=R]`, `-L`/`--max-lines N`, `-l[N]`, `-n`/`--max-args N`, `-o`/`--open-tty`, `-P`/`--max-procs N`, `-p`/`--interactive`, `--process-slot-var VAR`, `-r`/`--no-run-if-empty`, `-s`/`--max-chars N`, `--show-limits`, `-t`/`--verbose`, `-x`/`--exit`, `--help`, `--version`
 
 ### Value slots
@@ -87,11 +93,11 @@ Expected behavior:
 
 ## Dependencies or external command expectations
 
-- The completer is self-contained; the option catalog is authored from `xargs --help` of GNU findutils 4.x.
+- The option catalog is read from the resolved `xargs --help` (uutils or GNU findutils); the built-in fallback is authored from `xargs --help` of GNU findutils 4.x.
 - Command-name suggestions depend on `Get-Command -CommandType Application` and are cached until `PATH` changes.
 
 ## Limitations / notes
 
 - PowerShell does not invoke native completers for an empty word directly after a `{}` script-block token, so `xargs -I {} ` followed by Tab shows nothing until a letter is typed.
-- Option lookup is ordinal, so `-P`/`-p`, `-L`/`-l`, `-I`/`-i` and `-E`/`-e` resolve to their own specs (`xargs -p ` offers the command, `xargs -P ` offers `<max>`), and typing `-p` lists only `-p`.
+- Option lookup is ordinal, so `-P`/`-p`, `-L`/`-l`, `-I`/`-i` and `-E`/`-e` resolve to their own specs (`xargs -P ` offers `<max>`; with GNU findutils `xargs -p ` offers the command and typing `-p` lists only `-p`).
 - `-i`/`--replace` take R only attached (`-iR`, `--replace=R`; otherwise `{}`), so the token after `-i` is the command: `xargs -i ` offers command names and `xargs -i ls ` does not offer them again. The resolved uutils findutils 0.10.0 consumes the next token for `-e` and `-l` (GNU only accepts those attached), so the completer keeps offering a placeholder in the slot after them.
