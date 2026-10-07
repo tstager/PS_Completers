@@ -12,7 +12,7 @@ function Get-DateCompletionOptions {
     $fallbackOptions = @('-d', '--date', '-f', '--file', '-I', '--iso-8601', '-R', '--rfc-email', '--rfc-3339', '--debug', '-r', '--reference', '-s', '--set', '-u', '--universal', '--utc', '--resolution', '-h', '--help', '-V', '--version')
     $commandCandidates = @('date.exe', 'date')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -412,15 +412,22 @@ function Expand-DateFormatToken {
     $index = $CurrentWord.LastIndexOf('%')
     $base = $CurrentWord
     $partial = '%'
+    $modifiers = ''
     if ($index -ge 0) {
         $base = $CurrentWord.Substring(0, $index)
         $partial = $CurrentWord.Substring($index)
+        # Padding flags, a field width and an E/O modifier may sit between '%' and the conversion.
+        if ($partial -cmatch '^%(?<mods>[-_0^#+]*[0-9]*[EO]?)(?<rest>.*)$') {
+            $modifiers = $Matches['mods']
+            $partial = '%' + $Matches['rest']
+        }
     }
 
     $matched = @(
         foreach ($entry in $specifiers) {
             if ($entry.Text.StartsWith($partial, [System.StringComparison]::Ordinal)) {
-                New-DateCompletionResult -CompletionText ($base + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+                $text = '%' + $modifiers + $entry.Text.Substring(1)
+                New-DateCompletionResult -CompletionText ($base + $text) -ListItemText $text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )

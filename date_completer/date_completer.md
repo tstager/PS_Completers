@@ -71,6 +71,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion, and each result keeps its own `ProviderContainer`/`ProviderItem` type. See the table below.
 - `-I` / `--iso-8601` declare an *optional* argument, which getopt only accepts attached, so only `-Iseconds` and `--iso-8601=seconds` are offered; GNU date refuses the separate form `date -I seconds`, which is therefore never suggested.
 - A `+FORMAT` operand completes the interpreted sequences (`+%Y`, `+%Y-%m-%d`, ...), preserving whatever has already been typed. The specifier list and its tooltips are parsed from the same cached help text (GNU's two-space `%X  description` lines and uutils' markdown table), with a static 46-entry table as the fallback.
+- Padding flags (`-`, `_`, `0`, `+`, `^`, `#`), a field width and an `E`/`O` modifier typed after `%` are kept in front of the specifier, so `date +%-` offers `+%-d`, `+%-H`, ... rather than appending a second `%`.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped. `.` and `..` list that directory instead of being resolved to a real directory name by `Split-Path -Leaf`.
 - The word tokenizer accepts an unterminated quote, so an in-progress quoted path containing a space stays one token instead of degrading to its last fragment.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
@@ -100,6 +101,7 @@ Expected behavior:
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--date` shows its documented values in both the separate and the attached form
 - `date +%` offers every interpreted sequence as a `+%<spec>` token
+- `date +%-` offers the same sequences with the flag kept (`+%-d`, `+%-H`, ...)
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
