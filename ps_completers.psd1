@@ -319,7 +319,7 @@
         @{
             Path    = 'DSC_completer/DSC_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:06E32D41840C8D40E823BFC73E8B951C9F29CEEFAD98513CC66A5BEB765961D7'
+            Hash    = 'SHA256:AA08C29164B2EC65542598139BC7559ACF9C855C4ECA75C5091F853209B3739B'
             Targets = @(
                 @{ CommandName = 'dsc'; Native = $true }
             )
