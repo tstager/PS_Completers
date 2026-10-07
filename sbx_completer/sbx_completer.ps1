@@ -96,6 +96,81 @@ $completionScript
     }
 }
 
+function Get-SbxFlagValueSlot {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # Closed value sets that 'sbx <command> --help' documents but cobra does not register.
+    # --skills and --pull exist only for local sandboxes, so they are dropped under --cloud.
+    $valueSets = @{
+        'run --on-timeout'    = 'stop', 'restart', 'delete'
+        'run --platform'      = 'linux/amd64', 'linux/arm64'
+        'run --skills'        = 'off', 'readonly', 'readwrite'
+        'run --pull'          = 'always', 'missing', 'never'
+        'create --on-timeout' = 'stop', 'restart', 'delete'
+        'create --platform'   = 'linux/amd64', 'linux/arm64'
+        'create --skills'     = 'off', 'readonly', 'readwrite'
+        'create --pull'       = 'always', 'missing', 'never'
+        'move --to'           = 'local', 'cloud'
+        'move --on-timeout'   = 'stop', 'delete'
+    }
+    $localOnlyFlags = '--skills', '--pull'
+
+    $elements = @($CommandAst.CommandElements | Select-Object -Skip 1)
+    $preceding = @($elements | Where-Object { $_.Extent.EndOffset -lt $CursorPosition } | ForEach-Object { $_.Extent.Text })
+    $current = $elements | Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } | Select-Object -First 1
+    $typed = if ($null -ne $current) { $current.Extent.Text.Substring(0, $CursorPosition - $current.Extent.StartOffset) } else { '' }
+
+    # Everything after a bare '--' belongs to the agent; root flags take no value, so the first bare word is the command.
+    if ($preceding -ccontains '--') {
+        return $null
+    }
+    $command = $preceding | Where-Object { -not $_.StartsWith('-') } | Select-Object -First 1
+    if ($null -eq $command) {
+        return $null
+    }
+
+    $attached = $typed -cmatch '^(--[a-z-]+=)(.*)$'
+    if ($attached) {
+        $flag = $Matches[1].TrimEnd('=')
+        $prefix = $Matches[1]
+        $valueText = $Matches[2]
+    } elseif ($preceding.Count -gt 0 -and -not $typed.StartsWith('-')) {
+        $flag = $preceding[-1]
+        $prefix = ''
+        $valueText = $typed
+    } else {
+        return $null
+    }
+
+    $values = $valueSets["$command $flag"]
+    if ($null -eq $values -or (($preceding -ccontains '--cloud') -and $localOnlyFlags -ccontains $flag)) {
+        return $null
+    }
+
+    $quote = if ($valueText.Length -gt 0 -and $valueText[0] -in "'", '"') { [string]$valueText[0] } else { '' }
+    [pscustomobject]@{
+        Attached = $attached
+        Prefix   = $prefix
+        Quote    = $quote
+        Value    = $valueText.Substring($quote.Length)
+        Values   = $values
+    }
+}
+
+function Get-SbxFlagValueCompletion {
+    param([psobject]$Slot)
+
+    foreach ($value in $Slot.Values) {
+        if ($value.StartsWith($Slot.Value, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $completionText = '{0}{1}{2}{1}' -f $Slot.Prefix, $Slot.Quote, $value
+            [System.Management.Automation.CompletionResult]::new($completionText, $value, 'ParameterValue', $value)
+        }
+    }
+}
+
 function Invoke-SbxCompletion {
     param(
         [string]$wordToComplete,
@@ -103,19 +178,32 @@ function Invoke-SbxCompletion {
         [int]$cursorPosition
     )
 
-    $completionInvoker = Get-SbxCompletionInvoker
-    if ($null -eq $completionInvoker) {
-        return
+    $flagValueSlot = Get-SbxFlagValueSlot -CommandAst $commandAst -CursorPosition $cursorPosition
+
+    # cobra has no values for an attached '--flag=' here, and its block faults on that empty answer.
+    if ($null -ne $flagValueSlot -and $flagValueSlot.Attached) {
+        return Get-SbxFlagValueCompletion -Slot $flagValueSlot
     }
 
-    # cobra's block lets the child process's 'Completion ended with directive' banner reach stderr;
-    # redirecting the whole invocation keeps the console clean. Its "" sentinel
-    # (ShellCompDirectiveNoFileComp) and empty output are passed through unchanged.
-    try {
-        @(& $completionInvoker $wordToComplete $commandAst $cursorPosition 2>$null)
-    } catch {
-        Write-Verbose ("sbx completion block failed: {0}" -f $_.Exception.Message)
+    $results = @()
+    $completionInvoker = Get-SbxCompletionInvoker
+    if ($null -ne $completionInvoker) {
+        # cobra's block lets the child process's 'Completion ended with directive' banner reach stderr;
+        # redirecting the whole invocation keeps the console clean. Its "" sentinel
+        # (ShellCompDirectiveNoFileComp) is dropped: PowerShell rejects an empty completion text.
+        try {
+            $results = @(& $completionInvoker $wordToComplete $commandAst $cursorPosition 2>$null |
+                    Where-Object { -not ($_ -is [string] -and $_.Length -eq 0) })
+        } catch {
+            Write-Verbose ("sbx completion block failed: {0}" -f $_.Exception.Message)
+        }
     }
+
+    if ($results.Count -eq 0 -and $null -ne $flagValueSlot) {
+        return Get-SbxFlagValueCompletion -Slot $flagValueSlot
+    }
+
+    $results
 }
 
 Register-ArgumentCompleter -Native -CommandName @('sbx', 'sbx.exe') -ScriptBlock {

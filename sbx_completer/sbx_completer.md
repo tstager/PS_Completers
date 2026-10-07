@@ -29,12 +29,13 @@ Load it with:
 ## How completion works
 1. `Get-SbxCommandPath` resolves `sbx`/`sbx.exe` once and caches the path in script scope.
 2. `Get-SbxCompletionInvoker` runs `sbx completion powershell` once, patches the block's final `$Values | ForEach-Object` to skip a `$null` pipeline (otherwise a no-suggestion Tab in a path slot such as `sbx cp .\x` builds a `CompletionResult` from a null name and leaves an exception in `$Error`), compiles it with `Set-StrictMode -Off` prepended (the upstream block dereferences an empty pipeline when there are no suggestions) and caches it. A failed discovery sets `$script:SbxCompletionUnavailable`, so later Tabs return immediately; diagnostics go to the verbose stream only.
-3. `Invoke-SbxCompletion` calls the block with `2>$null` and returns its output unchanged: `CompletionResult` objects, sbx's `""` no-file-completion sentinel, or nothing (file completion allowed, as for `sbx cp`).
+3. `Invoke-SbxCompletion` calls the block with `2>$null` and returns its `CompletionResult` objects. It drops sbx's `""` no-file-completion sentinel, which PowerShell rejects as an empty completion text, so an empty answer (`sbx ls <TAB>`, `sbx rm zzzz<TAB>`) simply yields nothing.
+4. `Get-SbxFlagValueSlot` holds the closed value sets that `sbx <command> --help` documents but cobra does not register (validated against v0.47.0): `run`/`create` `--skills` (off, readonly, readwrite), `--on-timeout` (stop, restart, delete), `--platform` (linux/amd64, linux/arm64) and `--pull` (always, missing, never); `move` `--to` (local, cloud) and `--on-timeout` (stop, delete). `--skills` and `--pull` are local-only and are not offered under `--cloud`; nothing is offered after a bare `--`. In the separate form (`--pull <TAB>`) these values are used only when cobra returns nothing; the attached form (`--pull=<TAB>`) is answered from the table directly and keeps the `--flag=` prefix. A quote the user typed is kept on the emitted value. The table also works when `sbx` is not installed.
 
 Each Tab spawns `sbx __complete <args>`; sbx answers from its own command tree and, for sandbox-name slots such as `sbx rm <TAB>`, from the local sandboxd daemon. Nothing is created, changed or removed by completion.
 
 ## Dependencies or external command expectations
-- Requires `sbx` in `PATH` for delegated completion; without it every Tab returns nothing, silently.
+- Requires `sbx` in `PATH` for delegated completion; without it every Tab other than the flag values above returns nothing, silently.
 - Requires the installed Docker Sandboxes CLI to support `sbx completion powershell` and the cobra `__complete` protocol.
 - Because the generated block is cobra's own, it sets `SBX_ACTIVE_HELP=0` in the session environment on each call (upstream behaviour) and shows descriptions only under the `MenuComplete` or `Complete` PSReadLine Tab functions.
 
@@ -46,4 +47,6 @@ sbx <TAB>
 sbx run --<TAB>
 sbx completion <TAB>
 sbx rm <TAB>
+sbx run --pull <TAB>
+sbx move SANDBOX --to=<TAB>
 ```
