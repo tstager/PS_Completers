@@ -119,19 +119,23 @@ function Complete-GitNative {
             }
     }
 
+    # The global '-C <path>', '--git-dir' and '--work-tree' options point git at another
+    # repository; $getCommandContext records them here so every repository read follows them.
+    $gitRepoArgs = [System.Collections.Generic.List[string]]::new()
+
     $getRefs = {
         @(
-            git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags 2>$null
-            git rev-parse --short HEAD 2>$null
+            git @gitRepoArgs for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags 2>$null
+            git @gitRepoArgs rev-parse --short HEAD 2>$null
         ) | Where-Object { $_ }
     }
 
     $getLocalBranches = {
-        @(git for-each-ref --format='%(refname:short)' refs/heads 2>$null) | Where-Object { $_ }
+        @(git @gitRepoArgs for-each-ref --format='%(refname:short)' refs/heads 2>$null) | Where-Object { $_ }
     }
 
     $getTags = {
-        @(git for-each-ref --format='%(refname:short)' refs/tags 2>$null) | Where-Object { $_ }
+        @(git @gitRepoArgs for-each-ref --format='%(refname:short)' refs/tags 2>$null) | Where-Object { $_ }
     }
 
     # Branch names on one remote, without the '<remote>/' prefix, as fetch/pull refspecs name them.
@@ -139,30 +143,30 @@ function Complete-GitNative {
         param([string]$remoteName)
 
         $prefix = "$remoteName/"
-        @(git for-each-ref --format='%(refname:short)' "refs/remotes/$remoteName" 2>$null) |
+        @(git @gitRepoArgs for-each-ref --format='%(refname:short)' "refs/remotes/$remoteName" 2>$null) |
             Where-Object { $_ -and $_.StartsWith($prefix) } |
             ForEach-Object { $_.Substring($prefix.Length) } |
             Where-Object { $_ -ne 'HEAD' }
     }
 
     $getStashEntries = {
-        @(git stash list --format='%gd' 2>$null) | Where-Object { $_ }
+        @(git @gitRepoArgs stash list --format='%gd' 2>$null) | Where-Object { $_ }
     }
 
     $getRemotes = {
-        @(git remote 2>$null)
+        @(git @gitRepoArgs remote 2>$null)
     }
 
     $getFiles = {
         @(
-            git ls-files 2>$null
-            git ls-files --others --exclude-standard 2>$null
+            git @gitRepoArgs ls-files 2>$null
+            git @gitRepoArgs ls-files --others --exclude-standard 2>$null
         ) | Where-Object { $_ }
     }
 
     $getWorktreePaths = {
         @(
-            git worktree list --porcelain 2>$null |
+            git @gitRepoArgs worktree list --porcelain 2>$null |
                 Where-Object { $_ -like 'worktree *' } |
                 ForEach-Object { $_.Substring(9) }
         ) | Where-Object { $_ }
@@ -792,8 +796,14 @@ function Complete-GitNative {
             }
 
             # A global option such as '-C <path>' consumes the token after it, which is otherwise
-            # mistaken for the subcommand.
+            # mistaken for the subcommand. The repository options are kept, in order, for the
+            # repository reads ('-C a -C b' and a relative '--git-dir' build on each other).
             if ($pendingGlobalValueOption) {
+                if ($globalGitDirectoryFlags -ccontains $pendingGlobalValueOption) {
+                    $gitRepoArgs.Add($pendingGlobalValueOption)
+                    $gitRepoArgs.Add($argument.Trim([char[]]@([char]39, [char]34)))
+                }
+
                 $pendingGlobalValueOption = $null
                 continue
             }
@@ -801,6 +811,9 @@ function Complete-GitNative {
             if ($argument.StartsWith('-')) {
                 if ($commandPath.Count -eq 0 -and $globalGitFlagsWithValues -contains $argument) {
                     $pendingGlobalValueOption = $argument
+                }
+                elseif ($commandPath.Count -eq 0 -and $argument -match '^(?<option>--git-dir|--work-tree)=(?<value>.+)$') {
+                    $gitRepoArgs.Add("$($matches['option'])=$($matches['value'].Trim([char[]]@([char]39, [char]34)))")
                 }
 
                 continue
@@ -918,37 +931,57 @@ function Complete-GitNative {
         }
     }
 
+    $fallbackConfigKeys = @(
+        'user.name',
+        'user.email',
+        'core.editor',
+        'core.autocrlf',
+        'core.safecrlf',
+        'core.filemode',
+        'core.ignorecase',
+        'init.defaultBranch',
+        'pull.rebase',
+        'pull.ff',
+        'push.default',
+        'push.autoSetupRemote',
+        'fetch.prune',
+        'merge.ff',
+        'merge.conflictStyle',
+        'rebase.autoStash',
+        'rebase.autoSquash',
+        'rerere.enabled',
+        'credential.helper',
+        'credential.useHttpPath'
+    )
+
+    # 'git help --config-for-completion' lists every variable the installed git documents, with
+    # bare section prefixes ('alias.', 'branch.', 'remote.') for the subsectioned ones. The
+    # literal is the fallback when that list is unavailable; real alias names are added from
+    # the alias table. The keys are narrowed to the typed prefix here, because the list is long
+    # enough that the result pipelines would otherwise dominate a warm Tab.
     $getConfigKeys = {
-        @(
-            'user.name',
-            'user.email',
-            'core.editor',
-            'core.autocrlf',
-            'core.safecrlf',
-            'core.filemode',
-            'core.ignorecase',
-            'init.defaultBranch',
-            'pull.rebase',
-            'pull.ff',
-            'push.default',
-            'push.autoSetupRemote',
-            'fetch.prune',
-            'merge.ff',
-            'merge.conflictStyle',
-            'rebase.autoStash',
-            'rebase.autoSquash',
-            'rerere.enabled',
-            'credential.helper',
-            'credential.useHttpPath',
-            'alias.co',
-            'alias.br',
-            'alias.ci',
-            'alias.st'
-        )
+        param([string]$prefix)
+
+        if (-not $metadataCache.ContainsKey('<config-keys>')) {
+            $configKeys = @(
+                $null | git help --config-for-completion 2>$null |
+                    ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+
+            if ($configKeys.Count -eq 0) {
+                $configKeys = @($fallbackConfigKeys)
+            }
+
+            $metadataCache['<config-keys>'] = $configKeys
+        }
+
+        @(@($metadataCache['<config-keys>']) + @((& $getGitAliases).Keys | ForEach-Object { "alias.$_" })) -like
+            ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')
     }
 
     $getCurrentBranch = {
-        git symbolic-ref --short HEAD 2>$null
+        git @gitRepoArgs symbolic-ref --short HEAD 2>$null
     }
 
     $getHookNames = {
@@ -979,7 +1012,8 @@ function Complete-GitNative {
         )
 
         $repoHookNames = @()
-        $hooksPath = git rev-parse --git-path hooks 2>$null
+        # An absolute path, because a relative one is relative to the '-C' directory, not ours.
+        $hooksPath = git @gitRepoArgs rev-parse --path-format=absolute --git-path hooks 2>$null
         if (-not [string]::IsNullOrWhiteSpace($hooksPath)) {
             $repoHookNames = @(
                 Get-ChildItem -Path $hooksPath -File -ErrorAction SilentlyContinue |
@@ -1401,13 +1435,13 @@ function Complete-GitNative {
         switch ($commandText) {
             'config' {
                 if ($configAnalysis.Positionals.Count -eq 0) {
-                    & $completeOrderedList $wordToComplete @($commandContext.Metadata.Subcommands + (& $getConfigKeys))
+                    & $completeOrderedList $wordToComplete @($commandContext.Metadata.Subcommands + (& $getConfigKeys $wordToComplete))
                     return
                 }
             }
             { $_ -in @('config get', 'config set', 'config unset') } {
                 if ($configAnalysis.Positionals.Count -eq 0) {
-                    & $completeList (& $getConfigKeys)
+                    & $completeList (& $getConfigKeys $wordToComplete)
                     return
                 }
             }

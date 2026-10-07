@@ -48,7 +48,7 @@ git deliberately prints an abbreviated `-h` for its revision-walking commands, s
 A hardcoded `$documentedNestedSubcommands` map supplements help parsing for command groups whose help output does not fully expose their subcommands.
 
 ### Command-path detection
-`$getCommandContext` walks non-flag arguments from left to right. Whenever a token matches one of the current command metadata object's known subcommands, it extends the command path and refreshes metadata for the deeper path. A global option that takes a value (`-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path`, `--config-env`) consumes the token after it, so that value is never mistaken for the subcommand; `-C`, `--git-dir`, and `--work-tree` complete directories in their value slot.
+`$getCommandContext` walks non-flag arguments from left to right. Whenever a token matches one of the current command metadata object's known subcommands, it extends the command path and refreshes metadata for the deeper path. A global option that takes a value (`-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path`, `--config-env`) consumes the token after it, so that value is never mistaken for the subcommand; `-C`, `--git-dir`, and `--work-tree` complete directories in their value slot. Those three repository options (separate or attached `--git-dir=<path>` / `--work-tree=<path>`, quotes stripped) are also recorded in order and passed to every repository read (refs, tags, remotes, stash entries, files, worktrees, the current branch and the hooks directory), so `git -C ..\other checkout <TAB>` offers the other repository's refs.
 
 `$getArgumentsAfterPath` and `$getPositionalArgumentsAfterPath` then isolate arguments that come after the recognized command path so later logic can make subcommand-specific decisions.
 
@@ -111,8 +111,8 @@ Examples from the built-in nested map include:
 - `worktree add|list|lock|move|prune|remove|repair|unlock`
 
 ### Context-aware value completions
-- `git config ...` offers modern `config` subcommands plus a fixed list of common config keys such as `user.name`, `user.email`, `core.editor`, `init.defaultBranch`, `pull.rebase`, and several alias examples at the first argument slot. `git config get|set|unset ...` continue key completion in the key slot, and `git config --file` / `git config --file=` complete file paths.
-- `git hook run ...` completes hook names from a default hook list plus files found under `git rev-parse --git-path hooks` (excluding `*.sample`).
+- `git config ...` offers modern `config` subcommands plus every config variable the installed git documents (`git help --config-for-completion`, read once and cached for the session; it includes bare section prefixes such as `alias.`, `branch.` and `remote.`), plus `alias.<name>` for each alias actually defined. A short curated key list is the fallback when that read yields nothing. `git config get|set|unset ...` continue key completion in the key slot, and `git config --file` / `git config --file=` complete file paths.
+- `git hook run ...` completes hook names from a default hook list plus files found under `git rev-parse --path-format=absolute --git-path hooks` (excluding `*.sample`).
 - `git remote remove`, `rename`, `show`, `prune`, `update`, `get-url`, `set-head`, `set-branches`, and `set-url` complete remote names from `git remote`.
 - `git remote set-head` and `git remote set-branches` also complete refs once the remote argument has been supplied.
 - `git worktree add` completes refs after the first positional argument.
@@ -162,6 +162,7 @@ It shells out to Git for completion data, including:
 - `git --list-cmds=main,others,alias,nohelpers`
 - `git --list-cmds=list-guide`
 - `git config --get-regexp "^alias."`
+- `git help --config-for-completion`
 - `git <command path> -h` (never for a user alias)
 - `git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags`
 - `git rev-parse --short HEAD`
@@ -170,10 +171,10 @@ It shells out to Git for completion data, including:
 - `git ls-files --others --exclude-standard`
 - `git worktree list --porcelain`
 - `git symbolic-ref --short HEAD`
-- `git rev-parse --git-path hooks`
+- `git rev-parse --path-format=absolute --git-path hooks`
 - `git config --get init.defaultBranch`
 
-Because the completer uses live Git output, results depend on the installed Git version and the current repository context.
+Because the completer uses live Git output, results depend on the installed Git version and the current repository context. The repository reads (`for-each-ref`, `rev-parse`, `remote`, `ls-files`, `stash list`, `worktree list`, `symbolic-ref`) carry any `-C`, `--git-dir` and `--work-tree` typed before the subcommand.
 
 ## Usage / loading example
 ```powershell
@@ -192,6 +193,7 @@ Because the completer uses live Git output, results depend on the installed Git 
 - Nested subcommand coverage partly depends on parsing `git -h` output and partly on the hardcoded `$documentedNestedSubcommands` map.
 - `rev-parse` still gets only what its abbreviated `-h` prints; `git-completion.bash` has no completion function for it to supplement from.
 - A shell alias (`!cmd ...`) gets no flag or subcommand completion at all, because reading its surface would mean running it.
-- `git config` key completion is a fixed curated list in this script, not a live read of repository or global config keys.
+- `git config` key completion lists the documented variable names, not the keys set in the repository or global config (subsection names such as `branch.<name>.` are not enumerated).
+- The alias table is read from the current directory's repository even when `-C` / `--git-dir` point elsewhere, so another repository's local aliases do not resolve.
 - New-branch completion for `checkout` / `switch` uses naming suggestions rather than enumerating existing branches.
 - When a command path is treated as a leaf command and the cursor is at a trailing-space boundary with no positional arguments, the completer can fall back to that command's flag set.

@@ -437,7 +437,7 @@
         @{
             Path    = 'Git_completer/Git_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B2EC33674DA0F7FC16CA1A440C833EA115FFDE9F8283B65024F950D7E94B0134'
+            Hash    = 'SHA256:700EB7ED5339F2BCBBB2EC3DB47AA93F42710FC749F400F2A366CC48F5214607'
             Targets = @(
                 @{ CommandName = 'git'; Native = $true }
                 @{ CommandName = 'git.exe'; Native = $true }
