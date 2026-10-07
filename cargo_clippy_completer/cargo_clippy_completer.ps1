@@ -127,59 +127,104 @@ function Remove-CargoClippyOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-CargoClippyQuotedPath {
+function Get-CargoClippyTypedQuote {
+    # The quote character the user opened the word with ('' when bare).
+    param([string]$Value)
+
+    if ($Value -match '^[''"]') {
+        return $Value.Substring(0, 1)
+    }
+
+    ''
+}
+
+function ConvertFrom-CargoClippyTypedWord {
+    # The value of a typed word without its quotes and that quote style's escapes.
+    param([string]$Value)
+
+    $quote = Get-CargoClippyTypedQuote -Value $Value
+    $clean = Remove-CargoClippyOuterQuotes -Value $Value
+    if ($quote -eq "'") {
+        return $clean.Replace("''", "'")
+    }
+
+    if ($quote) {
+        return $clean -replace '`(.)', '$1'
+    }
+
+    $clean
+}
+
+function ConvertTo-CargoClippyQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). Whitespace and argument-mode
+    # metacharacters (including the typographic quotes) end or split a bare word, and a
+    # leading '@' or '#' would start a splat or a comment.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    $Value
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-CargoClippyPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-CargoClippyOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quote = Get-CargoClippyTypedQuote -Value $InputPath
+    $cleanInput = ConvertFrom-CargoClippyTypedWord -Value $InputPath
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            $completionText = ConvertTo-CargoClippyQuotedPath -Value $_.CompletionText -AlwaysQuote $alwaysQuote
+            # CompleteFilename already single-quotes a path that needs it; unwrap it so the path
+            # is quoted exactly once, in the style the user typed.
+            $path = $_.CompletionText
+            # The parser undoes every doubled quote, typographic ones included.
+            if ($path.Length -ge 2 -and $path.StartsWith("'") -and $path.EndsWith("'")) {
+                $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+                $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+                if ($constant) {
+                    $path = $constant.Value
+                }
+            }
+
+            $completionText = ConvertTo-CargoClippyQuotedValue -Value $path -Quote $quote
             New-CargoClippyCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 }
 
 function Get-CargoClippyCurrentWord {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running past the cursor, so
+    # the element under the cursor is the whole word even when it holds spaces.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
+    # Between words, where PowerShell's own word is empty too.
     $Fallback
 }
 
@@ -663,7 +708,9 @@ function Get-CargoClippyManifestInfo {
 
     $manifestPath = $null
     if (-not [string]::IsNullOrWhiteSpace($ExplicitManifestPath)) {
-        $candidate = [System.IO.Path]::GetFullPath($ExplicitManifestPath, $PWD.ProviderPath)
+        # cargo runs in the session's FileSystem location even when the current location is
+        # another provider (HKCU:\ has no rooted ProviderPath to resolve against).
+        $candidate = [System.IO.Path]::GetFullPath($ExplicitManifestPath, (Get-Location -PSProvider FileSystem).ProviderPath)
         if ([System.IO.File]::Exists($candidate)) {
             $manifestPath = $candidate
         }
@@ -928,7 +975,7 @@ function Get-CargoClippyValueCompletions {
 
     Initialize-CargoClippyCompletionCache
     $cache = Get-CargoClippyCompletionCache
-    $current = Remove-CargoClippyOuterQuotes -Value $CurrentWord
+    $current = ConvertFrom-CargoClippyTypedWord -Value $CurrentWord
 
     if ($OptionName -eq '-Z' -and -not $AfterDoubleDash) {
         return @(
@@ -998,7 +1045,8 @@ function Get-CargoClippyValueCompletions {
     # would hand the slot to PowerShell's filename fallback.
     if (-not [string]::IsNullOrWhiteSpace($current)) {
         $toolTip = if ($AfterDoubleDash) { 'Clippy lint name.' } else { "$OptionName value" }
-        return @(New-CargoClippyCompletionResult -CompletionText ($PrefixText + $current) -ListItemText $current -ResultType 'ParameterValue' -ToolTip $toolTip)
+        $echo = ConvertTo-CargoClippyQuotedValue -Value $current -Quote (Get-CargoClippyTypedQuote -Value $CurrentWord)
+        return @(New-CargoClippyCompletionResult -CompletionText ($PrefixText + $echo) -ListItemText $current -ResultType 'ParameterValue' -ToolTip $toolTip)
     }
 
     @()
@@ -1043,7 +1091,7 @@ function Complete-CargoClippy {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-CargoClippyCurrentWord -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-CargoClippyCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     }
 
     $state = Get-CargoClippyState -TokensBeforeCurrent @(Get-CargoClippyArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)

@@ -19,6 +19,8 @@ The implementation is help-driven and stays within the repo's importer-safe top-
 
 Option tokens are keyed ordinally, so `-V` (`--version`) and `-v` (`--verbose`) stay distinct and `-F` keeps its `--features` meaning before `--`. A value slot with no known source echoes what has been typed rather than collapsing to nothing.
 
+The word under the cursor comes from the parser, so an open-quoted value with spaces (`--target-dir "C:\Program F`) completes as one word. A path or echoed value that needs quoting is quoted exactly once, in the quote style the user typed (single quotes when none), including after `--opt=`. A relative `-m`/`--manifest-path` resolves against the session's FileSystem location, so it also works while the current location is another provider such as `HKCU:\`.
+
 ## Completion behavior
 
 Before `--`, the completer offers:
