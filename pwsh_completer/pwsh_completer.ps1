@@ -357,6 +357,63 @@ function Test-PwshHasTerminalOption {
     $false
 }
 
+function Test-PwshHasPositionalScript {
+    param([string[]]$TokensBeforeCurrent)
+
+    # -File is the default parameter: the first bare operand is the script, and pwsh forwards
+    # every later token to it (pwsh ./a.ps1 -NoLogo passes -NoLogo to the script).
+    $commandOptions = @('-Command', '-c', '-CommandWithArgs', '-cwa')
+    $skipNext = $false
+    foreach ($token in $TokensBeforeCurrent) {
+        if ($skipNext) {
+            $skipNext = $false
+            continue
+        }
+
+        if ([string]::IsNullOrEmpty($token)) {
+            continue
+        }
+
+        if (Test-PwshOptionToken -Token $token -Tokens $commandOptions) {
+            return $false
+        }
+
+        if (-not ($token.StartsWith('-') -or $token.StartsWith('/'))) {
+            return $true
+        }
+
+        $spec = Resolve-PwshOptionSpec -Token $token
+        if ($spec) {
+            if (-not [string]::IsNullOrWhiteSpace($spec.ValueKind)) {
+                $skipNext = $true
+            }
+
+            continue
+        }
+
+        # pwsh also accepts abbreviated parameter names (-Exec Bypass); an abbreviation of a
+        # value-taking parameter consumes the next token, and one that may mean -Command ends the scan.
+        $name = $token.TrimStart([char[]]@('-', '/'))
+        if ($name.Length -eq 0) {
+            return $false
+        }
+
+        foreach ($candidate in Get-PwshOptionSpecs) {
+            if ([string]::IsNullOrWhiteSpace($candidate.ValueKind) -or -not $candidate.Tokens[0].Substring(1).StartsWith($name, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+
+            if ($candidate.ValueKind -eq 'CommandText') {
+                return $false
+            }
+
+            $skipNext = $true
+        }
+    }
+
+    $false
+}
+
 function Get-PwshParameterValueContext {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
@@ -413,7 +470,7 @@ function Complete-Pwsh {
         return @(Get-PwshValueCompletions -Spec $pendingOption -CurrentWord $currentWord)
     }
 
-    if (Test-PwshHasTerminalOption -TokensBeforeCurrent $tokensBeforeCurrent -TerminalOptions @('-File', '-f')) {
+    if ((Test-PwshHasTerminalOption -TokensBeforeCurrent $tokensBeforeCurrent -TerminalOptions @('-File', '-f')) -or (Test-PwshHasPositionalScript -TokensBeforeCurrent $tokensBeforeCurrent)) {
         if (Test-PwshPathLike -Value $currentWord) {
             return @(Get-PwshPathCompletions -InputPath $currentWord -Placeholder '<script-argument>')
         }

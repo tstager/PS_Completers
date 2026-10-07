@@ -916,7 +916,7 @@
         @{
             Path    = 'pwsh_completer/pwsh_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:148802C0D72F1959B85462CAA0EDB6BCDB9587DA1FF2B56A8DEA3F354B1E1C7D'
+            Hash    = 'SHA256:580B32FF33BA0B71CE0206DDBD97A44576957CC2FBD402E70F7CA84AA532AC4F'
             Targets = @(
                 @{ CommandName = 'pwsh'; Native = $true }
                 @{ CommandName = 'pwsh.exe'; Native = $true }

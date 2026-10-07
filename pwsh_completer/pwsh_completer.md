@@ -30,7 +30,7 @@ Covered parameters include:
 - Values are completed in the separate (`-ExecutionPolicy By`), attached `=` (`-ExecutionPolicy=By`) and attached `:` (`-ExecutionPolicy:By`) forms; the `=` form keeps the `-Option=` prefix on every suggestion.
 - `-ExecutionPolicy` completes `Restricted`, `AllSigned`, `RemoteSigned`, `Unrestricted`, `Bypass`, `Undefined`, and `Default`.
 - `-InputFormat` and `-OutputFormat` complete `Text` and `XML`.
-- After `-File <path>`, remaining values are treated as script arguments and use placeholders rather than guessing script-specific parameters.
+- After `-File <path>`, remaining values are treated as script arguments and use placeholders rather than guessing script-specific parameters. The same applies after an implicit script operand (`pwsh ./a.ps1 -<Tab>`), because pwsh forwards every later token to the script.
 
 ## Import Compatibility
 
