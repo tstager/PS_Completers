@@ -492,7 +492,7 @@
         @{
             Path    = 'head_completer/head_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:AB803BE84E6513BDDE32594B66B8926336CB61952469B5B3274AF29D2E9592A1'
+            Hash    = 'SHA256:B4E37BCFB57C15BF5EC7352C4C23345CF5D34DF95FE93CA4A16F70193EAD4F29'
             Targets = @(
                 @{ CommandName = 'head'; Native = $true }
                 @{ CommandName = 'head.exe'; Native = $true }

@@ -12,7 +12,7 @@ function Get-HeadCompletionOptions {
     $fallbackOptions = @('-c', '--bytes', '-n', '--lines', '-q', '--quiet', '--silent', '-v', '--verbose', '-z', '--zero-terminated', '-h', '--help', '-V', '--version')
     $commandCandidates = @('head.exe', 'head')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -92,47 +92,62 @@ function Remove-HeadOuterQuotes {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    # The word may be an unterminated quote running to the cursor: strip the
+    # opening quote, a matching closing one if present, and undo its escaping.
+    if ($Value.StartsWith("'")) {
+        $inner = $Value.Substring(1)
+        if ($inner.EndsWith("'") -and -not $inner.EndsWith("''")) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+        return $inner.Replace("''", "'")
+    }
+
+    if ($Value.StartsWith('"')) {
+        $inner = $Value.Substring(1)
+        if ($inner.EndsWith('"') -and -not $inner.EndsWith('`"')) {
+            $inner = $inner.Substring(0, $inner.Length - 1)
+        }
+        return [regex]::Replace($inner, '`(.)', '$1')
+    }
+
+    $Value
 }
 
 function ConvertTo-HeadQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+        return $Value
     }
 
-    $Value
+    if ($QuoteChar -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
 }
 
 function Get-HeadCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    # Read the word from the parser: an unterminated quote is one element that
+    # runs to the cursor, so a quoted fragment with a space stays whole.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
     $Fallback
@@ -142,7 +157,7 @@ function Get-HeadPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-HeadOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if ($InputPath.StartsWith('"')) { '"' } elseif ($InputPath.StartsWith("'")) { "'" } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -179,7 +194,7 @@ function Get-HeadPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-HeadQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-HeadQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-HeadCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -273,7 +288,7 @@ function Complete-Head {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-HeadCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-HeadCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     }
 
     $optionValues = @(Get-HeadOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
