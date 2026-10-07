@@ -1577,7 +1577,7 @@
         @{
             Path    = 'zip_completer/zip_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:9EAC93A27EE9AAD92C6978B8D8A95AF83E54ECDF1DA7E6555FA559F494B1EA3B'
+            Hash    = 'SHA256:AFC73EDEA3D7CDA7D10A15737BC02E20569C42C6CFFE60047208E8CDD4A6107E'
             Targets = @(
                 @{ CommandName = 'zip'; Native = $true }
                 @{ CommandName = 'zip.exe'; Native = $true }

@@ -19,7 +19,7 @@ function Resolve-ZipCommandName {
         return $script:ZipCompletionCatalog.CommandName
     }
 
-    $command = Get-Command -Name zip.exe, zip -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name zip.exe, zip -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $script:ZipCompletionCatalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -742,9 +742,11 @@ function Get-ZipInlineValueMatch {
         return $null
     }
 
-    if ($TreatExactShortValueOptionAsInline) {
-        $exactOptionKey = Get-ZipExactOptionKey -Token $cleanToken
-        if ($exactOptionKey -and ($script:ZipCompletionCatalog.ValueOptionKeys -contains $exactOptionKey)) {
+    # A whole known option (-sf, -ic, -nw, -tt) is that option, never a shorter value option
+    # (-s, -i, -n, -t) with a glued value.
+    $exactOptionKey = Get-ZipExactOptionKey -Token $cleanToken
+    if ($exactOptionKey) {
+        if ($TreatExactShortValueOptionAsInline -and ($script:ZipCompletionCatalog.ValueOptionKeys -contains $exactOptionKey)) {
             $exactOptionInfo = $script:ZipCompletionCatalog.OptionInfoByKey[$exactOptionKey]
             $exactTokenText = [string]$exactOptionInfo.CompletionText
             if ($exactTokenText.StartsWith('-') -and -not $exactTokenText.StartsWith('--')) {
@@ -755,6 +757,8 @@ function Get-ZipInlineValueMatch {
                 }
             }
         }
+
+        return $null
     }
 
     $valueKeys = @($script:ZipCompletionCatalog.ValueOptionKeys |
@@ -771,18 +775,6 @@ function Get-ZipInlineValueMatch {
         }
 
         if (-not $cleanToken.StartsWith($tokenText, $comparison)) {
-            continue
-        }
-
-        if ($cleanToken.Length -eq $tokenText.Length) {
-            if ($TreatExactShortValueOptionAsInline -and $tokenText.StartsWith('-') -and -not $tokenText.StartsWith('--')) {
-                return [pscustomobject]@{
-                    OptionKey = $optionKey
-                    Prefix    = $tokenText
-                    Value     = ''
-                }
-            }
-
             continue
         }
 

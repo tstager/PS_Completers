@@ -44,6 +44,7 @@ The script is standalone and self-contained. It builds a cached option catalog f
   - `-t 20250101`
   - `-t20250101`
   - `-bC:\temp`
+- A token that is itself a known option (`-sf`, `-so`, `-ic`, `-nw`, `-tt`) is always that option, never a shorter value option with a glued value, so `zip -sf` completes `-sf`/`-sf-`, `zip -ic ` does not open the `-i` pattern list, and `zip -tt ` offers dates.
 - Recognizes long-option values supplied as either:
   - `--output-file archive.zip`
   - `--output-file=archive.zip`
