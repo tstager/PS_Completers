@@ -743,7 +743,7 @@ function Get-ScOptionValueCompletions {
             return @(Get-ScStringValueCompletions -Values (Get-ScQueryTypeValues -OptionCounts $OptionCounts) -CurrentWord $prefixWord -ToolTip $Option.Description -Prefix $InlinePrefix)
         }
         'QueryState' {
-            return @(Get-ScStringValueCompletions -Values @('active', 'inactive', 'all') -CurrentWord $prefixWord -ToolTip ($Option.Description + ' (default = active)') -Prefix $InlinePrefix)
+            return @(Get-ScStringValueCompletions -Values @('inactive', 'all') -CurrentWord $prefixWord -ToolTip ($Option.Description + ' (default = active; omit state= for active services)') -Prefix $InlinePrefix)
         }
         'Path' {
             # binPath= and command= are filesystem paths: hand them to the engine's own

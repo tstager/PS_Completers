@@ -119,7 +119,7 @@ Value completion includes:
 
 - first `type=` values like `driver`, `service`, `userservice`, `all`
 - second `type=` values like `own`, `share`, `interact`, `kernel`, `filesys`, `rec`, `adapt`
-- `state=` values `active` (the default), `inactive`, `all`
+- `state=` values `inactive`, `all` (active services are the default; sc.exe rejects `state= active`, so omit `state=` for them)
 - numeric hints for `bufsize=` and `ri=`
 
 ### `config` / `create`
