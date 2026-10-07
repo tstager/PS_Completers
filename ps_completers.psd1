@@ -267,7 +267,7 @@
         @{
             Path    = 'df_completer/df_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:84DBD55807085F0594BCF859D36587D86E4CF69026971189B4BA80B5EA8A662F'
+            Hash    = 'SHA256:691D768A9199DF67ADD318E04613A64039118E865D84F86E51B19E9CDBA0604D'
             Targets = @(
                 @{ CommandName = 'df'; Native = $true }
                 @{ CommandName = 'df.exe'; Native = $true }

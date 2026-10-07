@@ -12,7 +12,7 @@ function Get-DfCompletionOptions {
     $fallbackOptions = @('-a', '--all', '-B', '--block-size', '--total', '-h', '--human-readable', '-H', '--si', '-i', '--inodes', '-k', '-l', '--local', '--no-sync', '--output', '-P', '--portability', '--sync', '-t', '--type', '-T', '--print-type', '-w', '-x', '--exclude-type', '-V', '--version', '--help')
     $commandCandidates = @('df.exe', 'df')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -191,7 +191,8 @@ function Get-DfPathCompletions {
 function Get-DfOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [string]$WordToComplete
     )
 
     $option = $null
@@ -201,6 +202,11 @@ function Get-DfOptionValueCompletions {
         $option = $Matches['option']
         $prefix = $Matches['value']
         $attached = $option + '='
+    } elseif ($CurrentWord -cmatch '^(?<option>-[Btx])(?<value>.+)$') {
+        # df's help documents the attached short spelling ('-BM').
+        $option = $Matches['option']
+        $prefix = $Matches['value']
+        $attached = $option
     } elseif (-not $CurrentWord.StartsWith('-')) {
         $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
         if ([string]::IsNullOrEmpty($CurrentWord)) {
@@ -210,10 +216,35 @@ function Get-DfOptionValueCompletions {
         } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
             $option = $elements[-2]
         }
+
+        # --output[=FIELD_LIST] takes its argument only attached; a separate word is an operand.
+        if ($option -ceq '--output') {
+            $option = $null
+        }
     }
 
     if ([string]::IsNullOrEmpty($option)) {
         return @()
+    }
+
+    # FIELD_LIST is comma-separated: complete the segment after the last comma, keep the
+    # earlier fields and skip the ones already listed (df rejects a repeated field).
+    $head = ''
+    $listed = @()
+    if ($option -ceq '--output') {
+        $commaIndex = $prefix.LastIndexOf(',')
+        if ($commaIndex -ge 0) {
+            $head = $prefix.Substring(0, $commaIndex + 1)
+            $prefix = $prefix.Substring($commaIndex + 1)
+            $listed = $head.Split(',')
+        }
+    }
+
+    # In argument mode PowerShell ends $wordToComplete at a ',', and replaces only that part,
+    # so the text before it is left out of CompletionText.
+    $skip = 0
+    if ($head -and $CurrentWord.Length -gt $WordToComplete.Length -and $CurrentWord.EndsWith($WordToComplete, [System.StringComparison]::Ordinal)) {
+        $skip = $CurrentWord.Length - $WordToComplete.Length
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
@@ -301,8 +332,8 @@ function Get-DfOptionValueCompletions {
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
     @(
         foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-DfCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal) -and $listed -cnotcontains $entry.Text) {
+                New-DfCompletionResult -CompletionText ($attached + $head + $entry.Text).Substring($skip) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
@@ -332,7 +363,7 @@ function Complete-Df {
         Get-DfCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-DfOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    $optionValues = @(Get-DfOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -WordToComplete $wordToComplete)
     if ($optionValues.Count -gt 0) {
         return $optionValues
     }

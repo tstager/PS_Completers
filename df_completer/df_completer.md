@@ -75,7 +75,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
-- Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
+- Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. `-B`, `-t` and `-x` also complete the attached short spelling the help documents (`-BM`, `-tntfs`). Path-valued options use the script's own path completion. See the table below.
+- `--output[=FIELD_LIST]` takes its argument only attached, so its fields are offered after `--output=` and never in the separate-word slot (`df --output source` would make `source` a file operand). FIELD_LIST is comma-separated: after a comma the next field is completed, the earlier fields are kept and fields already listed are skipped, since df rejects a repeated field.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
 - The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
@@ -93,12 +94,15 @@ df -
 df --
 df --block-size 
 df --block-size=
+df -BM
+df --output=source,
 ```
 
 Expected behavior:
 
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--block-size` shows its documented values in both the separate and the attached form
+- `-BM` offers `-BM` and `-BMB`; `--output=source,` offers the remaining fields (`fstype`, `itotal`, ...)
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 
