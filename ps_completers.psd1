@@ -1179,7 +1179,7 @@
         @{
             Path    = 'shred_completer/shred_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:1775771381B2562786F696A59700316B9335502A88F7489CED8DE5546D0D4880'
+            Hash    = 'SHA256:45F8D9D166C6FF5BCEBE11C85F408ACA5BB68D7C3B5923354F50E75471415758'
             Targets = @(
                 @{ CommandName = 'shred'; Native = $true }
                 @{ CommandName = 'shred.exe'; Native = $true }

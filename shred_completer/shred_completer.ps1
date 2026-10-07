@@ -105,8 +105,8 @@ function ConvertTo-ShredQuotedValue {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -163,7 +163,7 @@ function Get-ShredPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
