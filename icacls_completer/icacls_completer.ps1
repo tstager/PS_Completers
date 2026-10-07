@@ -22,7 +22,7 @@ if (-not (Get-Variable -Name IcaclsCompletionCatalog -Scope Script -ErrorAction 
 }
 
 function Invoke-IcaclsHelpText {
-    if (-not (Get-Command -Name icacls.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name icacls.exe -ErrorAction Ignore)) {
         return @()
     }
 
@@ -621,6 +621,19 @@ function Get-IcaclsInlineOptionCompletions {
 function Get-IcaclsIntegrityLevelCompletions {
     param([string]$WordToComplete)
 
+    # '(CI)H' unquoted parses as sub-expressions, so values with argument-mode
+    # metacharacters are quoted. The user's opening quote is stripped for matching
+    # and kept on the way out.
+    $word = if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
+    $quote = ''
+    if ($word.StartsWith('"') -or $word.StartsWith("'")) {
+        $quote = $word.Substring(0, 1)
+        $word = $word.Substring(1)
+        if ($word.EndsWith($quote)) {
+            $word = $word.Substring(0, $word.Length - 1)
+        }
+    }
+
     $prefixes = @('', '(OI)', '(CI)', '(OI)(CI)', '(CI)(OI)')
     $values = foreach ($prefix in $prefixes) {
         foreach ($level in $script:IcaclsCompletionCatalog.IntegrityLevels) {
@@ -630,7 +643,16 @@ function Get-IcaclsIntegrityLevelCompletions {
 
     $values |
         Sort-Object -Unique |
-        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*') }
+        Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($word) + '*') } |
+        ForEach-Object {
+            if ($quote -eq '"') {
+                '"' + $_.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+            } elseif ($quote -eq "'" -or $_ -match '[\s{}();,|&<>''"`$]|^[@#]') {
+                "'" + $_.Replace("'", "''") + "'"
+            } else {
+                $_
+            }
+        }
 }
 
 function Get-IcaclsPermissionCompletions {
@@ -900,7 +922,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
                 }
             }
             '/setintegritylevel' {
-                return Get-IcaclsIntegrityLevelCompletions -WordToComplete $currentWord | ForEach-Object {
+                return Get-IcaclsIntegrityLevelCompletions -WordToComplete $rawCurrentWord | ForEach-Object {
                     New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
             }

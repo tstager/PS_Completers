@@ -501,7 +501,7 @@
         @{
             Path    = 'icacls_completer/icacls_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6F8324B3513A3BE6A55EE683B44BCBE7BB9FED7A9C98A61E3F62AA2583CBEB95'
+            Hash    = 'SHA256:06315356552515B5CF5ADF092898CBBC5A0CA6AF07143AFB211485DA4A519D67'
             Targets = @(
                 @{ CommandName = 'icacls'; Native = $true }
                 @{ CommandName = 'icacls.exe'; Native = $true }

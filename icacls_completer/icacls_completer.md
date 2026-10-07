@@ -140,7 +140,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
                 }
             }
             '/setintegritylevel' {
-                return Get-IcaclsIntegrityLevelCompletions -WordToComplete $currentWord | ForEach-Object {
+                return Get-IcaclsIntegrityLevelCompletions -WordToComplete $rawCurrentWord | ForEach-Object {
                     New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
                 }
             }
@@ -302,6 +302,8 @@ Integrity-level completions are built from parsed help data and combined with pr
 - `(CI)`
 - `(OI)(CI)`
 - `(CI)(OI)`
+
+Unquoted, `(CI)H` parses as PowerShell sub-expressions, so prefixed levels are emitted single-quoted (`'(CI)H'`). A level typed after an opening `'` or `"` keeps that quote (`"(CI)(O<TAB>` -> `"(CI)(OI)H"`). An unquoted `(` starts a PowerShell expression, where the completer is not called; type a quote first.
 
 Permission completion supports:
 - simple rights after an identity prefix such as `User:F`
