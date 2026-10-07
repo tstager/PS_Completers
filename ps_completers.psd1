@@ -230,7 +230,7 @@
         @{
             Path    = 'cursor_agent_completer/cursor_agent_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:87A20BAB21E1B22B61F758EB4EEDD041DC0A7FEBD7B3B18462E21872310B69D9'
+            Hash    = 'SHA256:165CA5DA0D366A5A6A0EECC3C170B0B99284D0F2CBE5C40C8DAA6CF1D93035D9'
             Targets = @(
                 @{ CommandName = 'cursor-agent'; Native = $true }
                 @{ CommandName = 'cursor-agent.cmd'; Native = $true }

@@ -35,7 +35,7 @@ function New-CursorAgentCompletionResult {
 
 function Get-CursorAgentCommandPath {
     foreach ($candidate in @('cursor-agent.cmd', 'cursor-agent.ps1', 'cursor-agent')) {
-        $command = Get-Command -Name $candidate -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name $candidate -CommandType Application, ExternalScript -ErrorAction Ignore |
             Select-Object -First 1
 
         if ($null -ne $command) {
@@ -300,8 +300,63 @@ function Get-CursorAgentPlaceholderValue {
     }
 }
 
+function ConvertFrom-CursorAgentTypedWord {
+    # Splits the text typed so far into its value and the opening quote the
+    # user typed ('' when bare), undoing that quote style's escapes.
+    param([string]$Text)
+
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    }
+
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
+}
+
+function Test-CursorAgentArgumentNeedsQuote {
+    # Whitespace and argument-mode metacharacters (including the typographic
+    # quotes PowerShell treats as quotes) end or split a bare word; a leading
+    # '@' or '#' would start a splat or a comment.
+    param([string]$Value)
+
+    return ($Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]')
+}
+
+function ConvertTo-CursorAgentArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the typed quote style (single by default).
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if (-not $Quote) {
+        if (-not (Test-CursorAgentArgumentNeedsQuote -Value $Value)) {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
 function Get-CursorAgentPathCompletions {
-    param([string]$WordToComplete)
+    param(
+        [string]$WordToComplete,
+        [string]$CompletionPrefix = '',
+        [string]$Quote = ''
+    )
 
     if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $WordToComplete -eq '.') {
         $WordToComplete = ''
@@ -312,8 +367,14 @@ function Get-CursorAgentPathCompletions {
         $prefix = $prefix -replace '^~', $HOME
     }
 
-    $basePath = Split-Path -Path $prefix -Parent
-    $leafName = Split-Path -Path $prefix -Leaf
+    $basePath = ''
+    $leafName = ''
+    if ($prefix -match '[\\/]$') {
+        $basePath = $prefix
+    } elseif ($prefix) {
+        $basePath = Split-Path -Path $prefix -Parent
+        $leafName = Split-Path -Path $prefix -Leaf
+    }
 
     if ([string]::IsNullOrWhiteSpace($basePath)) {
         $basePath = (Get-Location).Path
@@ -323,7 +384,7 @@ function Get-CursorAgentPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $basePath -Force -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $basePath -Force -ErrorAction Ignore)
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {
@@ -344,7 +405,49 @@ function Get-CursorAgentPathCompletions {
             }
         }
 
-        [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $displayPath -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $displayText))
+        # A quoted directory drops its trailing separator, as PowerShell's own
+        # path completion does: '...\' would end in an escaped quote once the
+        # cmd launcher re-quotes it for the CLI.
+        $completionText = $CompletionPrefix + $displayPath
+        if ($Quote -or (Test-CursorAgentArgumentNeedsQuote -Value $completionText)) {
+            $completionText = ConvertTo-CursorAgentArgument -Value ($CompletionPrefix + $displayPath.TrimEnd('\', '/')) -Quote $Quote
+        }
+
+        [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $displayText))
+    }
+
+    return @($results.ToArray())
+}
+
+function Get-CursorAgentOptionValueCompletion {
+    param(
+        $Option,
+        [string]$WordToComplete,
+        [string]$CompletionPrefix = '',
+        [string]$Quote = ''
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $canonicalName = Get-CursorAgentCanonicalOptionName -Option $Option
+    $valueHints = Get-CursorAgentValueHints
+
+    if ($valueHints.ContainsKey($canonicalName)) {
+        foreach ($hint in @($valueHints[$canonicalName])) {
+            if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $hint -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+                [void]$results.Add((New-CursorAgentCompletionResult -CompletionText (ConvertTo-CursorAgentArgument -Value ($CompletionPrefix + $hint) -Quote $Quote) -ResultType 'ParameterValue' -ToolTip $Option.Description -ListItemText $hint))
+            }
+        }
+
+        return @($results.ToArray())
+    }
+
+    if ($canonicalName -in (Get-CursorAgentPathOptions)) {
+        return @(Get-CursorAgentPathCompletions -WordToComplete $WordToComplete -CompletionPrefix $CompletionPrefix -Quote $Quote)
+    }
+
+    $placeholder = Get-CursorAgentPlaceholderValue -OptionName $canonicalName
+    if ([string]::IsNullOrWhiteSpace($WordToComplete) -or $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
+        [void]$results.Add((New-CursorAgentCompletionResult -CompletionText ($CompletionPrefix + $placeholder) -ResultType 'ParameterValue' -ToolTip $Option.Description -ListItemText $placeholder))
     }
 
     return @($results.ToArray())
@@ -360,18 +463,24 @@ function Complete-CursorAgent {
     $null = Initialize-CursorAgentCompletionCatalog
     $results = New-Object System.Collections.Generic.List[object]
 
+    # Committed tokens are the elements that end before the cursor; the word
+    # under the cursor is read from its extent so a typed opening quote is
+    # kept ($wordToComplete drops it for '--opt="value').
     $tokens = @()
+    $typedText = ''
     if ($null -ne $commandAst) {
-        $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-        if ($elements.Count -gt 1) {
-            $tokens = @($elements | Select-Object -Skip 1)
-            if ($tokens.Count -gt 0 -and $tokens[-1] -eq $wordToComplete) {
-                $tokens = @($tokens | Select-Object -First ($tokens.Count - 1))
+        foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+            $extent = $element.Extent
+            if ($extent.EndOffset -lt $cursorPosition) {
+                $tokens = @($tokens + $extent.Text)
+            } elseif ($extent.StartOffset -lt $cursorPosition) {
+                $typedText = $extent.Text.Substring(0, $cursorPosition - $extent.StartOffset)
             }
         }
     }
 
-    $prefix = $wordToComplete
+    $typedWord = ConvertFrom-CursorAgentTypedWord -Text $typedText
+    $prefix = $typedWord.Value
 
     # Walk the committed tokens to the deepest validated subcommand node. Each
     # node's options and subcommands come from its own '--help' (commander does
@@ -382,6 +491,11 @@ function Complete-CursorAgent {
     while ($index -lt $tokens.Count) {
         $token = $tokens[$index]
         $index++
+
+        # Commander treats everything after '--' as positional arguments.
+        if ($token -eq '--') {
+            return @()
+        }
 
         if ($token.StartsWith('-')) {
             $option = Find-CursorAgentOption -Node $node -Token $token
@@ -403,34 +517,31 @@ function Complete-CursorAgent {
         $node = [pscustomobject]@{ Options = @(); Subcommands = @() }
     }
 
+    # Attached long form '--opt=value' (commander accepts it; root help cites
+    # '--mode=plan'): complete the value and keep '--opt=' in CompletionText.
+    # A quote typed before the option or before the value quotes the whole
+    # token, so PowerShell still passes it as one argument.
+    if ($prefix -match '^(--[^=]+)=(.*)$') {
+        $attachedName = $Matches[1]
+        $attachedValue = [pscustomobject]@{ Value = $Matches[2]; Quote = $typedWord.Quote }
+        if (-not $attachedValue.Quote) {
+            $attachedValue = ConvertFrom-CursorAgentTypedWord -Text $attachedValue.Value
+        }
+
+        $option = Find-CursorAgentOption -Node $node -Token $attachedName
+        if ($option -and $option.TakesValue) {
+            return @(Get-CursorAgentOptionValueCompletion -Option $option -WordToComplete $attachedValue.Value -CompletionPrefix "$attachedName=" -Quote $attachedValue.Quote)
+        }
+
+        return @()
+    }
+
     $previousToken = if ($tokens.Count -gt 0) { $tokens[-1] } else { $null }
 
     if ($previousToken -and $previousToken.StartsWith('-') -and -not $previousToken.Contains('=')) {
         $option = Find-CursorAgentOption -Node $node -Token $previousToken
         if ($option -and $option.TakesValue) {
-            $canonicalName = Get-CursorAgentCanonicalOptionName -Option $option
-            $valueHints = Get-CursorAgentValueHints
-
-            if ($valueHints.ContainsKey($canonicalName)) {
-                foreach ($hint in @($valueHints[$canonicalName])) {
-                    if ([string]::IsNullOrWhiteSpace($prefix) -or $hint -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-                        [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $hint -ResultType 'ParameterValue' -ToolTip $option.Description -ListItemText $hint))
-                    }
-                }
-
-                return @($results.ToArray())
-            }
-
-            if ($canonicalName -in (Get-CursorAgentPathOptions)) {
-                return @(Get-CursorAgentPathCompletions -WordToComplete $prefix)
-            }
-
-            $placeholder = Get-CursorAgentPlaceholderValue -OptionName $canonicalName
-            if ([string]::IsNullOrWhiteSpace($prefix) -or $placeholder -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-                [void]$results.Add((New-CursorAgentCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip $option.Description -ListItemText $placeholder))
-            }
-
-            return @($results.ToArray())
+            return @(Get-CursorAgentOptionValueCompletion -Option $option -WordToComplete $prefix -Quote $typedWord.Quote)
         }
     }
 
