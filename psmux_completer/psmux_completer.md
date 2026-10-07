@@ -35,7 +35,7 @@ Register-ArgumentCompleter -Native -CommandName @('psmux', 'psmux.exe') -ScriptB
 - `set-option` suggests documented option names and value hints for common booleans and enums such as `mode-keys`, `status-position`, `cursor-style`, and `bell-action`; every `*-style` option (and `status-bg`/`status-fg`) completes the documented style grammar (`fg=`/`bg=` followed by a colour, `bold`, `dim`, `underscore`, `italics`, `reverse`, named colours, `colour0`-`colour255`, `#RRGGBB`) one comma-separated segment at a time.
 - `send-keys` offers key names including `Enter`, `Escape`, arrow and navigation keys, `C-`/`M-` chords and `F1`-`F12`; a value consumed by `-t` is not counted as the key operand.
 - `display-message` offers every documented format variable (`#S`, `#W`, `#I`, `#F`, `#P`, `#T`, `#D`, `#H`, `#h`) and the conditional, comparison, substitution, truncation, basename, dirname and literal forms.
-- After the documented `--` pass-through (`new-session -- <cmd>`, `new-window -- <cmd>`) the completer offers executable names.
+- After the documented `--` pass-through (`new-session -- <cmd>`, `new-window -- <cmd>`) the completer offers executable names. An empty word offers only the common shells (`pwsh`, `powershell`, `cmd`, `python`, `git`); once a prefix is typed it also matches up to 20 executables from `PATH`, scanned once per session and rescanned when `PATH` changes.
 
 ## Dependencies or external command expectations
 

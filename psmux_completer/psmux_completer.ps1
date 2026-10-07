@@ -1,5 +1,9 @@
 Set-StrictMode -Version 2.0
 
+if (-not (Get-Variable -Name PsmuxExecutableCache -Scope Script -ErrorAction Ignore)) {
+    $script:PsmuxExecutableCache = @{ Key = $null; Entries = @() }
+}
+
 function New-PsmuxCompletionResult {
     param(
         [string]$CompletionText,
@@ -640,6 +644,41 @@ function Get-PsmuxOptionValueCompletions {
     @()
 }
 
+function Get-PsmuxPathExecutable {
+    # One PATH scan per distinct PATH/PATHEXT, first match per file name wins (the one that would run).
+    $key = "$env:PATH|$env:PATHEXT"
+    if ($script:PsmuxExecutableCache.Key -ceq $key) {
+        return $script:PsmuxExecutableCache.Entries
+    }
+
+    $extensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($extension in @("$env:PATHEXT" -split ';') + '.ps1') {
+        if ($extension) { [void]$extensions.Add($extension) }
+    }
+
+    $enumeration = [System.IO.EnumerationOptions]::new()
+    $enumeration.IgnoreInaccessible = $true
+    $seen = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($directory in @("$env:PATH" -split [System.IO.Path]::PathSeparator)) {
+        if (-not $directory -or -not [System.IO.Path]::IsPathFullyQualified($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+            continue
+        }
+
+        foreach ($file in [System.IO.Directory]::EnumerateFiles($directory, '*', $enumeration)) {
+            $fileName = [System.IO.Path]::GetFileName($file)
+            if ($extensions.Contains([System.IO.Path]::GetExtension($fileName)) -and -not $seen.ContainsKey($fileName)) {
+                $seen[$fileName] = $file
+            }
+        }
+    }
+
+    $names = [string[]]@($seen.Keys)
+    [System.Array]::Sort($names, [System.StringComparer]::CurrentCultureIgnoreCase)
+    $entries = @(foreach ($name in $names) { [pscustomobject]@{ Name = $name; Source = $seen[$name] } })
+    $script:PsmuxExecutableCache = @{ Key = $key; Entries = $entries }
+    $entries
+}
+
 function Get-PsmuxCommandTailCompletion {
     param([string]$CurrentWord)
 
@@ -650,8 +689,16 @@ function Get-PsmuxCommandTailCompletion {
         }
     }
 
-    foreach ($command in @(Get-Command -Name "$CurrentWord*" -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
-        [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $command.Name -ToolTip $command.Source))
+    # An empty word offers only the curated shells; scanning PATH for every executable is too slow for Tab.
+    if ($CurrentWord) {
+        $matched = 0
+        foreach ($command in @(Get-PsmuxPathExecutable)) {
+            if ($matched -ge 20) { break }
+            if ($command.Name.StartsWith($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [void]$suggestions.Add((New-PsmuxCompletionResult -CompletionText $command.Name -ToolTip $command.Source))
+                $matched++
+            }
+        }
     }
 
     if ($suggestions.Count -eq 0) {
