@@ -971,7 +971,7 @@
         @{
             Path    = 'reg_completer/reg_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:38DCB1015AFC592D8D40EA83E50F6AB96810985C1C76734B0B54D196115D19A5'
+            Hash    = 'SHA256:55D727641F50F2E787A76779D65765D346A53F588A6A525F3E9CED2602362FA5'
             Targets = @(
                 @{ CommandName = 'reg'; Native = $true }
                 @{ CommandName = 'reg.exe'; Native = $true }
@@ -989,7 +989,7 @@
         @{
             Path    = 'regjump_completer/regjump_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B461E9F25D15C3ACDA80B082295E1B8A6970D6CE38C00A12559FB28A7D4765A6'
+            Hash    = 'SHA256:405C1A9E4E88CAC19388EC433392DB3337857FBBC908674CE3677E2C33191488'
             Targets = @(
                 @{ CommandName = 'regjump'; Native = $true }
                 @{ CommandName = 'regjump.exe'; Native = $true }
@@ -1025,7 +1025,7 @@
         @{
             Path    = 'ru_completer/ru_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:0AFAC358B243D15E89B59EBBDF90FFD990C4BB4C92977700D29728BFBF17FD8E'
+            Hash    = 'SHA256:01965A5C08D97F4651DB5F879EC99EE74D4D5E5DB3B4C47BB04D90A974B20FC7'
             Targets = @(
                 @{ CommandName = 'ru'; Native = $true }
                 @{ CommandName = 'ru.exe'; Native = $true }

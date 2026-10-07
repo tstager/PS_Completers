@@ -147,8 +147,8 @@ function ConvertTo-RegQuotedValue {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 

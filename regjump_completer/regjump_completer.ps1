@@ -75,7 +75,7 @@ function ConvertTo-RegJumpQuotedValue {
     }
 
     if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -265,8 +265,10 @@ function Get-RegJumpRegistryPathCompletions {
         # Keys are emitted as ProviderContainer so the accepted text keeps inviting
         # the next level: an unquoted key already ends in '\', and for a quoted key
         # PSReadLine inserts the separator before the closing quote and parks the
-        # cursor there, exactly as it does for a quoted directory.
-        $completionText = if ($alwaysQuote -or $candidate -match '\s') {
+        # cursor there, exactly as it does for a quoted directory. Braces (every
+        # CLSID/GUID key), parentheses and the other argument-mode metacharacters
+        # would end or split the bare word, so those keys are quoted as well.
+        $completionText = if ($alwaysQuote -or $candidate -match '[\s{}();,|&<>''"`$]') {
             ConvertTo-RegJumpQuotedValue -Value $candidate.TrimEnd('\') -AlwaysQuote $true
         } else {
             $candidate
