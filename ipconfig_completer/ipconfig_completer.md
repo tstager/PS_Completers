@@ -58,11 +58,12 @@ Parsing behavior:
 This keeps the completion list tied to the installed command rather than a fully hard-coded command tree.
 
 ### Adapter discovery and caching
-`Get-IpconfigAdapterNames` caches adapter names for 30 seconds.
+`Get-IpconfigAdapterNames` caches adapter names for 300 seconds.
 
 Discovery order:
-1. `Get-NetAdapter -IncludeHidden` (ipconfig addresses adapters by connection name, and it prints and accepts the hidden tunnel and pseudo-interface names too)
-2. fallback parsing of `ipconfig.exe` output headings
+1. `[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()` (no module load, tens of milliseconds cold), minus the loopback, blank names and lightweight filter bindings (`<adapter>-<filter>-0000`); this yields the same connection names as `Get-NetAdapter -IncludeHidden`, including the hidden tunnel and pseudo-interface names ipconfig prints and accepts
+2. `Get-NetAdapter -IncludeHidden` (over a second cold, because it loads the NetAdapter module)
+3. fallback parsing of `ipconfig.exe` output headings
 
 A typed `*` or `?` is treated as the wildcard ipconfig documents (`/renew EL*`): the pattern itself is offered as a value, followed by the adapter names it matches.
 
@@ -124,7 +125,7 @@ the second positional value is treated as free-form after the adapter has been s
 ## Dependencies or external command expectations
 - Requires `ipconfig.exe`
 - Prefers the local `ipconfig.exe /?` output for switch discovery
-- Uses `Get-NetAdapter` when available for cheap adapter-name discovery
+- Reads adapter names from the .NET network interface list, falling back to `Get-NetAdapter` and then to `ipconfig.exe` output
 
 Because the switch catalog is generated from the local help output, exact wording and availability can vary slightly across Windows versions.
 

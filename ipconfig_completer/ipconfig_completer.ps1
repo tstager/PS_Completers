@@ -12,7 +12,7 @@ if (-not (Get-Variable -Name IpconfigCompletionCatalog -Scope Script -ErrorActio
         FreeFormClassIdOptions = @('/setclassid', '/setclassid6')
         AdapterCache          = @()
         AdapterCacheUpdated   = $null
-        AdapterCacheTtlSeconds = 30
+        AdapterCacheTtlSeconds = 300
     }
 }
 
@@ -68,7 +68,7 @@ function Remove-IpconfigOuterQuotes {
 }
 
 function Test-IpconfigCommandAvailable {
-    [bool](Get-Command -Name ipconfig.exe -ErrorAction SilentlyContinue)
+    [bool](Get-Command -Name ipconfig.exe -ErrorAction Ignore)
 }
 
 function Invoke-IpconfigHelpText {
@@ -201,7 +201,36 @@ function Get-IpconfigAdapterNames {
 
     $adapterNames = New-Object System.Collections.Generic.List[string]
 
-    if (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue) {
+    # The .NET interface list needs no module load (Get-NetAdapter costs over a
+    # second cold). It also lists the loopback and every lightweight filter
+    # binding ('<adapter>-QoS Packet Scheduler-0000'); Get-NetAdapter
+    # -IncludeHidden lists neither, so both are dropped.
+    try {
+        $interfaces = @([System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+                Where-Object { $_.NetworkInterfaceType -ne [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback -and
+                    -not [string]::IsNullOrWhiteSpace($_.Name) } |
+                ForEach-Object { $_.Name })
+    } catch {
+        $interfaces = @()
+    }
+
+    foreach ($name in $interfaces) {
+        $isFilterBinding = $false
+        if ($name -match '-\d{4}$') {
+            foreach ($baseName in $interfaces) {
+                if ($name.StartsWith($baseName + '-', [System.StringComparison]::Ordinal)) {
+                    $isFilterBinding = $true
+                    break
+                }
+            }
+        }
+
+        if (-not $isFilterBinding) {
+            $adapterNames.Add($name)
+        }
+    }
+
+    if ($adapterNames.Count -eq 0 -and (Get-Command -Name Get-NetAdapter -ErrorAction Ignore)) {
         try {
             # ipconfig addresses adapters by connection name, and it prints and
             # accepts the hidden tunnel and pseudo-interface names too.

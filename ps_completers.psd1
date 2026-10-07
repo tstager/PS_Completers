@@ -510,7 +510,7 @@
         @{
             Path    = 'ipconfig_completer/ipconfig_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5B7F9A900D44370504E4C36DF8C3529D13D60FBBDB14FBD21A90A2B8586CE6B0'
+            Hash    = 'SHA256:D84146888C54747CFFC8B5B58A093366AC54D8575AA563B24ADEB2EA1C026044'
             Targets = @(
                 @{ CommandName = 'ipconfig'; Native = $true }
                 @{ CommandName = 'ipconfig.exe'; Native = $true }
