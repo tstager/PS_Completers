@@ -11,6 +11,7 @@ The implementation is help-driven and stays within the repo's importer-safe top-
 
 - `cargo-clippy --help` supplies Clippy-specific switches
 - `cargo check --help` supplies the Cargo option surface that `cargo clippy` inherits
+- `cargo fix --help` supplies the `cargo fix` pass-through flags (`--allow-dirty`, `--allow-staged`, `--allow-no-vcs`, `--broken-code`, `--edition`, `--edition-idioms`), read lazily the first time `--fix` is on the line
 - `cargo -Z help` supplies local unstable flag values for `-Z`
 - `clippy-driver -W help` supplies lint and lint-group names
 - `rustup target list --installed`, falling back to `rustc --print target-list`, supplies target triples
@@ -27,6 +28,7 @@ Before `--`, the completer offers:
 
 - Clippy-specific options like `--no-deps`, `--fix`, and `--explain`
 - inherited Cargo check options like `--package`, `--target`, `--profile`, `--manifest-path`, and `--message-format`
+- once `--fix` appears anywhere before `--` (Clippy then runs `cargo fix`), the `cargo fix` flags `--allow-dirty`, `--allow-staged`, `--allow-no-vcs`, `--broken-code`, `--edition`, and `--edition-idioms`; all are valueless, and `cargo check` rejects them without `--fix`, so they are not offered then
 - the literal `--` argument barrier
 
 After `--`, the completer switches to Clippy lint arguments:
@@ -69,6 +71,7 @@ Validate in clean `pwsh -NoProfile` sessions with:
 - `TabExpansion2 'cargo-clippy -'`
 - `TabExpansion2 'cargo-clippy --color '`
 - `TabExpansion2 'cargo-clippy --manifest-path .\'`
+- `TabExpansion2 'cargo-clippy --fix --allow-'`
 - `TabExpansion2 'cargo-clippy -- -'`
 - `TabExpansion2 'cargo-clippy -- -W '`
 - `TabExpansion2 'cargo-clippy.exe -'`

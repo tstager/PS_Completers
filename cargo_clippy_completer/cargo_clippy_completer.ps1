@@ -22,6 +22,8 @@ function Get-CargoClippyCompletionCache {
         LintDescriptions     = @{}
         LintValueMap         = @{}
         UnstableFlags        = @()
+        FixOptions           = @()
+        FixOptionsLoaded     = $false
         LintNames            = @()
         LintNamesLoaded      = $false
         TargetTriples        = @()
@@ -333,6 +335,27 @@ function Get-CargoClippyUnstableFlags {
 
     $cache.UnstableFlags = @($flags | Sort-Object -Unique -CaseSensitive)
     $cache.UnstableFlags
+}
+
+function Get-CargoClippyFixOption {
+    # With --fix, clippy runs 'cargo fix', which adds its own flags (--allow-dirty, --broken-code,
+    # --edition, ...) on top of the check surface; 'cargo check' rejects them without --fix.
+    Initialize-CargoClippyCompletionCache
+    $cache = Get-CargoClippyCompletionCache
+    if ($cache.FixOptionsLoaded) {
+        return $cache.FixOptions
+    }
+
+    $cache.FixOptionsLoaded = $true
+    $fixOnly = foreach ($entry in (Get-CargoClippyOptionMetadataFromLines -Lines (Invoke-CargoText -Arguments @('fix', '--help'))).GetEnumerator()) {
+        if (-not $cache.CommandDescriptions.ContainsKey($entry.Key)) {
+            $cache.CommandDescriptions[$entry.Key] = $entry.Value
+            $entry.Key
+        }
+    }
+
+    $cache.FixOptions = @($fixOnly | Sort-Object -Unique -CaseSensitive)
+    $cache.FixOptions
 }
 
 function Get-CargoClippyLintCatalog {
@@ -1114,7 +1137,20 @@ function Complete-CargoClippy {
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord) -or $currentWord.StartsWith('-')) {
-        return @(Get-CargoClippyOptionCompletions -Options $cache.CommandOptions -Descriptions $cache.CommandDescriptions -CurrentWord $currentWord)
+        # clippy switches to 'cargo fix' when --fix appears anywhere before '--'.
+        $options = $cache.CommandOptions
+        foreach ($element in $commandAst.CommandElements | Select-Object -Skip 1) {
+            if ($element.Extent.Text -eq '--') {
+                break
+            }
+
+            if ($element.Extent.Text -ceq '--fix') {
+                $options = @($options) + @(Get-CargoClippyFixOption)
+                break
+            }
+        }
+
+        return @(Get-CargoClippyOptionCompletions -Options $options -Descriptions $cache.CommandDescriptions -CurrentWord $currentWord)
     }
 
     @()
