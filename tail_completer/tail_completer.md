@@ -76,7 +76,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ## Option values
 
 - `-c`, `--bytes`, `-n`, `--lines`: `<num>`, `+<num>`
-- `-f`, `--follow`: `name`, `descriptor`
+- `-f`, `--follow`: `name`, `descriptor`, attached form only (`--follow=name`, `-f=name`). The value is optional, so in the separate form (`tail --follow <Tab>`) the next word is a FILE and completes as a path.
 - `--max-unchanged-stats`: `<number>`
 - `--pid`: ids of running processes
 - `-s`, `--sleep-interval`: `1`, `5`, `<seconds>`

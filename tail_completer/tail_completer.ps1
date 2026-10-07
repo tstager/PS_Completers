@@ -12,7 +12,7 @@ function Get-TailCompletionOptions {
     $fallbackOptions = @('-c', '--bytes', '-f', '--follow', '-n', '--lines', '--pid', '-q', '--quiet', '--silent', '-s', '--sleep-interval', '--max-unchanged-stats', '--use-polling', '-v', '--verbose', '-z', '--zero-terminated', '--retry', '-F', '--debug', '-h', '--help', '-V', '--version')
     $commandCandidates = @('tail.exe', 'tail')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -210,6 +210,11 @@ function Get-TailOptionValueCompletions {
         } elseif ($elements.Count -gt 2 -and $elements[-1] -eq $CurrentWord) {
             $option = $elements[-2]
         }
+    }
+
+    # --follow's value is optional and taken only attached (--follow=name, -f=name); a separate word is a FILE operand
+    if ([string]::IsNullOrEmpty($attached) -and ($option -ceq '-f' -or $option -ceq '--follow')) {
+        return @()
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)

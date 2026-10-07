@@ -1269,7 +1269,7 @@
         @{
             Path    = 'tail_completer/tail_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:2140F5710303D97103553444F2B74FDC143F4E58EFA4482405F489AD28523EE3'
+            Hash    = 'SHA256:0F0CC489F652264D261A6370F206033F749C906BDA2FF825FB584A601123CB2F'
             Targets = @(
                 @{ CommandName = 'tail'; Native = $true }
                 @{ CommandName = 'tail.exe'; Native = $true }
