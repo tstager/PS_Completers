@@ -1251,7 +1251,7 @@
         @{
             Path    = 'systeminfo_completer/systeminfo_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E5BA1D8AFD79F81EA6D5E4C2E26C0E2B4C6C93A0BB1F39D80E979FC5E7EBD2AD'
+            Hash    = 'SHA256:1D0051C27B2FB08FDB10F511C82A4E8C68885D70DFC7860FB7FF8486868B681C'
             Targets = @(
                 @{ CommandName = 'systeminfo'; Native = $true }
                 @{ CommandName = 'systeminfo.exe'; Native = $true }

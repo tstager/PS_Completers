@@ -237,7 +237,19 @@ function Get-SysteminfoSwitchCompletions {
             continue
         }
 
+        $typedInFull = $switchText.Equals($CurrentWord, [System.StringComparison]::OrdinalIgnoreCase)
+
         switch ($key) {
+            '/u' {
+                if (-not $typedInFull -and -not $UsedSwitchLookup.ContainsKey('/s')) {
+                    $includeSwitch = $false
+                }
+            }
+            '/p' {
+                if (-not $typedInFull -and -not $UsedSwitchLookup.ContainsKey('/u')) {
+                    $includeSwitch = $false
+                }
+            }
             '/nh' {
                 if ($FormatValue -and $FormatValue.Equals('LIST', [System.StringComparison]::OrdinalIgnoreCase)) {
                     $includeSwitch = $false

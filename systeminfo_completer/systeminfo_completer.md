@@ -53,7 +53,7 @@ At the root, the completer suggests the known switches and suppresses duplicates
 
 Behavior highlights:
 - `/?` is treated as terminal and is only suggested before any other switch is present
-- `/S`, `/U`, and `/P` remain available in any order until already used, because runtime accepts flexible ordering even though the help text prints them in a nested form
+- `/U` is only suggested once `/S` is present, and `/P` only once `/U` is present, because runtime rejects them otherwise (`/U can be specified only when /S is specified.`, `/P can be specified only when /U is specified.`); within that dependency the order is free, because runtime checks presence rather than position
 - `/NH` is not suggested after `/FO LIST`
 - singleton switches are suppressed once already used
 - once `/?` is already present, the completer suppresses further filesystem fallback by returning a terminal no-more-arguments completion
@@ -112,5 +112,5 @@ That keeps the value suggestions aligned with the known `/NH` compatibility rule
 - The completer is intentionally permissive rather than fully modeling every invalid combination.
 - It does not attempt network discovery, account discovery, or password prompting.
 - `/NH` is suggested before `/FO` because runtime accepts `/NH /FO TABLE` and `/NH /FO CSV`.
-- `/S`, `/U`, and `/P` are suggested in a more flexible order than the printed help because local runtime probing showed that `systeminfo.exe` accepts them out of the canonical sequence.
+- `/S`, `/U`, and `/P` are suggested in a more flexible order than the printed help because local runtime probing showed that `systeminfo.exe` accepts them out of the canonical sequence; only the parent dependency (`/U` needs `/S`, `/P` needs `/U`) is enforced, and only against switches typed before the cursor.
 - Value placeholders are there to improve the native completion experience; they are hints, not validation.
