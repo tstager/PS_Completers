@@ -12,7 +12,7 @@ function Get-EnvCompletionOptions {
     $fallbackOptions = @('-i', '--ignore-environment', '-C', '--chdir', '-0', '--null', '-f', '--file', '-s', '-u', '--unset', '-v', '--debug', '-S', '--split-string', '-a', '--argv0', '--ignore-signal', '--default-signal', '--block-signal', '--list-signal-handling', '-h', '--help', '-V', '--version')
     $commandCandidates = @('env.exe', 'env')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -297,6 +297,188 @@ function Get-EnvOptionDescription {
     'Option for env.'
 }
 
+function Get-EnvCommandLineState {
+    # Walks the words before the cursor the way env's getopt does ('+' ordering):
+    # options until the first non-option word or '--', then an optional bare '-',
+    # then NAME=VALUE assignments, and the first word without '=' is COMMAND.
+    param(
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [int]$cursorPosition
+    )
+
+    $valueShorts = @('C', 'f', 'u', 'S', 'a')
+    $valueLongs = @('--chdir', '--file', '--unset', '--split-string', '--argv0')
+    $phase = 'Option'
+    $pendingValue = $false
+    $operandSeen = $false
+    $word = ''
+    foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $element.Extent.EndOffset) {
+            $word = $element.Extent.Text.Substring(0, $cursorPosition - $element.Extent.StartOffset)
+            break
+        }
+
+        if ($element.Extent.EndOffset -ge $cursorPosition) {
+            break
+        }
+
+        $text = if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $element.Value } else { $element.Extent.Text }
+        if ($pendingValue) {
+            $pendingValue = $false
+            continue
+        }
+
+        if ($phase -ceq 'Option') {
+            if ($text -ceq '--') {
+                $phase = 'Operand'
+            } elseif ($text.StartsWith('--')) {
+                if (-not $text.Contains('=')) {
+                    $matched = @(Get-EnvCompletionOptions | Where-Object { $_.StartsWith($text, [System.StringComparison]::Ordinal) })
+                    $long = if ($matched -ccontains $text) { $text } elseif ($matched.Count -eq 1) { $matched[0] } else { '' }
+                    $pendingValue = $valueLongs -ccontains $long
+                }
+            } elseif ($text.Length -gt 1 -and $text.StartsWith('-')) {
+                for ($index = 1; $index -lt $text.Length; $index++) {
+                    if ($valueShorts -ccontains [string]$text[$index]) {
+                        $pendingValue = $index -eq $text.Length - 1
+                        break
+                    }
+                }
+            } else {
+                $operandSeen = $true
+                $phase = if ($text -ceq '-' -or $text.Contains('=')) { 'Operand' } else { 'Argument' }
+            }
+
+            continue
+        }
+
+        if ($phase -ceq 'Operand') {
+            $operandSeen = $true
+            if (-not $text.Contains('=')) {
+                $phase = 'Argument'
+            }
+        }
+    }
+
+    $quote = ''
+    $value = $word
+    if ($value.StartsWith("'") -or $value.StartsWith('"')) {
+        $quote = $value.Substring(0, 1)
+        $value = $value.Substring(1)
+        if ($value.EndsWith($quote)) {
+            $value = $value.Substring(0, $value.Length - 1)
+        }
+
+        $value = if ($quote -eq "'") { $value.Replace("''", "'") } else { $value -replace '`(.)', '$1' }
+    }
+
+    [pscustomobject]@{
+        Phase = if ($pendingValue) { 'Value' } else { $phase }
+        Word = $word
+        Value = $value
+        Quote = $quote
+        AllowDash = -not $operandSeen
+        HasOperand = $operandSeen
+    }
+}
+
+function ConvertTo-EnvOperandText {
+    # Bare when safe and no quote was typed, otherwise in the typed quote style (single by default).
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
+function Get-EnvPathCommandList {
+    # Programs env can start (.exe/.com/.bat/.cmd) on PATH, first match in PATH order
+    # winning, sorted by name. Cached per PATH value with a short TTL so new installs show up.
+    $cache = Get-Variable -Name 'EnvPathCommandCache' -Scope Script -ErrorAction Ignore
+    $key = [string]$env:PATH
+    if ($null -ne $cache -and $cache.Value.Key -ceq $key -and $cache.Value.Expires -gt [System.Environment]::TickCount64) {
+        return $cache.Value.Commands
+    }
+
+    $extensions = [System.Collections.Generic.HashSet[string]]::new([string[]]@('.exe', '.com', '.bat', '.cmd'), [System.StringComparer]::OrdinalIgnoreCase)
+    $options = [System.IO.EnumerationOptions]::new()
+    $options.AttributesToSkip = [System.IO.FileAttributes]::None
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $commands = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $key.Split(';')) {
+        $directory = [System.Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+        if ([string]::IsNullOrWhiteSpace($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+            continue
+        }
+
+        foreach ($file in [System.IO.Directory]::EnumerateFiles($directory, '*', $options)) {
+            $name = [System.IO.Path]::GetFileName($file)
+            if ($extensions.Contains([System.IO.Path]::GetExtension($name)) -and $seen.Add($name)) {
+                $commands.Add([pscustomobject]@{ Name = $name; Source = $file; Text = (ConvertTo-EnvOperandText -Value $name -Quote '') })
+            }
+        }
+    }
+
+    $sorted = @($commands | Sort-Object -Property Name)
+    Set-Variable -Name 'EnvPathCommandCache' -Value @{ Key = $key; Expires = [System.Environment]::TickCount64 + 60000; Commands = $sorted } -Scope Script
+    $sorted
+}
+
+function Get-EnvOperandCompletionList {
+    # The operand slot: the bare '-' (implies -i), NAME= assignments from the live
+    # environment (names only) and programs on PATH, with path completion as the last tier.
+    param($State)
+
+    $value = $State.Value
+    if ($value.Contains('=')) {
+        return @()
+    }
+
+    if ($value -match '^(?:[\\/.~]|[A-Za-z]:)' -or $value -match '[\\/]') {
+        return @(Get-EnvPathCompletions -InputPath $State.Word)
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    if ($State.AllowDash -and '-'.StartsWith($value, [System.StringComparison]::Ordinal)) {
+        $results.Add((New-EnvCompletionResult -CompletionText (ConvertTo-EnvOperandText -Value '-' -Quote $State.Quote) -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'A mere - implies -i: start with an empty environment.'))
+    }
+
+    foreach ($item in (Get-ChildItem -Path Env: | Sort-Object -Property Name)) {
+        if (-not [string]::IsNullOrEmpty($item.Name) -and -not $item.Name.Contains('=') -and $item.Name.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $assignment = $item.Name + '='
+            $results.Add((New-EnvCompletionResult -CompletionText (ConvertTo-EnvOperandText -Value $assignment -Quote $State.Quote) -ListItemText $assignment -ResultType 'ParameterValue' -ToolTip ('Set environment variable ' + $item.Name + ' for COMMAND.')))
+        }
+    }
+
+    if ($value.Length -gt 0 -or $State.HasOperand) {
+        foreach ($command in Get-EnvPathCommandList) {
+            if ($command.Name.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $text = if ($State.Quote) { ConvertTo-EnvOperandText -Value $command.Name -Quote $State.Quote } else { $command.Text }
+                $results.Add([System.Management.Automation.CompletionResult]::new($text, $command.Name, 'Command', $command.Source))
+            }
+        }
+    }
+
+    if ($results.Count -eq 0 -and $value.Length -gt 0) {
+        return @(Get-EnvPathCompletions -InputPath $State.Word)
+    }
+
+    $results.ToArray()
+}
+
 function Complete-Env {
     param(
         [string]$wordToComplete,
@@ -310,9 +492,27 @@ function Complete-Env {
         Get-EnvCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
+    $state = Get-EnvCommandLineState -commandAst $commandAst -cursorPosition $cursorPosition
+    if ($state.Phase -ceq 'Argument') {
+        # Words after COMMAND belong to COMMAND, not to env.
+        if ([string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-')) {
+            return @()
+        }
+
+        return @(Get-EnvPathCompletions -InputPath $currentWord)
+    }
+
+    if ($state.Phase -ceq 'Operand') {
+        return @(Get-EnvOperandCompletionList -State $state)
+    }
+
     $optionValues = @(Get-EnvOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
         return $optionValues
+    }
+
+    if ($state.Phase -ceq 'Option' -and -not $currentWord.StartsWith('-')) {
+        return @(Get-EnvOperandCompletionList -State $state)
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
@@ -321,6 +521,10 @@ function Complete-Env {
 
     if ($currentWord.StartsWith('-')) {
         return @(
+            if ($state.Phase -ceq 'Option' -and $currentWord -ceq '-') {
+                New-EnvCompletionResult -CompletionText '-' -ListItemText '-' -ResultType 'ParameterValue' -ToolTip 'A mere - implies -i: start with an empty environment.'
+            }
+
             foreach ($option in Get-EnvCompletionOptions) {
                 if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
                     New-EnvCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-EnvOptionDescription -Option $option)
