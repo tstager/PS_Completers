@@ -1568,7 +1568,7 @@
         @{
             Path    = 'yes_completer/yes_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:27EEFEC9231E5977BE937ECBD33951BC6A70E1C4DB4B02646EA71C810DDDCE37'
+            Hash    = 'SHA256:2D3244509935AE4052505C62488A4DEBA458B2D5158E7CDDD8A94A011E57A5AB'
             Targets = @(
                 @{ CommandName = 'yes'; Native = $true }
                 @{ CommandName = 'yes.exe'; Native = $true }

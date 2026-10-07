@@ -12,7 +12,7 @@ function Get-YesCompletionOptions {
     $fallbackOptions = @('--help', '--version')
     $commandCandidates = @('yes.exe', 'yes')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,34 +84,6 @@ function New-YesCompletionResult {
     )
 }
 
-function Remove-YesOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-YesQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
-}
-
 function Get-YesCurrentToken {
     param(
         [string]$Line,
@@ -129,7 +101,7 @@ function Get-YesCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -137,54 +109,27 @@ function Get-YesCurrentToken {
     $Fallback
 }
 
-function Get-YesPathCompletions {
-    param([string]$InputPath)
+function Get-YesValueCompletions {
+    param([string]$WordToComplete)
 
-    $cleanInput = Remove-YesOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    # 'yes [STRING]...' repeats literal text ([default: y]), never a file. The placeholder only
+    # describes the empty slot; against a typed prefix it would replace the user's text.
+    $values = @(
+        @{ Text = 'y'; Tip = 'Repeat y (the default when no STRING is given).' }
+        @{ Text = 'n'; Tip = 'Repeat n, to answer no to every prompt.' }
+    )
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
+    @(
+        if ([string]::IsNullOrEmpty($WordToComplete)) {
+            New-YesCompletionResult -CompletionText '<string>' -ListItemText '<string>' -ResultType 'ParameterValue' -ToolTip 'Text to print repeatedly; default y.'
         }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        return @()
-    }
-
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
-
-    foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        foreach ($value in $values) {
+            if ($value.Text.StartsWith($WordToComplete, [System.StringComparison]::Ordinal)) {
+                New-YesCompletionResult -CompletionText $value.Text -ListItemText $value.Text -ResultType 'ParameterValue' -ToolTip $value.Tip
+            }
         }
-
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
-        }
-
-        $quotedPath = ConvertTo-YesQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        if ($item.PSIsContainer) {
-            New-YesCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
-        } else {
-            New-YesCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderItem' -ToolTip $item.FullName
-        }
-    }
+    )
 }
 
 function Get-YesOptionDescription {
@@ -205,14 +150,22 @@ function Complete-Yes {
         [int]$cursorPosition
     )
 
+    $commandText = $commandAst.ToString()
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-YesCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-YesCurrentToken -Line $commandText -CursorPosition $relativeCursor -Fallback $wordToComplete
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
+        # An empty word with a token starting right at the cursor ('yes |--help') is not a free
+        # slot; inserting a value there would corrupt that token.
+        if ($relativeCursor -lt $commandText.Length -and -not [char]::IsWhiteSpace($commandText[$relativeCursor])) {
+            return @()
+        }
+
+        return Get-YesValueCompletions -WordToComplete ''
     }
 
     if ($currentWord.StartsWith('-')) {
@@ -225,7 +178,7 @@ function Complete-Yes {
         )
     }
 
-    Get-YesPathCompletions -InputPath $currentWord
+    Get-YesValueCompletions -WordToComplete $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'yes', 'yes.exe' -ScriptBlock {
