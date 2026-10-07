@@ -356,7 +356,7 @@ function Get-UvParsedHelpData {
         foreach ($value in @($valuesByOption['<positional>'])) {
             [void]$positionalValues.Add($value)
         }
-        $valuesByOption.Remove('<positional>')
+        [void]$valuesByOption.Remove('<positional>')
     }
 
     @{

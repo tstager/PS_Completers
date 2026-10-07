@@ -1422,7 +1422,7 @@
         @{
             Path    = 'uv_completer/uv_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B722E2F8E007E8DD009C0C3B4A372BC353D5FF375A7EDBF2E31990BFD35D9632'
+            Hash    = 'SHA256:BDA54D5CC71FD81A61639C2779EE01FF17BF7FD3BAE9A8F9813D0FC711A1490B'
             Targets = @(
                 @{ CommandName = 'uv'; Native = $true }
                 @{ CommandName = 'uv.exe'; Native = $true }
