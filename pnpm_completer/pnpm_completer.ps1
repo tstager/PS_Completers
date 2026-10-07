@@ -18,6 +18,11 @@ becomes a `<PLACEHOLDER>` so the engine's filename fallback does not take over a
 non-path slot. Both the separate (`--reporter silent`) and the attached
 (`--reporter=silent`) forms are handled.
 
+Three operand slots have live values: `run` script names and the dependency names
+of `remove` / `why` / `update` / `unlink` come from the nearest package.json, and
+config keys for `config get|set|delete` and `get` / `set` come from
+`pnpm config list --json`.
+
 This script registers completion for `pnpm`, `pnpm.cmd`, `pnpm.ps1`, and the
 `pn` short alias, matching the names pnpm's own completion script registers.
 #>
@@ -29,6 +34,8 @@ if (-not (Get-Variable -Name PnpmCompletionCache -Scope Script -ErrorAction Igno
         ExecutableProbed = $false
         ExecutablePath   = $null
         Catalogs         = @{}
+        Manifests        = @{}
+        ConfigKeys       = @{}
     }
 }
 
@@ -50,7 +57,7 @@ function Get-PnpmExecutablePath {
             @{ Name = 'pnpm'; CommandType = 'Application' }
             @{ Name = 'pnpm.ps1'; CommandType = 'ExternalScript' }
         )) {
-        $command = @(Get-Command -Name $candidate.Name -CommandType $candidate.CommandType -ErrorAction SilentlyContinue) |
+        $command = @(Get-Command -Name $candidate.Name -CommandType $candidate.CommandType -ErrorAction Ignore) |
             Select-Object -First 1
 
         if ($null -eq $command) {
@@ -370,6 +377,7 @@ function Resolve-PnpmCommandPath {
     $path = New-Object System.Collections.Generic.List[string]
     $catalog = Get-PnpmCatalog -CommandPath @()
     $skipNext = $false
+    $operandCount = 0
 
     foreach ($token in @($Tokens)) {
         if ($skipNext) {
@@ -390,16 +398,20 @@ function Resolve-PnpmCommandPath {
             continue
         }
 
+        # Once the first operand is seen, every later word is an operand too.
         $match = $null
-        foreach ($command in @($catalog.Commands)) {
-            if ([string]::Equals($command.Name, $token, [System.StringComparison]::Ordinal)) {
-                $match = $command
-                break
+        if ($operandCount -eq 0) {
+            foreach ($command in @($catalog.Commands)) {
+                if ([string]::Equals($command.Name, $token, [System.StringComparison]::Ordinal)) {
+                    $match = $command
+                    break
+                }
             }
         }
 
         if ($null -eq $match) {
-            break
+            $operandCount++
+            continue
         }
 
         [void]$path.Add($match.CanonicalName)
@@ -407,9 +419,235 @@ function Resolve-PnpmCommandPath {
     }
 
     [pscustomobject]@{
-        Path    = @($path.ToArray())
-        Catalog = $catalog
+        Path         = @($path.ToArray())
+        Catalog      = $catalog
+        OperandCount = $operandCount
     }
+}
+
+function Get-PnpmWorkingDirectory {
+    param([string[]]$Tokens)
+
+    $location = Get-Location
+    if ($location.Provider.Name -ne 'FileSystem') {
+        return $null
+    }
+
+    # -C / --dir is accepted anywhere on the command line; the last one wins.
+    $directory = ''
+    $settled = @($Tokens)
+    for ($index = 0; $index -lt $settled.Count; $index++) {
+        $token = $settled[$index]
+        if ($token -ceq '-C' -or $token -ceq '--dir') {
+            if ($index + 1 -lt $settled.Count) {
+                $index++
+                $directory = $settled[$index]
+            }
+        } elseif ($token.StartsWith('--dir=', [System.StringComparison]::Ordinal)) {
+            $directory = $token.Substring(6)
+        }
+    }
+
+    $directory = $directory.Trim([char[]]@([char]34, [char]39))
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        return $location.ProviderPath
+    }
+
+    [System.IO.Path]::GetFullPath($directory, $location.ProviderPath)
+}
+
+function Get-PnpmManifestName {
+    param(
+        [string]$Directory,
+        [ValidateSet('Scripts', 'Dependencies')]
+        [string]$Kind
+    )
+
+    # The nearest package.json walking up from the working directory is the
+    # project pnpm acts on. It is read passively and re-parsed only when its
+    # timestamp changes.
+    $manifestPath = $null
+    $current = $Directory
+    while (-not [string]::IsNullOrEmpty($current)) {
+        $candidate = [System.IO.Path]::Combine($current, 'package.json')
+        if ([System.IO.File]::Exists($candidate)) {
+            $manifestPath = $candidate
+            break
+        }
+
+        $current = [System.IO.Path]::GetDirectoryName($current)
+    }
+
+    if ($null -eq $manifestPath) {
+        return @()
+    }
+
+    $cache = Get-PnpmCompletionCache
+    $stamp = [System.IO.File]::GetLastWriteTimeUtc($manifestPath)
+    $entry = $cache.Manifests[$manifestPath]
+    if ($null -eq $entry -or $entry.Stamp -ne $stamp) {
+        $scripts = New-Object System.Collections.Generic.List[object]
+        $dependencies = New-Object System.Collections.Generic.List[object]
+        $errorCountBefore = $Error.Count
+        try {
+            $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            if ($manifest -is [System.Collections.IDictionary]) {
+                if ($manifest['scripts'] -is [System.Collections.IDictionary]) {
+                    foreach ($name in $manifest['scripts'].Keys) {
+                        [void]$scripts.Add([pscustomobject]@{ Name = [string]$name; ToolTip = "${name}: $($manifest['scripts'][$name])" })
+                    }
+                }
+
+                foreach ($group in @('dependencies', 'devDependencies', 'optionalDependencies')) {
+                    if ($manifest[$group] -is [System.Collections.IDictionary]) {
+                        foreach ($name in $manifest[$group].Keys) {
+                            [void]$dependencies.Add([pscustomobject]@{ Name = [string]$name; ToolTip = "$group ${name}@$($manifest[$group][$name])" })
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Debug "pnpm completer: cannot parse ${manifestPath}: $($_.Exception.Message)"
+        } finally {
+            # A package.json mid-edit is an expected miss, not a fault to leave in $Error.
+            while ($Error.Count -gt $errorCountBefore) {
+                $Error.RemoveAt(0)
+            }
+        }
+
+        $entry = [pscustomobject]@{
+            Stamp        = $stamp
+            Scripts      = @($scripts.ToArray())
+            Dependencies = @($dependencies.ToArray())
+        }
+        $cache.Manifests[$manifestPath] = $entry
+    }
+
+    @($entry.$Kind)
+}
+
+function Get-PnpmConfigKey {
+    param([string]$Directory)
+
+    $executablePath = Get-PnpmExecutablePath
+    if ([string]::IsNullOrWhiteSpace($executablePath) -or -not [System.IO.Directory]::Exists($Directory)) {
+        return @()
+    }
+
+    # The key set changes with the project's .npmrc / pnpm-workspace.yaml and with
+    # `pnpm config set`, so it is cached per launcher and directory for 30 seconds.
+    $cache = Get-PnpmCompletionCache
+    $cacheKey = "$executablePath|$Directory"
+    $entry = $cache.ConfigKeys[$cacheKey]
+    if ($null -ne $entry -and ([datetime]::UtcNow - $entry.LoadedAt).TotalSeconds -lt 30) {
+        return @($entry.Keys)
+    }
+
+    # `config list` is read-only and, unlike most commands, does not switch to the
+    # project's pinned packageManager version, so it never reaches the network.
+    # Stdin is closed, output is drained asynchronously and a hung child is killed.
+    $output = ''
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($executablePath)
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.WorkingDirectory = $Directory
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        foreach ($argument in @('config', 'list', '--json')) {
+            [void]$process.StartInfo.ArgumentList.Add($argument)
+        }
+
+        [void]$process.Start()
+        $process.StandardInput.Close()
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+
+        if ($process.WaitForExit(5000)) {
+            $output = $standardOutput.GetAwaiter().GetResult() -replace '\e\[[0-9;?]*[ -/]*[@-~]', ''
+            [void]$standardError.GetAwaiter().GetResult()
+        } else {
+            $process.Kill($true)
+        }
+    } catch {
+        $output = ''
+    } finally {
+        $process.Dispose()
+    }
+
+    # Only key names are kept; values (auth tokens among them) are never emitted.
+    $keys = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace($output)) {
+        $errorCountBefore = $Error.Count
+        try {
+            $config = $output | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            if ($config -is [System.Collections.IDictionary]) {
+                foreach ($name in $config.Keys) {
+                    [void]$keys.Add([pscustomobject]@{ Name = [string]$name; ToolTip = "pnpm config key $name" })
+                }
+            }
+        } catch {
+            Write-Debug "pnpm completer: cannot parse 'pnpm config list --json': $($_.Exception.Message)"
+        } finally {
+            while ($Error.Count -gt $errorCountBefore) {
+                $Error.RemoveAt(0)
+            }
+        }
+    }
+
+    $cache.ConfigKeys[$cacheKey] = [pscustomobject]@{
+        LoadedAt = [datetime]::UtcNow
+        Keys     = @($keys.ToArray())
+    }
+    @($keys.ToArray())
+}
+
+function ConvertTo-PnpmQuotedValue {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ([string]::IsNullOrEmpty($Quote) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
+        return $Value
+    }
+
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    }
+
+    "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Get-PnpmOperandCompletion {
+    param(
+        [object[]]$Candidates,
+        [string]$WordToComplete
+    )
+
+    # An opening quote the user typed is kept on the inserted text; a closing one
+    # is dropped before matching.
+    $word = $WordToComplete
+    $quote = ''
+    if ($word.Length -gt 0 -and ($word[0] -eq [char]39 -or $word[0] -eq [char]34)) {
+        $quote = [string]$word[0]
+        $word = $word.Substring(1)
+        if ($word.EndsWith($quote, [System.StringComparison]::Ordinal)) {
+            $word = $word.Substring(0, $word.Length - 1)
+        }
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($candidate in @($Candidates)) {
+        if ($candidate.Name.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $completionText = ConvertTo-PnpmQuotedValue -Value $candidate.Name -Quote $quote
+            [void]$results.Add((New-PnpmCompletionResult -CompletionText $completionText -ListItemText $candidate.Name -ResultType ParameterValue -ToolTip $candidate.ToolTip))
+        }
+    }
+
+    @($results.ToArray())
 }
 
 function Get-PnpmDirectoryCompletion {
@@ -541,6 +779,29 @@ function Invoke-PnpmCompletion {
         if (Test-PnpmOptionTakesValue -Option $option) {
             return @(Get-PnpmOptionValueCompletion -Option $option -WordToComplete $word -Prefix '')
         }
+    }
+
+    # Operands with a live value source: the script name for `run`, dependency
+    # names for the commands that act on installed packages, and the config key.
+    $operands = switch -CaseSensitive ($resolved.Path -join ' ') {
+        'run' { if ($resolved.OperandCount -eq 0) { 'Scripts' } }
+        { $_ -cin @('remove', 'why', 'update', 'unlink') } { 'Dependencies' }
+        { $_ -cin @('get', 'set','config get', 'config set', 'config delete') } { if ($resolved.OperandCount -eq 0) { 'ConfigKeys' } }
+    }
+
+    if ($null -ne $operands) {
+        $directory = Get-PnpmWorkingDirectory -Tokens $tokens
+        if ($null -eq $directory) {
+            return @()
+        }
+
+        $candidates = if ($operands -eq 'ConfigKeys') {
+            Get-PnpmConfigKey -Directory $directory
+        } else {
+            Get-PnpmManifestName -Directory $directory -Kind $operands
+        }
+
+        return @(Get-PnpmOperandCompletion -Candidates @($candidates) -WordToComplete $word)
     }
 
     # A pnpm node either dispatches to subcommands or takes operands. When it takes

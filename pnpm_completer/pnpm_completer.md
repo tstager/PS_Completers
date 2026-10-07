@@ -71,10 +71,36 @@ prefix on the inserted text.
 
 ## Operand slots
 
-A pnpm node either dispatches to subcommands or takes operands. When the
-resolved node has no subcommands, the completer returns nothing for a bare word,
-so PowerShell's own path completion runs for operands such as
-`pnpm add ./local-package`.
+A pnpm node either dispatches to subcommands or takes operands. Three operand
+slots have a live value source:
+
+| Slot | Values | Source |
+| --- | --- | --- |
+| `pnpm run <SCRIPT>` (first operand only) | script names | `scripts` in the nearest `package.json` |
+| `pnpm remove` / `why` / `update` / `unlink <PACKAGE>...` | dependency names | `dependencies`, `devDependencies`, `optionalDependencies` in the nearest `package.json` |
+| `pnpm config get` / `set` / `delete <KEY>`, `pnpm get` / `set <KEY>` (first operand only) | config key names | `pnpm config list --json` |
+
+- The nearest `package.json` is found by walking up from the working directory,
+  which honours `-C <dir>`, `--dir <dir>` and `--dir=<dir>` anywhere on the line.
+  It is read passively (no process) and re-parsed only when its timestamp
+  changes. A manifest that does not parse yields no values and leaves nothing in
+  `$Error`.
+- `pnpm config list --json` runs with stdin closed, output drained
+  asynchronously and a 5 s kill timeout, and its key set is cached per launcher
+  and directory for 30 seconds. Only key names are emitted, never values. Unlike
+  most pnpm commands, `config list` does not switch to a version pinned in the
+  project's `packageManager` field, so it never reaches the network (checked
+  against a `pnpm@99.0.0` pin, where `pnpm list` tries to fetch and fails).
+- `test`, `start`, `stop` and `restart` take arguments passed verbatim to the
+  script, not script names, so they get no values.
+- Names are quoted when they contain whitespace or an argument-mode
+  metacharacter, or start with `@` or `#` (`'@types/node'`, `'@jsr:registry'`).
+  A quote the user typed is kept: `pnpm remove "@t` -> `"@types/node"`. A bare
+  `@t` is a splatted-variable token to PowerShell, which completes variables
+  there without calling the completer.
+
+Every other operand slot returns nothing for a bare word, so PowerShell's own
+path completion runs for operands such as `pnpm add ./local-package`.
 
 ## Import-CompleterScript compatibility
 
@@ -89,7 +115,7 @@ The top level stays inside the `CompleterActions` strict import grammar:
 
 ## Runtime notes
 
-- Local pnpm version during this revision: `12.4.1`
+- Local pnpm version during this revision: `12.9.1`
 - Local launcher names observed: `pnpm`, `pnpm.cmd`, `pnpm.ps1`; no `pnpm.exe`
 - `pnpm help -a` does not exist in pnpm 12; the root list comes from `pnpm help`
 - The completer deliberately does not load `pnpm completion pwsh`. That
@@ -114,6 +140,11 @@ Validated in clean `pwsh -NoProfile` sessions with `TabExpansion2`:
 - `pnpm --dir ` -> directories only
 - `pnpm -r add -` and `pnpm -C . config ` -> correct per-command surface
 - `pnpm config set` with the cursor at the end of `set` -> `set`
+- `pnpm run ` -> the project's script names; `pnpm run b` with the cursor
+  mid-line before `--if-present` -> `build`, `build:prod`
+- `pnpm remove ` -> `'@types/node' lodash typescript fsevents`
+- `pnpm -C other run ` -> the scripts of `other/package.json`
+- `pnpm config get reg` -> `registries`, `registry`
 - `pn ` -> the same root command list
 - `$x = 1; pnpm ad` -> the same result as at the start of a line
 - `$Error` did not grow across the probe set
