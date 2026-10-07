@@ -11,6 +11,8 @@ It uses a help-driven command model built from the installed `rustup --help` and
 - components via `rustup component list` and `rustup component list --installed`
 - host triples inferred from installed toolchains and installed targets
 
+Component and target lists follow the toolchain on the line: `--toolchain <name>`, `--toolchain=<name>`, or a leading `+<name>` adds `--toolchain <name>` to the list call, so `rustup +1.95.0 component remove <Tab>` offers what is installed on 1.95.0. Only an installed toolchain (exact name, or a short name like `stable` or `1.95.0` whose host-qualified form is installed) scopes the list; any other name keeps the default toolchain's list, so completion never queries or installs a missing toolchain. Each list is cached per toolchain for the session.
+
 The script caches parsed help and discovery results in script scope on first use. Nothing is executed at import time besides the literal `Register-ArgumentCompleter -Native` call, which keeps it safe for `Import-CompleterScript`-style loading.
 
 ## Covered completion surfaces

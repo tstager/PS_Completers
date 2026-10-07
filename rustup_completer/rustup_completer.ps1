@@ -9,6 +9,7 @@ function Get-RustupCache {
         CommandPath    = $null
         HelpByKey      = @{}
         Toolchains     = $null
+        Installed      = $null
         Targets        = @{}
         Components     = @{}
         HostTriples    = $null
@@ -29,7 +30,7 @@ function Resolve-RustupCommandPath {
         return $cache.CommandPath
     }
 
-    $command = Get-Command -Name 'rustup.exe', 'rustup' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name 'rustup.exe', 'rustup' -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $cache.CommandPath = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -269,6 +270,8 @@ function Get-RustupKnownToolchains {
         }
     }
 
+    $cache.Installed = @($names.ToArray())
+
     foreach ($fallback in @('stable', 'beta', 'nightly')) {
         if (-not $names.Contains($fallback)) {
             $names.Add($fallback)
@@ -279,11 +282,35 @@ function Get-RustupKnownToolchains {
     $cache.Toolchains
 }
 
+function Resolve-RustupScopeToolchain {
+    param([string]$Name)
+
+    # Only an installed toolchain scopes a list: 'stable' or '1.95.0' match
+    # their host-qualified names. Anything else keeps the unscoped list, so a
+    # lookup never asks rustup about (or auto-installs) a missing toolchain.
+    $Name = Remove-RustupOuterQuotes -Value $Name
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+
+    $null = Get-RustupKnownToolchains
+    foreach ($installed in @((Get-RustupCache).Installed)) {
+        if ($installed -ceq $Name -or $installed.StartsWith($Name + '-', [System.StringComparison]::Ordinal)) {
+            return $Name
+        }
+    }
+
+    $null
+}
+
 function Get-RustupTargetValues {
-    param([bool]$InstalledOnly)
+    param(
+        [bool]$InstalledOnly,
+        [string]$Toolchain
+    )
 
     $cache = Get-RustupCache
-    $key = if ($InstalledOnly) { 'installed' } else { 'all' }
+    $key = $(if ($InstalledOnly) { 'installed' } else { 'all' }) + '|' + $Toolchain
     if ($cache.Targets.ContainsKey($key)) {
         return $cache.Targets[$key]
     }
@@ -292,9 +319,10 @@ function Get-RustupTargetValues {
     if ($InstalledOnly) {
         $args += '--installed'
     }
+    $scopeArgs = if ($Toolchain) { @('--toolchain', $Toolchain) } else { @() }
 
     $values = New-Object System.Collections.Generic.List[string]
-    foreach ($line in (Invoke-RustupText -Arguments $args)) {
+    foreach ($line in (Invoke-RustupText -Arguments ($args + $scopeArgs))) {
         if ($line -match '^([^\s]+)') {
             $value = $matches[1].Trim()
             if (-not [string]::IsNullOrWhiteSpace($value) -and -not $values.Contains($value)) {
@@ -312,10 +340,13 @@ function Get-RustupTargetValues {
 }
 
 function Get-RustupComponentValues {
-    param([bool]$InstalledOnly)
+    param(
+        [bool]$InstalledOnly,
+        [string]$Toolchain
+    )
 
     $cache = Get-RustupCache
-    $key = if ($InstalledOnly) { 'installed' } else { 'all' }
+    $key = $(if ($InstalledOnly) { 'installed' } else { 'all' }) + '|' + $Toolchain
     if ($cache.Components.ContainsKey($key)) {
         return $cache.Components[$key]
     }
@@ -324,9 +355,10 @@ function Get-RustupComponentValues {
     if ($InstalledOnly) {
         $args += '--installed'
     }
+    $scopeArgs = if ($Toolchain) { @('--toolchain', $Toolchain) } else { @() }
 
     $values = New-Object System.Collections.Generic.List[string]
-    foreach ($line in (Invoke-RustupText -Arguments $args)) {
+    foreach ($line in (Invoke-RustupText -Arguments ($args + $scopeArgs))) {
         if ($line -match '^([^\s]+)') {
             $value = $matches[1].Trim()
             if (-not [string]::IsNullOrWhiteSpace($value) -and -not $values.Contains($value)) {
@@ -413,7 +445,8 @@ function Get-RustupValueCatalog {
         [string[]]$ContextPath,
         [string]$OptionName,
         [bool]$IsPositional,
-        [int]$PositionalIndex = -1
+        [int]$PositionalIndex = -1,
+        [string]$Toolchain
     )
 
     $key = if ($ContextPath.Count -gt 0) { $ContextPath -join ' ' } else { '<root>' }
@@ -441,26 +474,26 @@ function Get-RustupValueCatalog {
         'default' { if ($IsPositional) { return @('none') + @(Get-RustupKnownToolchains) } }
         'update' { if ($IsPositional) { return @(Get-RustupKnownToolchains) } }
         'target add' {
-            if ($IsPositional) { return @(Get-RustupTargetValues -InstalledOnly $false) }
+            if ($IsPositional) { return @(Get-RustupTargetValues -InstalledOnly $false -Toolchain $Toolchain) }
             if ($OptionName -eq '--toolchain') { return @(Get-RustupKnownToolchains) }
         }
         'target remove' {
-            if ($IsPositional) { return @(Get-RustupTargetValues -InstalledOnly $true) }
+            if ($IsPositional) { return @(Get-RustupTargetValues -InstalledOnly $true -Toolchain $Toolchain) }
             if ($OptionName -eq '--toolchain') { return @(Get-RustupKnownToolchains) }
         }
         'target list' { if ($OptionName -eq '--toolchain') { return @(Get-RustupKnownToolchains) } }
         'component add' {
-            if ($IsPositional) { return @(Get-RustupComponentValues -InstalledOnly $false) }
+            if ($IsPositional) { return @(Get-RustupComponentValues -InstalledOnly $false -Toolchain $Toolchain) }
             switch ($OptionName) {
                 '--toolchain' { return @(Get-RustupKnownToolchains) }
-                '--target' { return @(Get-RustupTargetValues -InstalledOnly $false) }
+                '--target' { return @(Get-RustupTargetValues -InstalledOnly $false -Toolchain $Toolchain) }
             }
         }
         'component remove' {
-            if ($IsPositional) { return @(Get-RustupComponentValues -InstalledOnly $true) }
+            if ($IsPositional) { return @(Get-RustupComponentValues -InstalledOnly $true -Toolchain $Toolchain) }
             switch ($OptionName) {
                 '--toolchain' { return @(Get-RustupKnownToolchains) }
-                '--target' { return @(Get-RustupTargetValues -InstalledOnly $true) }
+                '--target' { return @(Get-RustupTargetValues -InstalledOnly $true -Toolchain $Toolchain) }
             }
         }
         'component list' { if ($OptionName -eq '--toolchain') { return @(Get-RustupKnownToolchains) } }
@@ -614,10 +647,11 @@ function Get-RustupValueCompletions {
         [string]$OptionName,
         [bool]$IsPositional,
         [int]$PositionalIndex,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [string]$Toolchain
     )
 
-    $values = @(Get-RustupValueCatalog -ContextPath $ContextPath -OptionName $OptionName -IsPositional $IsPositional -PositionalIndex $PositionalIndex)
+    $values = @(Get-RustupValueCatalog -ContextPath $ContextPath -OptionName $OptionName -IsPositional $IsPositional -PositionalIndex $PositionalIndex -Toolchain $Toolchain)
     if ($values.Count -gt 0) {
         return @(Get-RustupNamedCompletions -Values $values -CurrentWord $CurrentWord -ToolTip 'rustup value' -ResultType 'ParameterValue')
     }
@@ -661,12 +695,21 @@ function Complete-Rustup {
     )
     $definition = Get-RustupHelpDefinition -CommandPath $contextPath
 
+    # '--toolchain <name>' wins over a leading '+name'; either one scopes the
+    # component and target lists.
+    $scopeToolchain = if ($state.OptionValues.ContainsKey('--toolchain')) {
+        $state.OptionValues['--toolchain']
+    } elseif ($state.ToolchainOverride) {
+        $state.ToolchainOverride.Substring(1)
+    }
+    $scopeToolchain = Resolve-RustupScopeToolchain -Name $scopeToolchain
+
     if ($state.PendingOption) {
         if ($state.PendingOption -eq '--path') {
             return @(Get-RustupPathCompletions -InputPath $currentWord)
         }
 
-        return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $state.PendingOption -IsPositional $false -PositionalIndex -1 -CurrentWord $currentWord)
+        return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $state.PendingOption -IsPositional $false -PositionalIndex -1 -CurrentWord $currentWord -Toolchain $scopeToolchain)
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('+') -and
@@ -700,7 +743,7 @@ function Complete-Rustup {
                     })
             }
 
-            return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $primaryName -IsPositional $false -PositionalIndex -1 -CurrentWord $attachedValue | ForEach-Object {
+            return @(Get-RustupValueCompletions -ContextPath $contextPath -OptionName $primaryName -IsPositional $false -PositionalIndex -1 -CurrentWord $attachedValue -Toolchain $scopeToolchain | ForEach-Object {
                     New-RustupCompletionResult -CompletionText ($attachedPrefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
                 })
         }
@@ -727,7 +770,7 @@ function Complete-Rustup {
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    $valueResults = @(Get-RustupValueCompletions -ContextPath $state.ContextPath -OptionName $null -IsPositional $true -PositionalIndex $state.Positionals.Count -CurrentWord $currentWord)
+    $valueResults = @(Get-RustupValueCompletions -ContextPath $state.ContextPath -OptionName $null -IsPositional $true -PositionalIndex $state.Positionals.Count -CurrentWord $currentWord -Toolchain $scopeToolchain)
     foreach ($item in $valueResults) {
         $results.Add($item)
     }
