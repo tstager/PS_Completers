@@ -50,7 +50,8 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The current word is the text of the parser's command element that contains the cursor, cut at the cursor, so completion works when the command is not the first statement on the line. An unterminated quote is one element running to the cursor, so `tsort "some fi` completes `"some file.txt"` instead of matching the fragment after the space.
+- Path completions keep the quote character the user typed: inside `"` they escape `` ` ``, `"` and `$` with a backtick; inside `'` they double embedded `'`. Unquoted names that contain whitespace or an argument-mode metacharacter (`{ } ( ) ; , | & < > ' " ` $`, or a leading `@` or `#`) are single-quoted.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios

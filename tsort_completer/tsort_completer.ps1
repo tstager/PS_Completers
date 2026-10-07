@@ -12,7 +12,7 @@ function Get-TsortCompletionOptions {
     $fallbackOptions = @('-o', '--output', '--help', '--version')
     $commandCandidates = @('tsort.exe', 'tsort')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -97,16 +97,19 @@ function Remove-TsortOuterQuotes {
 function ConvertTo-TsortQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if ($QuoteChar -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
     }
 
     $Value
@@ -114,34 +117,30 @@ function ConvertTo-TsortQuotedValue {
 
 function Get-TsortCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-TsortPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-TsortOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if ($InputPath -match '^[''"]') { $InputPath.Substring(0, 1) } else { '' }
+    if ($quoteChar -eq "'") {
+        $cleanInput = $cleanInput.Replace("''", "'")
+    } elseif ($quoteChar -eq '"') {
+        $cleanInput = $cleanInput -replace '`(.)', '$1'
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -178,7 +177,7 @@ function Get-TsortPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-TsortQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-TsortQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-TsortCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -199,17 +198,14 @@ function Get-TsortOptionDescription {
 }
 
 function Complete-Tsort {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote, spans past the cursor and splits on commas.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-TsortCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-TsortCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
