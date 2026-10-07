@@ -103,7 +103,7 @@
         @{
             Path    = 'cargo_clippy_completer/cargo_clippy_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6038CDEF828ECB5F410C04D9794854A8BA7B76ECD7004C4D70A1E33F01F3EFAC'
+            Hash    = 'SHA256:DA51495D7941502281757CCF7CDFB7785ED8F31B15257619623216F8D8BFBFC3'
             Targets = @(
                 @{ CommandName = 'cargo-clippy'; Native = $true }
                 @{ CommandName = 'cargo-clippy.exe'; Native = $true }

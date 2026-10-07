@@ -14,7 +14,8 @@ The implementation is help-driven and stays within the repo's importer-safe top-
 - `cargo -Z help` supplies local unstable flag values for `-Z`
 - `clippy-driver -W help` supplies lint and lint-group names
 - `rustup target list --installed`, falling back to `rustc --print target-list`, supplies target triples
-- the nearest `Cargo.toml`, found by walking up from the current directory, supplies profile, feature, package, and target names
+- the nearest `Cargo.toml`, found by walking up from the current directory (or the `-m`/`--manifest-path` already on the line), supplies profile, feature, package, and target names; its workspace root adds every `[workspace].members` package (globs expanded, `exclude` honoured), and targets are also auto-discovered from `src/main.rs`, `src/bin`, `examples`, `tests`, and `benches` the way Cargo does
+- manifest facts are file reads only (no process) and are cached for 10 seconds per manifest path
 
 Option tokens are keyed ordinally, so `-V` (`--version`) and `-v` (`--verbose`) stay distinct and `-F` keeps its `--features` meaning before `--`. A value slot with no known source echoes what has been typed rather than collapsing to nothing.
 
@@ -42,8 +43,8 @@ Representative value behavior:
 - `--config` -> filesystem completion plus `<KEY=VALUE>`
 - `--profile` -> the built-in profiles plus every `[profile.<name>]` in the manifest
 - `--features`, `-F` -> `[features]` keys from the manifest
-- `--package`, `-p`, `--exclude` -> package names from the manifest
-- `--bin`, `--example`, `--test`, `--bench` -> the matching `[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]` names
+- `--package`, `-p`, `--exclude` -> the package plus every workspace member's package name
+- `--bin`, `--example`, `--test`, `--bench` -> explicit `[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]` names plus auto-discovered targets (respecting `autobins`-style keys, explicit `path` overrides, and the edition 2015 rule) for the package Cargo would select: the current package, or at a workspace root its `default-members` (all members when the root is virtual)
 - `--target` -> installed target triples
 - `--explain` and the lint flags after `--` -> lint and lint-group names from `clippy-driver -W help`
 

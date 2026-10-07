@@ -28,6 +28,7 @@ function Get-CargoClippyCompletionCache {
         TargetTriplesLoaded  = $false
         ManifestFacts        = $null
         ManifestLoadedFor    = $null
+        ManifestLoadedAt     = $null
     }
 
     Set-Variable -Name CargoClippyCompletionCache -Scope Script -Value $newCache
@@ -40,7 +41,7 @@ function Resolve-CargoClippyCommandName {
         return $cache.CargoClippyCommand
     }
 
-    $command = Get-Command -Name cargo-clippy.exe, cargo-clippy -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name cargo-clippy.exe, cargo-clippy -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $cache.CargoClippyCommand = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -54,7 +55,7 @@ function Resolve-CargoCommandName {
         return $cache.CargoCommand
     }
 
-    $command = Get-Command -Name cargo.exe, cargo -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name cargo.exe, cargo -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $cache.CargoCommand = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -297,7 +298,7 @@ function Get-CargoClippyLintCatalog {
 
     $cache.LintNamesLoaded = $true
 
-    $driver = Get-Command -Name clippy-driver.exe, clippy-driver -ErrorAction SilentlyContinue | Select-Object -First 1
+    $driver = Get-Command -Name clippy-driver.exe, clippy-driver -ErrorAction Ignore | Select-Object -First 1
     if (-not $driver) {
         return $cache.LintNames
     }
@@ -353,7 +354,7 @@ function Get-CargoClippyTargetTripleList {
 
     $cache.TargetTriplesLoaded = $true
 
-    $rustup = Get-Command -Name rustup.exe, rustup -ErrorAction SilentlyContinue | Select-Object -First 1
+    $rustup = Get-Command -Name rustup.exe, rustup -ErrorAction Ignore | Select-Object -First 1
     if ($rustup) {
         $raw = try {
             $null | & $rustup.Source 'target' 'list' '--installed' 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ }
@@ -365,7 +366,7 @@ function Get-CargoClippyTargetTripleList {
     }
 
     if (@($cache.TargetTriples).Count -eq 0) {
-        $rustc = Get-Command -Name rustc.exe, rustc -ErrorAction SilentlyContinue | Select-Object -First 1
+        $rustc = Get-Command -Name rustc.exe, rustc -ErrorAction Ignore | Select-Object -First 1
         if ($rustc) {
             $raw = try {
                 $null | & $rustc.Source '--print' 'target-list' 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ }
@@ -380,22 +381,308 @@ function Get-CargoClippyTargetTripleList {
     $cache.TargetTriples
 }
 
+function Add-CargoClippyTomlArrayString {
+    param(
+        [string]$Text,
+        [System.Collections.Generic.List[string]]$Into
+    )
+
+    # Collects the quoted strings of a (possibly multi-line) TOML array; returns $true once the
+    # closing bracket has been seen. A '#' outside a string ends the line.
+    foreach ($match in [regex]::Matches($Text, '"(?<s>[^"]*)"|''(?<s>[^'']*)''|(?<c>#)|(?<e>\])')) {
+        if ($match.Groups['c'].Success) {
+            return $false
+        }
+
+        if ($match.Groups['e'].Success) {
+            return $true
+        }
+
+        [void]$Into.Add($match.Groups['s'].Value)
+    }
+
+    $false
+}
+
+function Read-CargoClippyManifestFile {
+    param([string]$Path)
+
+    $info = [pscustomobject]@{
+        Path             = $Path
+        PackageName      = $null
+        Edition          = $null
+        WorkspacePointer = $null
+        HasWorkspace     = $false
+        Members          = [System.Collections.Generic.List[string]]::new()
+        DefaultMembers   = $null
+        Exclude          = [System.Collections.Generic.List[string]]::new()
+        Profiles         = [System.Collections.Generic.List[string]]::new()
+        Features         = [System.Collections.Generic.List[string]]::new()
+        AutoTargets      = @{}
+        ExplicitTargets  = @{}
+        ExplicitPaths    = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    }
+
+    foreach ($kind in @('bin', 'example', 'test', 'bench')) {
+        $info.ExplicitTargets[$kind] = [System.Collections.Generic.List[string]]::new()
+    }
+
+    $lines = if ([System.IO.File]::Exists($Path)) {
+        try {
+            [System.IO.File]::ReadAllLines($Path)
+        } catch {
+            @()
+        }
+    } else {
+        @()
+    }
+
+    $section = ''
+    $openArray = $null
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($null -ne $openArray) {
+            if (Add-CargoClippyTomlArrayString -Text $trimmed -Into $openArray) {
+                $openArray = $null
+            }
+            continue
+        }
+
+        if ($trimmed -match '^\[\[?([^\]]+)\]\]?$') {
+            $section = $matches[1].Trim()
+            if ($section -match '^profile\.([^.]+)') {
+                [void]$info.Profiles.Add($matches[1].Trim('"', "'"))
+            } elseif ($section -eq 'workspace') {
+                $info.HasWorkspace = $true
+            }
+            continue
+        }
+
+        if ($trimmed -match '^([A-Za-z0-9_"''.-]+)\s*=\s*(.*)$') {
+            $key = $matches[1].Trim('"', "'")
+            $valueText = $matches[2]
+            $stringValue = if ($valueText -match '^["'']([^"'']+)["'']') { $matches[1] } else { $null }
+            switch -Regex ($section) {
+                '^features$' { [void]$info.Features.Add($key) }
+                '^package$' {
+                    switch -Regex ($key) {
+                        '^name$' { $info.PackageName = $stringValue }
+                        '^edition$' { $info.Edition = $stringValue }
+                        '^workspace$' { $info.WorkspacePointer = $stringValue }
+                        '^edition\.workspace$' { $info.Edition = 'workspace' }
+                        '^auto(bin|example|test|bench)s$' {
+                            $autoKind = $matches[1]
+                            $info.AutoTargets[$autoKind] = $valueText -match '^true\b'
+                        }
+                    }
+                }
+                '^(bin|example|test|bench)$' {
+                    if ($key -eq 'name' -and $stringValue) {
+                        [void]$info.ExplicitTargets[$section].Add($stringValue)
+                    } elseif ($key -eq 'path' -and $stringValue) {
+                        [void]$info.ExplicitPaths.Add(($stringValue -replace '\\', '/' -replace '^\./', ''))
+                    }
+                }
+                '^workspace$' {
+                    $list = $null
+                    if ($key -eq 'members') {
+                        $list = $info.Members
+                    } elseif ($key -eq 'exclude') {
+                        $list = $info.Exclude
+                    } elseif ($key -eq 'default-members') {
+                        $info.DefaultMembers = [System.Collections.Generic.List[string]]::new()
+                        $list = $info.DefaultMembers
+                    }
+
+                    if ($null -ne $list -and $valueText.StartsWith('[') -and -not (Add-CargoClippyTomlArrayString -Text $valueText -Into $list)) {
+                        $openArray = $list
+                    }
+                }
+            }
+        }
+    }
+
+    $info
+}
+
+function Get-CargoClippyWorkspaceMemberDirectory {
+    param(
+        [object]$Workspace,
+        [System.Collections.Generic.List[string]]$Patterns
+    )
+
+    $rootDirectory = [System.IO.Path]::GetDirectoryName($Workspace.Path)
+    $excluded = @($Workspace.Exclude | ForEach-Object { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($rootDirectory, $_)).TrimEnd('\', '/') })
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($pattern in $Patterns) {
+        # Expand glob members one path segment at a time; Get-ChildItem wildcards are far too slow on Tab.
+        $directories = @($rootDirectory)
+        foreach ($segment in ($pattern -split '[\\/]' | Where-Object { $_ -and $_ -ne '.' })) {
+            $directories = @(foreach ($parent in $directories) {
+                    if ([WildcardPattern]::ContainsWildcardCharacters($segment)) {
+                        if ([System.IO.Directory]::Exists($parent)) {
+                            $wildcard = [WildcardPattern]::new($segment, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+                            foreach ($child in [System.IO.Directory]::GetDirectories($parent)) {
+                                if ($wildcard.IsMatch([System.IO.Path]::GetFileName($child))) {
+                                    $child
+                                }
+                            }
+                        }
+                    } else {
+                        [System.IO.Path]::Combine($parent, $segment)
+                    }
+                })
+        }
+
+        foreach ($directory in $directories) {
+            $directory = [System.IO.Path]::GetFullPath($directory).TrimEnd('\', '/')
+            $isExcluded = $false
+            foreach ($excludedDirectory in $excluded) {
+                if ($directory -eq $excludedDirectory -or $directory.StartsWith($excludedDirectory + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isExcluded = $true
+                }
+            }
+
+            if (-not $isExcluded -and [System.IO.File]::Exists([System.IO.Path]::Combine($directory, 'Cargo.toml')) -and $seen.Add($directory)) {
+                $directory
+            }
+        }
+    }
+}
+
+function Find-CargoClippyWorkspaceRoot {
+    param([object]$Manifest)
+
+    if ($Manifest.HasWorkspace) {
+        return $Manifest
+    }
+
+    if (-not $Manifest.PackageName) {
+        return $null
+    }
+
+    $packageDirectory = [System.IO.Path]::GetDirectoryName($Manifest.Path)
+    $root = $null
+    if ($Manifest.WorkspacePointer) {
+        $candidate = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($packageDirectory, $Manifest.WorkspacePointer, 'Cargo.toml'))
+        $root = Read-CargoClippyManifestFile -Path $candidate
+    } else {
+        $directory = [System.IO.Path]::GetDirectoryName($packageDirectory)
+        while (-not [string]::IsNullOrWhiteSpace($directory)) {
+            $candidate = [System.IO.Path]::Combine($directory, 'Cargo.toml')
+            if ([System.IO.File]::Exists($candidate)) {
+                $parsed = Read-CargoClippyManifestFile -Path $candidate
+                if ($parsed.HasWorkspace) {
+                    $root = $parsed
+                    break
+                }
+            }
+
+            $directory = [System.IO.Path]::GetDirectoryName($directory)
+        }
+    }
+
+    # A package below a workspace it is not a member of (or is excluded from) builds standalone.
+    if ($null -eq $root -or -not $root.HasWorkspace) {
+        return $null
+    }
+
+    $members = @(Get-CargoClippyWorkspaceMemberDirectory -Workspace $root -Patterns $root.Members)
+    if ($members -contains $packageDirectory.TrimEnd('\', '/')) {
+        return $root
+    }
+
+    $null
+}
+
+function Add-CargoClippyPackageTarget {
+    param(
+        [object]$Manifest,
+        [System.Collections.Generic.Dictionary[string, object]]$Targets
+    )
+
+    $packageDirectory = [System.IO.Path]::GetDirectoryName($Manifest.Path)
+    $layout = @{ bin = 'src/bin'; example = 'examples'; test = 'tests'; bench = 'benches' }
+
+    # Every filesystem call costs about a millisecond on a scanned drive, so list each directory once.
+    $present = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in [System.IO.Directory]::GetDirectories($packageDirectory)) {
+        [void]$present.Add([System.IO.Path]::GetFileName($entry))
+    }
+
+    if ($present.Contains('src')) {
+        foreach ($entry in [System.IO.Directory]::GetFileSystemEntries([System.IO.Path]::Combine($packageDirectory, 'src'))) {
+            [void]$present.Add('src/' + [System.IO.Path]::GetFileName($entry))
+        }
+    }
+
+    foreach ($kind in @('bin', 'example', 'test', 'bench')) {
+        foreach ($name in $Manifest.ExplicitTargets[$kind]) {
+            [void]$Targets[$kind].Add($name)
+        }
+
+        # Edition 2015 (also the default when no edition is set) stops inferring a target kind as
+        # soon as one target of that kind is declared explicitly.
+        $auto = if ($Manifest.AutoTargets.ContainsKey($kind)) {
+            $Manifest.AutoTargets[$kind]
+        } else {
+            -not (($null -eq $Manifest.Edition -or $Manifest.Edition -eq '2015') -and $Manifest.ExplicitTargets[$kind].Count -gt 0)
+        }
+
+        if (-not $auto) {
+            continue
+        }
+
+        if ($kind -eq 'bin' -and $Manifest.PackageName -and -not $Manifest.ExplicitPaths.Contains('src/main.rs') -and $present.Contains('src/main.rs')) {
+            [void]$Targets[$kind].Add($Manifest.PackageName)
+        }
+
+        $relative = $layout[$kind]
+        if (-not $present.Contains($relative)) {
+            continue
+        }
+
+        foreach ($entry in [System.IO.DirectoryInfo]::new([System.IO.Path]::Combine($packageDirectory, $relative)).GetFileSystemInfos()) {
+            if ($entry -is [System.IO.DirectoryInfo]) {
+                if (-not $Manifest.ExplicitPaths.Contains("$relative/$($entry.Name)/main.rs") -and
+                    [System.IO.File]::Exists([System.IO.Path]::Combine($entry.FullName, 'main.rs'))) {
+                    [void]$Targets[$kind].Add($entry.Name)
+                }
+            } elseif ($entry.Extension -eq '.rs' -and -not $Manifest.ExplicitPaths.Contains("$relative/$($entry.Name)")) {
+                [void]$Targets[$kind].Add([System.IO.Path]::GetFileNameWithoutExtension($entry.Name))
+            }
+        }
+    }
+}
+
 function Get-CargoClippyManifestInfo {
+    param([string]$ExplicitManifestPath)
+
     $cache = Get-CargoClippyCompletionCache
 
     $manifestPath = $null
-    $directory = $PWD.ProviderPath
-    while (-not [string]::IsNullOrWhiteSpace($directory)) {
-        $candidate = Join-Path -Path $directory -ChildPath 'Cargo.toml'
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitManifestPath)) {
+        $candidate = [System.IO.Path]::GetFullPath($ExplicitManifestPath, $PWD.ProviderPath)
+        if ([System.IO.File]::Exists($candidate)) {
             $manifestPath = $candidate
-            break
         }
+    } else {
+        $directory = $PWD.ProviderPath
+        while (-not [string]::IsNullOrWhiteSpace($directory)) {
+            $candidate = Join-Path -Path $directory -ChildPath 'Cargo.toml'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $manifestPath = $candidate
+                break
+            }
 
-        $directory = Split-Path -Path $directory -Parent
+            $directory = Split-Path -Path $directory -Parent
+        }
     }
 
-    if ($cache.ManifestLoadedFor -eq $manifestPath -and $null -ne $cache.ManifestFacts) {
+    # Auto-discovered targets come from the directory tree, so a short TTL picks up new files.
+    if ($cache.ManifestLoadedFor -eq $manifestPath -and $null -ne $cache.ManifestFacts -and
+        $null -ne $cache.ManifestLoadedAt -and ([DateTime]::UtcNow - $cache.ManifestLoadedAt).TotalSeconds -lt 10) {
         return $cache.ManifestFacts
     }
 
@@ -404,69 +691,77 @@ function Get-CargoClippyManifestInfo {
         [void]$profiles.Add($builtIn)
     }
 
-    $features = New-Object System.Collections.Generic.List[string]
     $packages = New-Object System.Collections.Generic.List[string]
     $targets = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     foreach ($kind in @('bin', 'example', 'test', 'bench')) {
         $targets[$kind] = New-Object System.Collections.Generic.List[string]
     }
 
-    $raw = if ($manifestPath) {
-        try {
-            Get-Content -LiteralPath $manifestPath -ErrorAction Stop
-        } catch {
-            @()
-        }
-    } else {
-        @()
+    $manifest = Read-CargoClippyManifestFile -Path $manifestPath
+    foreach ($profileName in $manifest.Profiles) {
+        [void]$profiles.Add($profileName)
     }
 
-    $lines = @($raw)
+    if ($manifest.PackageName) {
+        [void]$packages.Add($manifest.PackageName)
+    }
 
-    $section = ''
-    foreach ($line in $lines) {
-        $trimmed = $line.Trim()
-        if ($trimmed -match '^\[\[?([^\]]+)\]\]?$') {
-            $section = $matches[1].Trim()
-            if ($section -match '^profile\.([^.]+)') {
-                [void]$profiles.Add($matches[1].Trim('"', "'"))
-            }
-            continue
+    $workspace = if ($manifestPath) { Find-CargoClippyWorkspaceRoot -Manifest $manifest } else { $null }
+    $selected = @()
+    if ($null -ne $workspace) {
+        if ($workspace.PackageName) {
+            [void]$packages.Add($workspace.PackageName)
         }
 
-        if ($trimmed -match '^([A-Za-z0-9_"''.-]+)\s*=') {
-            $key = $matches[1].Trim('"', "'")
-            switch -Regex ($section) {
-                '^features$' { [void]$features.Add($key) }
-                '^(package|bin|example|test|bench)$' {
-                    if ($key -eq 'name' -and $trimmed -match '=\s*["'']([^"'']+)["'']') {
-                        if ($section -eq 'package') {
-                            [void]$packages.Add($matches[1])
-                        } else {
-                            [void]$targets[$section].Add($matches[1])
-                        }
-                    }
-                }
+        $memberManifests = @{}
+        foreach ($memberDirectory in Get-CargoClippyWorkspaceMemberDirectory -Workspace $workspace -Patterns $workspace.Members) {
+            $member = Read-CargoClippyManifestFile -Path ([System.IO.Path]::Combine($memberDirectory, 'Cargo.toml'))
+            $memberManifests[$memberDirectory] = $member
+            if ($member.PackageName) {
+                [void]$packages.Add($member.PackageName)
             }
         }
+
+        # Target selection follows cargo's default package selection: the package the manifest
+        # belongs to, or at the workspace root its default-members (all members when virtual).
+        if ($workspace.Path -eq $manifest.Path -and ($null -ne $workspace.DefaultMembers -or -not $workspace.PackageName)) {
+            $patterns = if ($null -ne $workspace.DefaultMembers) { $workspace.DefaultMembers } else { $workspace.Members }
+            $selected = @(Get-CargoClippyWorkspaceMemberDirectory -Workspace $workspace -Patterns $patterns | ForEach-Object {
+                    if ($memberManifests.ContainsKey($_)) { $memberManifests[$_] } else { Read-CargoClippyManifestFile -Path ([System.IO.Path]::Combine($_, 'Cargo.toml')) }
+                })
+        }
+    }
+
+    if ($selected.Count -eq 0 -and $manifest.PackageName) {
+        $selected = @($manifest)
+    }
+
+    foreach ($package in $selected) {
+        Add-CargoClippyPackageTarget -Manifest $package -Targets $targets
+    }
+
+    foreach ($kind in @('bin', 'example', 'test', 'bench')) {
+        $targets[$kind] = @($targets[$kind] | Sort-Object -Unique -CaseSensitive)
     }
 
     $facts = [pscustomobject]@{
         Profiles = @($profiles | Sort-Object -Unique -CaseSensitive)
-        Features = @($features | Sort-Object -Unique -CaseSensitive)
+        Features = @($manifest.Features | Sort-Object -Unique -CaseSensitive)
         Packages = @($packages | Sort-Object -Unique -CaseSensitive)
         Targets  = $targets
     }
 
     $cache.ManifestFacts = $facts
     $cache.ManifestLoadedFor = $manifestPath
+    $cache.ManifestLoadedAt = [DateTime]::UtcNow
     $facts
 }
 
 function Get-CargoClippyDynamicValueList {
     param(
         [string]$OptionName,
-        [bool]$AfterDoubleDash
+        [bool]$AfterDoubleDash,
+        [string]$ManifestPath
     )
 
     if ($AfterDoubleDash) {
@@ -481,7 +776,7 @@ function Get-CargoClippyDynamicValueList {
         return @(Get-CargoClippyTargetTripleList | ForEach-Object { [pscustomobject]@{ Name = $_; ToolTip = 'Rust target triple.' } })
     }
 
-    $facts = Get-CargoClippyManifestInfo
+    $facts = Get-CargoClippyManifestInfo -ExplicitManifestPath $ManifestPath
     $values = switch ($OptionName) {
         '--profile' { @($facts.Profiles); break }
         '--features' { @($facts.Features); break }
@@ -547,6 +842,7 @@ function Get-CargoClippyState {
 
     $pendingOption = $null
     $afterDoubleDash = $false
+    $manifestPath = $null
 
     foreach ($token in $TokensBeforeCurrent) {
         $cleanToken = Remove-CargoClippyOuterQuotes -Value $token
@@ -555,6 +851,9 @@ function Get-CargoClippyState {
         }
 
         if ($pendingOption) {
+            if ($pendingOption -ceq '-m' -or $pendingOption -eq '--manifest-path') {
+                $manifestPath = $cleanToken
+            }
             $pendingOption = $null
             continue
         }
@@ -576,6 +875,9 @@ function Get-CargoClippyState {
         }
 
         if ($cleanToken -match '^(--[A-Za-z0-9][A-Za-z0-9\-]*)=(.*)$') {
+            if ($matches[1] -eq '--manifest-path') {
+                $manifestPath = Remove-CargoClippyOuterQuotes -Value $matches[2]
+            }
             continue
         }
 
@@ -587,6 +889,7 @@ function Get-CargoClippyState {
     [pscustomobject]@{
         PendingOption   = $pendingOption
         AfterDoubleDash = $afterDoubleDash
+        ManifestPath    = $manifestPath
     }
 }
 
@@ -619,7 +922,8 @@ function Get-CargoClippyValueCompletions {
         [string]$OptionName,
         [string]$CurrentWord,
         [bool]$AfterDoubleDash,
-        [string]$PrefixText = ''
+        [string]$PrefixText = '',
+        [string]$ManifestPath
     )
 
     Initialize-CargoClippyCompletionCache
@@ -668,7 +972,7 @@ function Get-CargoClippyValueCompletions {
         return @()
     }
 
-    $dynamic = @(Get-CargoClippyDynamicValueList -OptionName $OptionName -AfterDoubleDash $AfterDoubleDash |
+    $dynamic = @(Get-CargoClippyDynamicValueList -OptionName $OptionName -AfterDoubleDash $AfterDoubleDash -ManifestPath $ManifestPath |
             Where-Object { $_.Name.StartsWith($current, [System.StringComparison]::OrdinalIgnoreCase) })
     if ($dynamic.Count -gt 0) {
         return @(
@@ -745,11 +1049,11 @@ function Complete-CargoClippy {
     $state = Get-CargoClippyState -TokensBeforeCurrent @(Get-CargoClippyArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
     $inlineValue = Get-CargoClippyInlineValueState -CurrentWord $currentWord -AfterDoubleDash $state.AfterDoubleDash
     if ($inlineValue) {
-        return @(Get-CargoClippyValueCompletions -OptionName $inlineValue.OptionName -CurrentWord $inlineValue.ValuePrefix -AfterDoubleDash $inlineValue.AfterDoubleDash -PrefixText $inlineValue.PrefixText)
+        return @(Get-CargoClippyValueCompletions -OptionName $inlineValue.OptionName -CurrentWord $inlineValue.ValuePrefix -AfterDoubleDash $inlineValue.AfterDoubleDash -PrefixText $inlineValue.PrefixText -ManifestPath $state.ManifestPath)
     }
 
     if ($state.PendingOption) {
-        return @(Get-CargoClippyValueCompletions -OptionName $state.PendingOption -CurrentWord $currentWord -AfterDoubleDash $state.AfterDoubleDash)
+        return @(Get-CargoClippyValueCompletions -OptionName $state.PendingOption -CurrentWord $currentWord -AfterDoubleDash $state.AfterDoubleDash -ManifestPath $state.ManifestPath)
     }
 
     if ($state.AfterDoubleDash) {
