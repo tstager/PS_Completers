@@ -61,7 +61,9 @@ The top level stays compatible with `CompleterActions` `Import-CompleterScript` 
 
 ## Option values
 
-- `-d`, `--delimiters`: `<list>`
+- `-d`, `--delimiters`: `\t`, `\n`, `\0` (empty delimiter), `\\`, `,`, `|`, `;`, `:`, `<list>`
+
+A partially typed value (`\`, `'`, `"`) filters this list and never falls through to the completer's option-name or path completion; a value that matches nothing gets PowerShell's own fallback. `,`, `|` and `;` are single-quoted because PowerShell would otherwise read them as operators; a value started with a quote keeps that quote character. An unquoted `,` after `--delimiters=` is split off the word by PowerShell itself, so the completer offers nothing there.
 
 ## Representative validation scenarios
 

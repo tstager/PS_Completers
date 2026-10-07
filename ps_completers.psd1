@@ -694,7 +694,7 @@
         @{
             Path    = 'paste_completer/paste_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:255D17E17D554D02B655235C55DB6458C0603E6F6CD7D8858D1E66190117D017'
+            Hash    = 'SHA256:E36ADDC936AA5A229D62150644967F07CC39767C86FBFBB839EF34DF6CB976FC'
             Targets = @(
                 @{ CommandName = 'paste'; Native = $true }
                 @{ CommandName = 'paste.exe'; Native = $true }

@@ -12,7 +12,7 @@ function Get-PasteCompletionOptions {
     $fallbackOptions = @('-d', '--delimiters', '-s', '--serial', '-z', '--zero-terminated', '--help', '--version')
     $commandCandidates = @('paste.exe', 'paste')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -137,51 +137,6 @@ function Get-PasteCurrentToken {
     $Fallback
 }
 
-function Get-PastePreviousToken {
-    param(
-        [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
-    )
-
-    $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    if ($elements.Count -le 1) {
-        return $null
-    }
-
-    if ([string]::IsNullOrEmpty($CurrentWord)) {
-        return $elements[-1]
-    }
-
-    if ($elements[-1] -eq $CurrentWord) {
-        return $elements[-2]
-    }
-
-    return $elements[-1]
-}
-
-function Get-PasteValueCompletions {
-    param(
-        [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
-    )
-
-    $previousToken = Get-PastePreviousToken -commandAst $commandAst -CurrentWord $CurrentWord
-    if ($null -eq $previousToken) {
-        return @()
-    }
-
-    if ($previousToken -eq '--delimiters' -or $previousToken -eq '-d') {
-        return @(
-            New-PasteCompletionResult -CompletionText '\t' -ListItemText '\t' -ResultType 'ParameterValue' -ToolTip 'Tab delimiter.'
-            New-PasteCompletionResult -CompletionText '\n' -ListItemText '\n' -ResultType 'ParameterValue' -ToolTip 'Newline delimiter.'
-            New-PasteCompletionResult -CompletionText ',' -ListItemText ',' -ResultType 'ParameterValue' -ToolTip 'Comma delimiter.'
-            New-PasteCompletionResult -CompletionText '|' -ListItemText '|' -ResultType 'ParameterValue' -ToolTip 'Pipe delimiter.'
-        )
-    }
-
-    return @()
-}
-
 function Get-PastePathCompletions {
     param([string]$InputPath)
 
@@ -232,10 +187,28 @@ function Get-PastePathCompletions {
     }
 }
 
+function ConvertTo-PasteValueArgument {
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ($Quote -eq '"') {
+        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    }
+
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    $Value
+}
+
 function Get-PasteOptionValueCompletions {
     param(
         [System.Management.Automation.Language.CommandAst]$commandAst,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [string]$WordToComplete
     )
 
     $option = $null
@@ -257,30 +230,53 @@ function Get-PasteOptionValueCompletions {
     }
 
     $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-    $table['-d'] = @(
+    $delimiters = @(
+        @{ Text = '\t'; Tip = 'Tab delimiter.' }
+        @{ Text = '\n'; Tip = 'Newline delimiter.' }
+        @{ Text = '\0'; Tip = 'Empty delimiter (no separator).' }
+        @{ Text = '\\'; Tip = 'Backslash delimiter.' }
+        @{ Text = ','; Tip = 'Comma delimiter.' }
+        @{ Text = '|'; Tip = 'Pipe delimiter.' }
+        @{ Text = ';'; Tip = 'Semicolon delimiter.' }
+        @{ Text = ':'; Tip = 'Colon delimiter.' }
         @{ Text = '<list>'; Tip = 'Delimiter characters, reused in turn.' }
     )
-    $table['--delimiters'] = @(
-        @{ Text = '<list>'; Tip = 'Delimiter characters, reused in turn.' }
-    )
+    $table['-d'] = $delimiters
+    $table['--delimiters'] = $delimiters
     if ([string]::IsNullOrEmpty($option) -or -not $table.ContainsKey($option)) {
-        return @()
+        return
+    }
+
+    # A known value slot answers even with no match, so the word never falls through to options or paths.
+    # An unquoted ',' after '=' is split off the word by the engine, which would insert any candidate after it.
+    if ($attached -and -not $WordToComplete.StartsWith($attached, [System.StringComparison]::Ordinal)) {
+        return , @()
     }
 
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
-        return @(
+        return , @(
             foreach ($result in Get-PastePathCompletions -InputPath $prefix) {
                 New-PasteCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
     }
 
+    $quote = ''
+    if ($prefix.StartsWith("'") -or $prefix.StartsWith('"')) {
+        $quote = $prefix.Substring(0, 1)
+        $prefix = $prefix.Substring(1)
+        if ($prefix.EndsWith($quote)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
+        }
+    }
+
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
-    @(
+    , @(
         foreach ($entry in $values) {
             if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-PasteCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+                $argument = if ($entry.Text -eq '<list>') { $entry.Text } else { ConvertTo-PasteValueArgument -Value $entry.Text -Quote $quote }
+                New-PasteCompletionResult -CompletionText ($attached + $argument) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
@@ -310,17 +306,12 @@ function Complete-Paste {
         Get-PasteCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
     }
 
-    $optionValues = @(Get-PasteOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
-    if ($optionValues.Count -gt 0) {
+    $optionValues = Get-PasteOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -WordToComplete $wordToComplete
+    if ($null -ne $optionValues) {
         return $optionValues
     }
 
     if ([string]::IsNullOrEmpty($currentWord)) {
-        $valueCompletions = @(Get-PasteValueCompletions -commandAst $commandAst -CurrentWord $wordToComplete)
-        if ($valueCompletions.Count -gt 0) {
-            return $valueCompletions
-        }
-
         return @()
     }
 
