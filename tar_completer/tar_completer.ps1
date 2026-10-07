@@ -151,6 +151,11 @@ function ConvertFrom-TarGnuHelp {
         if ($line -match '^\s{2,6}(?<spec>-\S.*?)(?:\s{2,}(?<desc>\S.*))?\s*$') {
             $spec = $Matches['spec']
             $description = if ($Matches['desc']) { $Matches['desc'].Trim() } else { '' }
+            # A few GNU lines (--exclude-caches-under, --ignore-command-error) leave only one space before the description.
+            if ($spec -match '^(?<run>--?[A-Za-z?][A-Za-z0-9-]*(?:\[=[^\]]+\]|=[^\s,]+)?(?:,\s+--?[A-Za-z?][A-Za-z0-9-]*(?:\[=[^\]]+\]|=[^\s,]+)?)*)\s+(?<desc>\S.*)$') {
+                $spec = $Matches['run']
+                $description = $Matches['desc'].Trim()
+            }
             $aliases = New-Object System.Collections.Generic.List[string]
             $shortName = $null
             $placeholder = ''

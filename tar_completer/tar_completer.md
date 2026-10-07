@@ -45,7 +45,7 @@ On first use, the script creates `$script:TarCompletionCatalog` and:
 - verifies `tar.exe` is available and remembers its resolved path
 - runs `tar --version` once to decide between the `bsdtar` and `GNU tar` flavors
 - for `bsdtar`, seeds a static catalog aligned with the local `bsdtar --help` output and relevant `bsdtar` documentation
-- for `GNU tar`, parses `tar --help` into the same spec shape: value kinds are inferred from the placeholders (`FILE`, `DIR`, `DATE-OR-FILE`, `NUMBER`, `FORMAT`, `PATTERN`, `PROG`, ...), `[=VALUE]` options are marked optional so they never swallow the next token, and enum placeholders (`ORDER`, `METHOD`, `STYLE`, `CONTROL`, `TYPE`) get their documented value sets
+- for `GNU tar`, parses `tar --help` into the same spec shape (including the lines such as `--exclude-caches-under`, `--exclude-tag-all=FILE` and `--ignore-command-error` that leave a single space before their description): value kinds are inferred from the placeholders (`FILE`, `DIR`, `DATE-OR-FILE`, `NUMBER`, `FORMAT`, `PATTERN`, `PROG`, ...), `[=VALUE]` options are marked optional so they never swallow the next token, and enum placeholders (`ORDER`, `METHOD`, `STYLE`, `CONTROL`, `TYPE`) get their documented value sets
 - prepares small hint sets for `--mtime` and archive-entry patterns
 
 ### Mode-aware parsing

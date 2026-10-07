@@ -1287,7 +1287,7 @@
         @{
             Path    = 'tar_completer/tar_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:EE8BEFF69F0BEAFD1BFAC50205B86CDB00C612C1DB5ACE6CEF327123C1110D2E'
+            Hash    = 'SHA256:C69CC35E12D8A63AC2DA13FF0CF7FA9E3BA5209E1EE3C0529715580DE38E67CB'
             Targets = @(
                 @{ CommandName = 'tar'; Native = $true }
                 @{ CommandName = 'tar.exe'; Native = $true }
