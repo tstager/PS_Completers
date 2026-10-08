@@ -85,66 +85,73 @@ function New-TrCompletionResult {
     )
 }
 
-function Remove-TrOuterQuotes {
+function ConvertFrom-TrTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-TrQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-TrQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-TrCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-TrPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-TrOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-TrTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
+    if ([string]::IsNullOrEmpty($cleanInput)) {
         $parent = '.'
         $leaf = ''
     } elseif ($cleanInput -match '[\\/]+$') {
@@ -156,27 +163,30 @@ function Get-TrPathCompletions {
         $leaf = $cleanInput.Substring($separatorIndex + 1)
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    $separator = if ($parent.EndsWith('/')) { [char]'/' } else { [System.IO.Path]::DirectorySeparatorChar }
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        # Keep the typed directory text (.\, ./, ..\) as typed. A bare name starting with a dash
+        # would be read as a parameter, so it gets the current-directory prefix.
+        $pathText = if ($parent -ne '.') {
+            $parent + $item.Name
+        } elseif ($item.Name -match '^[-\u2013-\u2015]') {
+            '.' + $separator + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $item.Name
         }
 
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer -and -not $pathText.EndsWith($separator)) {
+            $pathText += $separator
         }
 
-        $quotedPath = ConvertTo-TrQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-TrQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-TrCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -188,8 +198,8 @@ function Get-TrPathCompletions {
 function Get-TrSetVocabulary {
     param([string]$InputWord)
 
-    $quote = if (-not [string]::IsNullOrEmpty($InputWord) -and ($InputWord[0] -eq [char]39 -or $InputWord[0] -eq [char]34)) { [string]$InputWord[0] } else { '' }
-    $typed = Remove-TrOuterQuotes -Value $InputWord
+    $quote = if ($InputWord -match '^[''"\u2018-\u201E]') { $InputWord.Substring(0, 1) } else { '' }
+    $typed = ConvertFrom-TrTypedWord -Value $InputWord
 
     $vocabulary = [ordered]@{
         '[:alnum:]'  = 'Letters and digits'
@@ -222,7 +232,7 @@ function Get-TrSetVocabulary {
 
     foreach ($entry in $vocabulary.GetEnumerator()) {
         if ($entry.Key.StartsWith($typed, [System.StringComparison]::Ordinal)) {
-            New-TrCompletionResult -CompletionText ($quote + $entry.Key + $quote) -ListItemText $entry.Key -ResultType 'ParameterValue' -ToolTip $entry.Value
+            New-TrCompletionResult -CompletionText (ConvertTo-TrQuotedValue -Value $entry.Key -QuoteChar $quote) -ListItemText $entry.Key -ResultType 'ParameterValue' -ToolTip $entry.Value
         }
     }
 }
@@ -274,17 +284,14 @@ function Get-TrOptionDescription {
 }
 
 function Complete-Tr {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete spans past the cursor and unescapes quotes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-TrCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-TrCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $inSetSlot = Test-TrSetOperandSlot -commandAst $commandAst -cursorPosition $cursorPosition
     if ([string]::IsNullOrEmpty($currentWord) -and -not $inSetSlot) {

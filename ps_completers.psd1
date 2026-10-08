@@ -1332,7 +1332,7 @@
         @{
             Path    = 'tr_completer/tr_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:1D25D9B3E4C5FAABDD6CDB346CF1A660178C0E2B5B5ABA6CD3FA340CDB94896A'
+            Hash    = 'SHA256:87747EFDD2C0A0B11415CB92D89B55EBF5BFEBE25CB52AE34A6B976A4E6231F0'
             Targets = @(
                 @{ CommandName = 'tr'; Native = $true }
                 @{ CommandName = 'tr.exe'; Native = $true }
