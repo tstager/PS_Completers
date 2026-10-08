@@ -52,8 +52,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
+- Path candidates keep the directory part exactly as typed, including a leading `.\`, `./`, `..\` or `../` and its separator. A name typed with no directory that starts with a dash (`-` or U+2013-U+2015) is emitted as `.\-name` so PowerShell does not read it as a parameter.
 - The current word is the command element whose extent contains the cursor, cut at the cursor, so completion works when the command is not the first statement on the line and an unterminated quoted operand such as `"my docs\c` stays one word instead of splitting at its space.
-- Path completions keep the quote character the user typed: a single-quoted operand is emitted single-quoted with embedded `'` doubled, and a double-quoted operand (or an unquoted path containing whitespace) is emitted double-quoted with `` ` ``, `"` and `$` escaped.
+- Path completions keep the quote character the user typed, including the typographic quotes PowerShell accepts; a typed quoted word is read with the PowerShell tokenizer. An unquoted path stays bare unless it contains whitespace or a PowerShell metacharacter (`` { } ( ) ; , | & < > ' " ` $ @ # ``), in which case it is single-quoted. Single-quoted paths double every embedded single quote; double-quoted paths escape `` ` ``, `"`, `$` and the typographic double quotes with a backtick.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe and the tool lookup use `-ErrorAction Ignore` so a cold load adds nothing to `$Error`, even when dirname is not installed.
 
 ## Representative validation scenarios

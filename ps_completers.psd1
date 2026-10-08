@@ -285,7 +285,7 @@
         @{
             Path    = 'dirname_completer/dirname_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:BCB64480A56CD612A8B0027B2BC0828A55DB3DDD77862012F46C1494DC3BBC2C'
+            Hash    = 'SHA256:18D3F8577CA1BAE203B5582A834D6A5D1D1CD1FC5A04F51BBFADA419FDC8AA32'
             Targets = @(
                 @{ CommandName = 'dirname'; Native = $true }
                 @{ CommandName = 'dirname.exe'; Native = $true }

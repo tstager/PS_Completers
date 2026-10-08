@@ -84,36 +84,47 @@ function New-DirnameCompletionResult {
     )
 }
 
-function Remove-DirnameOuterQuotes {
+function ConvertFrom-DirnameTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-DirnameQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if ($QuoteChar -eq "'") {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    if ($QuoteChar -eq '"' -or $Value -match '\s') {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
     }
 
-    $Value
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-DirnameCurrentToken {
@@ -137,8 +148,8 @@ function Get-DirnameCurrentToken {
 function Get-DirnamePathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-DirnameOuterQuotes -Value $InputPath
-    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
+    $cleanInput = ConvertFrom-DirnameTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -155,20 +166,22 @@ function Get-DirnamePathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Candidates keep the directory part exactly as typed (a leading .\ or ./ included).
+    $typedPrefix = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { $cleanInput.Substring(0, $cleanInput.Length - $leaf.Length) }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedPrefix + $item.Name
+
+        # A bare name starting with a dash would be read as a parameter: anchor it to the current directory.
+        if ($pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
