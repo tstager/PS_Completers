@@ -172,12 +172,13 @@ Each node caches:
 The implementation parses several `netsh` help page patterns:
 - `Commands in this context:`
 - `The following sub-contexts are available:`
-- `Usage:`
+- `Usage:` (also the colon-less `Usage set interface ...` header that `netsh interface set interface /?` prints)
 - `Parameters:`
 
 Key helpers:
 - `ConvertTo-NetshLogicalLines` normalizes section markers that sometimes appear on the same captured line.
 - `Get-NetshHelpSections` extracts command entries, subcontexts, usage lines, and parameter lines.
+- `ConvertTo-NetshUsageLine` folds spaced optional tags (`[admin = ] ENABLED|DISABLED`, used by `interface set interface`, `ipsec`, `wfp`, `wcn` and some `ras` pages) into the `[admin=] ENABLED|DISABLED` spelling, so `admin=` offers `admin=ENABLED` and `admin=DISABLED` while the enum stays a bare positional operand (`netsh ras ipv6 set routeradvertise E` still offers `ENABLE`). Grouped enums such as `[soft=](yes|no)` keep every member.
 - `Add-NetshCommandPhrase` stores multiword phrases token by token so completion can offer `show` first, then `interfaces`, instead of flattening the phrase.
 - `Test-NetshContextDescription` detects context transitions from descriptions like `Changes to the 'netsh ...' context.`
 - `Get-NetshUsageTags`, `Get-NetshUsageLiteralValues`, `Get-NetshUsageTagValueMap` and `Get-NetshParameterValueHints` parse leaf syntax into `tag=` suggestions, bare literal keywords, and enum-like `tag=value` hints. A `Remarks:` or `Examples:` header closes the `Parameters:` section even when its prose shares the line, and commands whose description column is empty (`netsh trace postreset`) are kept.

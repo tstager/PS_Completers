@@ -220,6 +220,15 @@ function ConvertTo-NetshLogicalLines {
     )
 }
 
+function ConvertTo-NetshUsageLine {
+    param([string]$Line)
+
+    # Some pages space the optional tag ('[admin = ] ENABLED|DISABLED'); fold it into
+    # '[admin=] ENABLED|DISABLED'. The space after ']' stays: the enum is also a bare
+    # positional operand, so Get-NetshUsageLiteralValues must still see it.
+    $Line -replace '([A-Za-z][A-Za-z0-9-]*)\s*=\s*\]', '$1=]'
+}
+
 function Get-NetshHelpSections {
     param([string[]]$HelpLines)
 
@@ -244,9 +253,10 @@ function Get-NetshHelpSections {
             continue
         }
 
-        if ($line -match '^\s*Usage:\s*(.*)$') {
+        # 'interface set interface' prints 'Usage set interface ...' with no colon.
+        if ($line -match '^\s*Usage\b:?\s*(.*)$') {
             $section = 'usage'
-            $sections.UsageLines += ('Usage: ' + $matches[1].TrimEnd())
+            $sections.UsageLines += (ConvertTo-NetshUsageLine -Line ('Usage: ' + $matches[1].TrimEnd()))
             continue
         }
 
@@ -281,7 +291,7 @@ function Get-NetshHelpSections {
             }
             'usage' {
                 if (-not [string]::IsNullOrWhiteSpace($line)) {
-                    $sections.UsageLines += $line.TrimEnd()
+                    $sections.UsageLines += (ConvertTo-NetshUsageLine -Line $line.TrimEnd())
                 }
             }
             'parameters' {
@@ -433,15 +443,16 @@ function Get-NetshUsageTagValueMap {
     $text = $text -replace '\s*\|\s*', '|'
 
     $valuesByTag = @{}
-    foreach ($match in [regex]::Matches($text, '(?<![A-Za-z0-9-])(?<Tag>[A-Za-z][A-Za-z0-9-]*)=\]?(?<Alt>[^\s\[\]|]+(?:\|[^\s\[\]|]+)+)')) {
+    foreach ($match in [regex]::Matches($text, '(?<![A-Za-z0-9-])(?<Tag>[A-Za-z][A-Za-z0-9-]*)=(?:\]\s*)?(?<Alt>[^\s\[\]|]+(?:\|[^\s\[\]|]+)+)')) {
         $tag = $match.Groups['Tag'].Value
         if ($tag -eq 'default') {
             continue
         }
 
+        # A grouped enum ('[ [soft=](yes|no) ]') carries its parentheses on the edge members.
         $members = @(
             $match.Groups['Alt'].Value -split '\|' |
-                ForEach-Object { $_.Trim() } |
+                ForEach-Object { $_.Trim().Trim('(', ')') } |
                 Where-Object { $_ -match '^[A-Za-z][A-Za-z0-9-]*$' }
         )
         if ($members.Count -eq 0) {
@@ -797,7 +808,7 @@ function Get-NetshFilePathCompletions {
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
 
     @(
-        Get-ChildItem -Path $parentPath -Filter $filter -ErrorAction SilentlyContinue |
+        Get-ChildItem -Path $parentPath -Filter $filter -ErrorAction Ignore |
             ForEach-Object { ConvertTo-NetshQuotedPath -Path $_.FullName }
     )
 }
