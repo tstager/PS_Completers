@@ -162,6 +162,49 @@ function New-WinAppCompletion {
     )
 }
 
+# Splits the text typed so far into its value and the opening quote the user
+# typed ('' when bare), dropping a closing quote and undoing that quote style's
+# escapes.
+function ConvertFrom-WinAppTypedWord {
+    param([string]$Text)
+
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text  = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    }
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
+}
+
+# Re-emits value completions inside the quote the user opened.  Filesystem
+# results (CompleteFilename already quotes them) and option names pass through.
+function Format-WinAppQuotedResult {
+    param(
+        [Parameter(ValueFromPipeline)]
+        [System.Management.Automation.CompletionResult]$Result,
+
+        [string]$Quote
+    )
+    process {
+        if (-not $Quote -or
+            $Result.ResultType -ne [System.Management.Automation.CompletionResultType]::ParameterValue) {
+            return $Result
+        }
+        $text = if ($Quote -eq "'") {
+                    "'" + $Result.CompletionText.Replace("'", "''") + "'"
+                } else {
+                    '"' + ($Result.CompletionText -replace '([`"$])', '`$1') + '"'
+                }
+        [System.Management.Automation.CompletionResult]::new(
+            $text, $Result.ListItemText, $Result.ResultType, $Result.ToolTip
+        )
+    }
+}
+
 # Returns $true when a PSCustomObject node carries the named property.  Guards
 # every schema access so containers/leaves/passthrough nodes never trip StrictMode.
 function Test-WinAppNodeProperty {
@@ -319,8 +362,11 @@ function Write-WinAppOptionValue {
         [string]$OptionToken,
         [string]$WordToComplete,
         [string]$InlinePrefix = '',
-        [string]$CommandPath = ''
+        [string]$CommandPath = '',
+        # The word as typed (opening quote kept) for the filename completer.
+        [string]$PathWord
     )
+    if (-not $PSBoundParameters.ContainsKey('PathWord')) { $PathWord = $WordToComplete }
 
     $opt = Get-WinAppOption -Node $Node -Token $OptionToken
     if ($null -eq $opt) {
@@ -345,7 +391,7 @@ function Write-WinAppOptionValue {
     if (-not $enumVals) {
         $pathKind = Get-WinAppOverlayEntry -Table $script:WinAppPathValues -CommandPath $CommandPath -Slot $canonical
         if ($pathKind) {
-            Write-WinAppPathValue -Kind $pathKind -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+            Write-WinAppPathValue -Kind $pathKind -WordToComplete $PathWord -InlinePrefix $InlinePrefix
             return
         }
     }
@@ -382,13 +428,13 @@ function Write-WinAppOptionValue {
 
     # 2. File path (files + directories); FileSystemInfo accepts either.
     if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
-        Write-WinAppPathValue -Kind 'Any' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+        Write-WinAppPathValue -Kind 'Any' -WordToComplete $PathWord -InlinePrefix $InlinePrefix
         return
     }
 
     # 3. Directory path (directories only).
     if ($valueType -like '*System.IO.DirectoryInfo*') {
-        Write-WinAppDirectoryCompletion -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
+        Write-WinAppDirectoryCompletion -WordToComplete $PathWord -InlinePrefix $InlinePrefix
         return
     }
 
@@ -558,8 +604,9 @@ function Get-WinAppPositionalSlot {
 
 # Emits completion for a positional argument slot based on its valueType.
 function Write-WinAppPositionalValue {
-    param($Slot, [string]$WordToComplete, [string]$CommandPath = '')
+    param($Slot, [string]$WordToComplete, [string]$CommandPath = '', [string]$PathWord)
 
+    if (-not $PSBoundParameters.ContainsKey('PathWord')) { $PathWord = $WordToComplete }
     if ($null -eq $Slot) { return }
     $argNode  = $Slot.Node
     $valueType = if (Test-WinAppNodeProperty $argNode 'valueType') { $argNode.valueType } else { '' }
@@ -567,7 +614,7 @@ function Write-WinAppPositionalValue {
 
     $pathKind = Get-WinAppOverlayEntry -Table $script:WinAppPathValues -CommandPath $CommandPath -Slot "<$name>"
     if ($pathKind) {
-        Write-WinAppPathValue -Kind $pathKind -WordToComplete $WordToComplete
+        Write-WinAppPathValue -Kind $pathKind -WordToComplete $PathWord
         return
     }
     $choices = Get-WinAppOverlayEntry -Table $script:WinAppValueChoices -CommandPath $CommandPath -Slot "<$name>"
@@ -579,11 +626,11 @@ function Write-WinAppPositionalValue {
         return
     }
     if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
-        [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)
+        [System.Management.Automation.CompletionCompleters]::CompleteFilename($PathWord)
         return
     }
     if ($valueType -like '*System.IO.DirectoryInfo*') {
-        Write-WinAppDirectoryCompletion -WordToComplete $WordToComplete
+        Write-WinAppDirectoryCompletion -WordToComplete $PathWord
         return
     }
 
@@ -748,6 +795,27 @@ function Complete-WinAppNative {
     if ($allElements.Count -eq 0) { return }
 
     # -------------------------------------------------------------------------
+    # A quoted word is read from the parser: the element holding the cursor, cut
+    # at the cursor (an unterminated quote is one token running to the end of
+    # the line).  Matching uses its unquoted value; value completions are
+    # re-emitted in the user's quote and path slots get the text as typed.
+    # -------------------------------------------------------------------------
+    $wordElement = $null
+    $typedQuote  = ''
+    $pathWord    = $WordToComplete
+    if ($isNativeConvention -and $WordToComplete -match '^[''"]') {
+        $wordElement = $allElements | Select-Object -Skip 1 | Where-Object {
+            $_.Extent.StartOffset -lt $cursorCol -and $cursorCol -le $_.Extent.EndOffset
+        } | Select-Object -First 1
+        if ($null -ne $wordElement) {
+            $pathWord       = $wordElement.Extent.Text.Substring(0, $cursorCol - $wordElement.Extent.StartOffset)
+            $typed          = ConvertFrom-WinAppTypedWord -Text $pathWord
+            $typedQuote     = $typed.Quote
+            $WordToComplete = $typed.Value
+        }
+    }
+
+    # -------------------------------------------------------------------------
     # Build the committed argument list.  A string constant (bare, '...' or
     # "...") walks as its value -- the string winapp receives -- so a quoted
     # "members" still names a subcommand.  Anything else walks as Extent.Text
@@ -763,10 +831,12 @@ function Complete-WinAppNative {
         }
     })
 
-    # Exclude the word being completed (matched on its raw text) from the
-    # committed positionals, but keep it for flags so Test-WinAppOptionTakesValue
-    # can set expectingValue.
-    if ($argElements.Count -gt 0 -and $argElements[-1].Extent.Text -eq $WordToComplete) {
+    # Exclude the word being completed (matched on its raw text, or for a quoted
+    # word on the element under the cursor) from the committed positionals, but
+    # keep it for flags so Test-WinAppOptionTakesValue can set expectingValue.
+    if ($argElements.Count -gt 0 -and
+        ($argElements[-1].Extent.Text -eq $WordToComplete -or
+         ($null -ne $wordElement -and [object]::ReferenceEquals($argElements[-1], $wordElement)))) {
         if ($WordToComplete -like '-*') {
             $committedArgs = $allArgs
         } else {
@@ -840,7 +910,8 @@ function Complete-WinAppNative {
     # =========================================================================
     if ($expectingValue) {
         Write-WinAppOptionValue -Node $currentNode -OptionToken $currentOption `
-            -WordToComplete $WordToComplete -CommandPath $commandPath
+            -WordToComplete $WordToComplete -CommandPath $commandPath -PathWord $pathWord |
+            Format-WinAppQuotedResult -Quote $typedQuote
         return
     }
 
@@ -861,7 +932,8 @@ function Complete-WinAppNative {
     #     also takes operands (find-api [<query>...] <subcommand>) falls through
     #     so its operand slot and options are offered alongside.
     if ($null -eq $cmd2 -and (Test-WinAppNodeProperty $currentNode 'subcommands')) {
-        Write-WinAppSubcommandList -Node $currentNode -WordToComplete $WordToComplete
+        Write-WinAppSubcommandList -Node $currentNode -WordToComplete $WordToComplete |
+            Format-WinAppQuotedResult -Quote $typedQuote
         if (-not (Test-WinAppNodeProperty $currentNode 'arguments')) { return }
     }
 
@@ -869,7 +941,8 @@ function Complete-WinAppNative {
     #     the word is empty).
     if (Test-WinAppNodeProperty $currentNode 'arguments') {
         $slot = Get-WinAppPositionalSlot -Node $currentNode -ConsumedCount $positionalCount
-        Write-WinAppPositionalValue -Slot $slot -WordToComplete $WordToComplete -CommandPath $commandPath
+        Write-WinAppPositionalValue -Slot $slot -WordToComplete $WordToComplete -CommandPath $commandPath -PathWord $pathWord |
+            Format-WinAppQuotedResult -Quote $typedQuote
 
         if ([string]::IsNullOrEmpty($WordToComplete)) {
             Write-WinAppOptionList -Node $currentNode -WordToComplete ''

@@ -184,6 +184,16 @@ Value-taking options support the `--flag=value` inline form. For example,
 `experimental`, `none`. Switch options that are typed inline emit nothing (no
 crash).
 
+## Quoted words
+
+A word opened with `'` or `"` (closed or not) is read from the parser up to the
+cursor and matched on its unquoted value, so `winapp find-api "mem` offers
+`"members"` and `winapp new --template 'winui-t` offers `'winui-tabview'`.
+Subcommands, value choices and placeholders come back in the quote the user
+typed (`'` doubled inside single quotes; `` ` ``, `"` and `$` backtick-escaped
+inside double quotes). File and directory slots hand the typed text to
+PowerShell's filename completer, which does its own quoting.
+
 ## Passthrough commands
 
 `store` (Microsoft Store Developer CLI) and `tool` (Windows SDK build tools) pass
@@ -253,4 +263,8 @@ gracefully (no crash).
 
 # winapp.exe registration
 (TabExpansion2 'winapp.exe ' 11).CompletionMatches.CompletionText
+
+# Open-quoted partial words keep the typed quote
+(TabExpansion2 'winapp find-api "mem' 20).CompletionMatches.CompletionText
+(TabExpansion2 "winapp new --template 'winui-t" 30).CompletionMatches.CompletionText
 ```
