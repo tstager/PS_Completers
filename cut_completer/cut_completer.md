@@ -31,7 +31,6 @@ Representative options include (parsed from the installed build's `--help`):
 - `--zero-terminated`
 - `--help`
 - `--version`
-- `-M`
 
 ## Registration and command names
 
@@ -63,11 +62,12 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 ## How completion works
 
-- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
+- Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip. Only indented lines that start with an option are read, and the scan stops at the next section heading, so the LIST legend (`-M`) and the Examples lines (`-f1`) never enter the catalog.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- The current word is the CommandAst element that contains the cursor, cut at the cursor, so completion works mid-line and when the command is not the first statement on the line. An unterminated quote is one element running to the cursor, so `cut 'my d` completes `my dir`, not `d`.
+- A path typed with an opening quote keeps that quote character: single quotes double any embedded `'`, double quotes escape `` ` ``, `"` and `$` with a backtick.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Option values

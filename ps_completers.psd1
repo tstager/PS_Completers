@@ -240,7 +240,7 @@
         @{
             Path    = 'cut_completer/cut_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:83467A3C19E48059D26C94AF09503656DA206521EBBD52D81A4661C6C2AF0C6D'
+            Hash    = 'SHA256:454CE9B7317CD9CB3EB2B99A40B9B3B61663DEED68FE8FEE34EACE61C4715FC9'
             Targets = @(
                 @{ CommandName = 'cut'; Native = $true }
                 @{ CommandName = 'cut.exe'; Native = $true }

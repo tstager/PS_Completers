@@ -12,7 +12,7 @@ function Get-CutCompletionOptions {
     $fallbackOptions = @('-b', '--bytes', '-c', '--characters', '-d', '--delimiter', '-f', '--fields', '--complement', '-n', '-s', '--only-delimited', '-z', '--zero-terminated', '--output-delimiter', '-h', '--help', '-V', '--version')
     $commandCandidates = @('cut.exe', 'cut')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -29,7 +29,18 @@ function Get-CutCompletionOptions {
 
         $options = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $descriptions = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        # Only indented lines that start with an option count, and the option block ends at
+        # the next section heading, so the LIST legend (-M) and Examples (-f1) stay out.
+        $inOptions = $false
         foreach ($line in ([regex]::Split($helpOutput, '\r?\n'))) {
+            if ($line -match '^\s+-') {
+                $inOptions = $true
+            } elseif ($inOptions -and $line -match '^\S') {
+                break
+            } else {
+                continue
+            }
+
             foreach ($match in [regex]::Matches($line, '(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9-]*)(?=(\s|,|=|\[|$))')) {
                 $rawOption = $match.Groups[1].Value
                 $normalized = $rawOption.Trim()
@@ -98,15 +109,20 @@ function Remove-CutOuterQuotes {
 function ConvertTo-CutQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [bool]$AlwaysQuote = $false,
+        [string]$QuoteChar = '"'
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
+    if ($QuoteChar -eq "'" -and ($AlwaysQuote -or $Value -match '\s')) {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
     if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -115,27 +131,19 @@ function ConvertTo-CutQuotedValue {
 
 function Get-CutCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($CursorPosition -gt $extent.StartOffset -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-CutPathCompletions {
@@ -143,6 +151,12 @@ function Get-CutPathCompletions {
 
     $cleanInput = Remove-CutOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = if ($alwaysQuote) { $InputPath.Substring(0, 1) } else { '"' }
+    if ($quoteChar -eq "'") {
+        $cleanInput = $cleanInput.Replace("''", "'")
+    } elseif ($alwaysQuote) {
+        $cleanInput = $cleanInput -replace '`(.)', '$1'
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -179,7 +193,7 @@ function Get-CutPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-CutQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-CutQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-CutCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -279,17 +293,14 @@ function Get-CutOptionDescription {
 }
 
 function Complete-Cut {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-CutCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-CutCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-CutOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
