@@ -33,7 +33,8 @@ Register-ArgumentCompleter -Native -CommandName @('markitdown', 'markitdown.exe'
 ## Supported completion behavior
 
 - `markitdown <TAB>` completes local input files (directories first, then extensions markitdown can convert, then other files, capped at 200 entries and enumerated lazily so a 30k-entry directory answers in well under a second), offers the URI schemes, and adds `<filename>` when you want to read from stdin instead. A typed word that matches nothing returns no completions so PowerShell's own filesystem fallback applies; placeholders are only offered for an empty word.
-- `markitdown --extension=<TAB>` and the other `--option=value` forms complete the value with the `--option=` prefix kept.
+- Path candidates are emitted as exactly one PowerShell argument: a name with whitespace, `' " $ & ; , ( ) { } | < > @ #`, a backtick or a typographic quote is single-quoted (inner single-quote characters, typographic ones included, are doubled), so `markitdown it<TAB>` gives `'it''s.pdf'`. A quote you typed is kept: `markitdown "dol<TAB>` gives ``"dollar`$x.pdf"``, and a typographic opening quote is treated as the matching ASCII quote. A typed folder part such as `.\` is kept.
+- `markitdown --extension=<TAB>` and the other `--option=value` forms complete the value with the `--option=` prefix kept. A value that needs quoting is quoted after the `=` (`--output='amp&x.md'`), and a quote typed after the `=` is kept (`--output='it<TAB>`, `--extension='pd<TAB>`); markitdown receives `--output=amp&x.md` as one argument.
 - `markitdown -o <TAB>` completes output paths and suggests `output.md` when the slot is empty.
 - `markitdown --extension <TAB>` suggests all 47 extensions accepted by the markitdown 0.1.7 converters (documents, text, images, audio and video).
 - `markitdown --mime-type <TAB>` suggests the MIME type prefixes those converters accept, including the `image/*`, `audio/*` and `video/*` families.

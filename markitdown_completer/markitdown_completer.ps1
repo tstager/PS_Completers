@@ -176,57 +176,68 @@ function Get-MarkItDownUriSchemeTable {
     @('https://', 'http://', 'file:///', 'data:')
 }
 
-function Remove-MarkItDownOuterQuotes {
-    param([string]$Value)
+function ConvertFrom-MarkItDownTypedWord {
+    # Splits the text typed so far into its value and the opening quote the
+    # user typed ('' when bare, otherwise ' or "), undoing that quote style's
+    # escapes. PowerShell treats U+2018-U+201B as single quotes and
+    # U+201C-U+201E as double quotes; a doubled quote keeps its second
+    # character, as the parser does.
+    param([string]$Text)
 
-    if ($null -eq $Value) {
-        return ''
+    $single = '[''\u2018-\u201B]'
+    $double = '["\u201C-\u201E]'
+    $quoteClass = if ($Text -match "^$single") { $single } elseif ($Text -match "^$double") { $double }
+    if (-not $quoteClass) {
+        return [pscustomobject]@{ Value = $Text; Quote = '' }
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $value = [System.Text.StringBuilder]::new()
+    for ($i = 1; $i -lt $Text.Length; $i++) {
+        $char = [string]$Text[$i]
+        $next = if ($i + 1 -lt $Text.Length) { [string]$Text[$i + 1] } else { '' }
+        if ($quoteClass -eq $double -and $char -eq '`' -and $next) {
+            $i++
+            [void]$value.Append($next)
+        } elseif ($char -match $quoteClass) {
+            if ($next -notmatch $quoteClass) {
+                break
+            }
+
+            $i++
+            [void]$value.Append($next)
+        } else {
+            [void]$value.Append($char)
+        }
+    }
+
+    $quote = if ($quoteClass -eq $single) { "'" } else { '"' }
+    [pscustomobject]@{ Value = $value.ToString(); Quote = $quote }
 }
 
-function ConvertTo-MarkItDownQuotedValue {
+function ConvertTo-MarkItDownArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the typed quote style (single by default).
+    # Whitespace and argument-mode metacharacters (including the typographic
+    # quotes) end or split a bare word, and a leading '@' or '#' would start a
+    # splat or a comment.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
-    $Value
-}
-
-function Get-MarkItDownCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-MarkItDownTokenText {
@@ -304,31 +315,27 @@ function Get-MarkItDownPathCompletions {
         [string]$ToolTipPrefix = 'Path'
     )
 
-    $typedValue = Remove-MarkItDownOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $typed = ConvertFrom-MarkItDownTypedWord -Text $InputPath
+    $typedValue = $typed.Value
 
+    # An empty $parent means the current directory with no typed folder part,
+    # so candidates stay bare names; a typed folder part (even '.\') is kept.
     if ([string]::IsNullOrWhiteSpace($typedValue)) {
-        $parent = '.'
+        $parent = ''
         $leaf = ''
     } elseif ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
         $parent = $typedValue
         $leaf = ''
     } else {
-        $candidateParent = Split-Path -Path $typedValue -Parent
-        if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-            $parent = '.'
-            $leaf = $typedValue
-        } else {
-            $parent = $candidateParent
-            $leaf = Split-Path -Path $typedValue -Leaf
-        }
+        $parent = Split-Path -Path $typedValue -Parent
+        $leaf = if ($parent) { Split-Path -Path $typedValue -Leaf } else { $typedValue }
     }
 
     # Enumerate lazily through .NET so a 30k-entry directory is not
     # materialized: directories first, then files markitdown can convert,
     # then everything else, capped at 200 entries in total.
     $limit = 200
-    $basePath = if ([System.IO.Path]::IsPathRooted($parent)) { $parent } else { Join-Path -Path $PWD.ProviderPath -ChildPath $parent }
+    $basePath = if (-not $parent) { $PWD.ProviderPath } elseif ([System.IO.Path]::IsPathRooted($parent)) { $parent } else { Join-Path -Path $PWD.ProviderPath -ChildPath $parent }
     try {
         $directory = [System.IO.DirectoryInfo]::new($basePath)
         if (-not $directory.Exists) {
@@ -369,14 +376,14 @@ function Get-MarkItDownPathCompletions {
 
     foreach ($item in $items) {
         $isContainer = $item -is [System.IO.DirectoryInfo]
-        $pathText = if ($parent -eq '.') { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
+        $pathText = if ($parent) { Join-Path -Path $parent -ChildPath $item.Name } else { $item.Name }
         if ($isContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-MarkItDownQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-MarkItDownArgument -Value $pathText -Quote $typed.Quote
         $resultType = if ($isContainer) { 'ProviderContainer' } else { 'ProviderItem' }
-        New-MarkItDownCompletionResult -CompletionText $quotedPath -ResultType $resultType -ToolTip "${ToolTipPrefix}: $($item.FullName)"
+        New-MarkItDownCompletionResult -CompletionText $completionText -ResultType $resultType -ListItemText $pathText -ToolTip "${ToolTipPrefix}: $($item.FullName)"
     }
 }
 
@@ -414,48 +421,54 @@ function Get-MarkItDownValueCompletions {
         [string]$CurrentWord
     )
 
-    switch ([string]$Spec.ValueKind) {
-        'Output' {
-            $results = @(Get-MarkItDownPathCompletions -InputPath $CurrentWord -ToolTipPrefix 'Output')
-            if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
-                $results += New-MarkItDownCompletionResult -CompletionText 'output.md' -ToolTip 'Write markdown output to output.md.'
-            }
-            return $results
+    if ($Spec.ValueKind -eq 'Output') {
+        $results = @(Get-MarkItDownPathCompletions -InputPath $CurrentWord -ToolTipPrefix 'Output')
+        if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
+            $results += New-MarkItDownCompletionResult -CompletionText 'output.md' -ToolTip 'Write markdown output to output.md.'
         }
-        'Extension' {
-            return Get-MarkItDownExtensionSuggestions |
-                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
-                ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input extension hint.' }
-        }
-        'MimeType' {
-            return Get-MarkItDownMimeTypeSuggestions |
-                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
-                ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input MIME type hint.' }
-        }
-        'Charset' {
-            return Get-MarkItDownCharsetSuggestions |
-                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
-                ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input charset hint.' }
-        }
-        'Endpoint' {
-            $suggestions = @('https://<resource>.cognitiveservices.azure.com/')
-            return $suggestions |
-                Where-Object { $_ -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*') } |
-                ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Azure endpoint URL.' }
-        }
-        'Analyzer' {
-            if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
-                return @(New-MarkItDownCompletionResult -CompletionText '<analyzer-id>' -ToolTip 'Content Understanding analyzer ID.')
-            }
-
-            return @()
-        }
-        'FileTypes' {
-            return @(Complete-MarkItDownCommaList -Candidates (Get-MarkItDownCuFileTypeTable) -CurrentWord $CurrentWord -ToolTip 'File type routed to Content Understanding.')
-        }
+        return $results
     }
 
-    @()
+    # Match on the unquoted value; a quote the user typed is kept below.
+    $typed = ConvertFrom-MarkItDownTypedWord -Text $CurrentWord
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($typed.Value) + '*'
+    $results = @(
+        switch ([string]$Spec.ValueKind) {
+            'Extension' {
+                Get-MarkItDownExtensionSuggestions | Where-Object { $_ -like $pattern } |
+                    ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input extension hint.' }
+            }
+            'MimeType' {
+                Get-MarkItDownMimeTypeSuggestions | Where-Object { $_ -like $pattern } |
+                    ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input MIME type hint.' }
+            }
+            'Charset' {
+                Get-MarkItDownCharsetSuggestions | Where-Object { $_ -like $pattern } |
+                    ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Input charset hint.' }
+            }
+            'Endpoint' {
+                @('https://<resource>.cognitiveservices.azure.com/') | Where-Object { $_ -like $pattern } |
+                    ForEach-Object { New-MarkItDownCompletionResult -CompletionText $_ -ToolTip 'Azure endpoint URL.' }
+            }
+            'Analyzer' {
+                if ([string]::IsNullOrWhiteSpace($typed.Value)) {
+                    New-MarkItDownCompletionResult -CompletionText '<analyzer-id>' -ToolTip 'Content Understanding analyzer ID.'
+                }
+            }
+            'FileTypes' {
+                Complete-MarkItDownCommaList -Candidates (Get-MarkItDownCuFileTypeTable) -CurrentWord $typed.Value -ToolTip 'File type routed to Content Understanding.'
+            }
+        }
+    )
+
+    if (-not $typed.Quote) {
+        return $results
+    }
+
+    foreach ($item in $results) {
+        $completionText = ConvertTo-MarkItDownArgument -Value $item.CompletionText -Quote $typed.Quote
+        New-MarkItDownCompletionResult -CompletionText $completionText -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
+    }
 }
 
 function Get-MarkItDownOptionCompletions {
@@ -473,7 +486,7 @@ function Get-MarkItDownOptionCompletions {
 function Complete-MarkItDownInput {
     param([string]$CurrentWord)
 
-    $typedValue = Remove-MarkItDownOuterQuotes -Value $CurrentWord
+    $typedValue = (ConvertFrom-MarkItDownTypedWord -Text $CurrentWord).Value
 
     # A URI operand (http:, https:, file:, data:) is never a local listing.
     if ($typedValue -match '^[A-Za-z][A-Za-z0-9+.-]*:(//|$)' -and $typedValue -notmatch '^[A-Za-z]:[\\/]?$') {
@@ -501,73 +514,89 @@ function Complete-MarkItDownInput {
     }
 }
 
-function Complete-MarkItDown {
+function Get-MarkItDownArgumentValue {
+    # The value a native command receives for $Text written as one argument:
+    # a string's value, or an unquoted comma list joined with commas. Anything
+    # else (a quoted list element, an expression) yields $null.
+    param([string]$Text)
+
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput("x $Text", [ref]$null, [ref]$null)
+    $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    $elements = @($command.CommandElements | Select-Object -Skip 1)
+    if ($elements.Count -ne 1) {
+        return $null
+    }
+
+    $element = $elements[0]
+    if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        return $element.Value
+    }
+
+    if ($element -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+        $parts = @($element.Elements)
+        if (@($parts | Where-Object { $_ -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $_.StringConstantType -ne 'BareWord' }).Count -eq 0) {
+            return (($parts | ForEach-Object Value) -join ',')
+        }
+    }
+
+    $null
+}
+
+function Select-MarkItDownSegmentCompletion {
+    # Inside an unquoted comma list PowerShell replaces only the segment after
+    # the last comma and hands a native command the list joined with commas.
+    # A candidate is kept when its value extends the typed list and the rest
+    # stays bare, so the accepted line is still one argument with that value.
     param(
-        [string]$WordToComplete,
-        [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
+        [object[]]$Results,
+        [string]$SegmentPrefix
     )
 
-    $currentWord = if ($null -eq $WordToComplete) {
-        Get-MarkItDownCurrentToken -Line $CommandAst.ToString() -CursorPosition ($CursorPosition - $CommandAst.Extent.StartOffset) -Fallback $WordToComplete
-    } else {
-        $WordToComplete
-    }
-
-    $tokensBeforeCurrent = @(Get-MarkItDownArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
-    $expectedValue = Get-MarkItDownExpectedValueSpec -TokensBeforeCurrent $tokensBeforeCurrent
-    if ($expectedValue) {
-        return @(Get-MarkItDownValueCompletions -Spec $expectedValue -CurrentWord $currentWord)
-    }
-
-    # PowerShell parses '--opt=a,b' as an array literal and replaces only the
-    # segment after the last comma, so read the whole element up to the cursor
-    # and emit just that segment.
-    $attachedWord = $currentWord
-    $segmentPrefix = ''
-    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 |
-        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
-        Select-Object -First 1
-    if ($cursorElement) {
-        $elementText = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
-        if ($elementText.EndsWith(',' + $currentWord, [System.StringComparison]::Ordinal)) {
-            $attachedWord = $elementText
-            $segmentPrefix = $elementText.Substring(0, $elementText.Length - $currentWord.Length)
+    foreach ($item in $Results) {
+        $value = Get-MarkItDownArgumentValue -Text $item.CompletionText
+        if ($null -eq $value -or -not $value.StartsWith($SegmentPrefix, [System.StringComparison]::Ordinal)) {
+            continue
         }
+
+        $rest = $value.Substring($SegmentPrefix.Length)
+        $unsafe = @($rest.Split(',') | Where-Object { -not $_ -or (ConvertTo-MarkItDownArgument -Value $_) -cne $_ })
+        if ($unsafe.Count -gt 0) {
+            continue
+        }
+
+        New-MarkItDownCompletionResult -CompletionText $rest -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
+    }
+}
+
+function Get-MarkItDownWordCompletion {
+    param(
+        [string]$CurrentWord,
+        [string[]]$TokensBeforeCurrent
+    )
+
+    $expectedValue = Get-MarkItDownExpectedValueSpec -TokensBeforeCurrent $TokensBeforeCurrent
+    if ($expectedValue) {
+        return @(Get-MarkItDownValueCompletions -Spec $expectedValue -CurrentWord $CurrentWord)
     }
 
-    $attached = Split-MarkItDownAttachedOption -Token $attachedWord
+    $attached = Split-MarkItDownAttachedOption -Token $CurrentWord
     if ($attached) {
         $prefix = $attached.Name + '='
-        $attachedResults = @(
+        return @(
             foreach ($item in @(Get-MarkItDownValueCompletions -Spec $attached.Spec -CurrentWord $attached.Value)) {
-                $completionText = $prefix + $item.CompletionText
-                if ($segmentPrefix) {
-                    if (-not $completionText.StartsWith($segmentPrefix, [System.StringComparison]::Ordinal)) { continue }
-                    $completionText = $completionText.Substring($segmentPrefix.Length)
-                }
-
-                New-MarkItDownCompletionResult -CompletionText $completionText -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
+                New-MarkItDownCompletionResult -CompletionText ($prefix + $item.CompletionText) -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
             }
         )
-
-        # An empty answer inside an array literal that runs past the cursor
-        # makes PowerShell's own fallback throw ('Value cannot be null'), so a
-        # comma segment with no value candidates continues to the generic
-        # completions below instead.
-        if ($attachedResults.Count -gt 0 -or -not $segmentPrefix) {
-            return $attachedResults
-        }
     }
 
-    if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
-        return @(Get-MarkItDownOptionCompletions -CurrentWord $currentWord)
+    if (-not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('-')) {
+        return @(Get-MarkItDownOptionCompletions -CurrentWord $CurrentWord)
     }
 
     $positionals = @()
     $optionMap = Get-MarkItDownOptionMap
     $skipNext = $false
-    foreach ($token in $tokensBeforeCurrent) {
+    foreach ($token in $TokensBeforeCurrent) {
         if ($skipNext) {
             $skipNext = $false
             continue
@@ -588,23 +617,65 @@ function Complete-MarkItDown {
     }
 
     if ($positionals.Count -eq 0) {
-        $results = New-Object System.Collections.Generic.List[object]
-        foreach ($item in @(Complete-MarkItDownInput -CurrentWord $currentWord)) {
-            [void]$results.Add($item)
-        }
-
-        foreach ($item in @(Get-MarkItDownOptionCompletions -CurrentWord $currentWord)) {
-            [void]$results.Add($item)
-        }
-
-        return @($results.ToArray())
+        return @(
+            Complete-MarkItDownInput -CurrentWord $CurrentWord
+            Get-MarkItDownOptionCompletions -CurrentWord $CurrentWord
+        )
     }
 
-    if ([string]::IsNullOrWhiteSpace($currentWord)) {
-        return @(Get-MarkItDownOptionCompletions -CurrentWord $currentWord)
+    if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
+        return @(Get-MarkItDownOptionCompletions -CurrentWord $CurrentWord)
     }
 
     @()
+}
+
+function Complete-MarkItDown {
+    param(
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # PowerShell hands a quoted word over re-quoted ("'it" arrives as "'it'")
+    # and drops the quote inside an attached "--opt='it", while it replaces
+    # the whole word as typed; so the word is read from the element under the
+    # cursor. An unquoted comma list ('--opt=a,b', or 'a,' which parses as an
+    # error expression) is the exception: PowerShell replaces only the segment
+    # after the last comma, so the whole element is completed and the
+    # candidates are cut back to that segment.
+    $currentWord = $WordToComplete
+    $segmentPrefix = ''
+    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+        Select-Object -First 1
+    if ($cursorElement) {
+        $elementText = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
+        $isList = $cursorElement -is [System.Management.Automation.Language.ArrayLiteralAst] -or
+            $cursorElement -is [System.Management.Automation.Language.ErrorExpressionAst]
+        if (-not $isList) {
+            $currentWord = $elementText
+        } elseif ($elementText.EndsWith(',' + $WordToComplete, [System.StringComparison]::Ordinal)) {
+            $currentWord = $elementText
+            $segmentPrefix = $elementText.Substring(0, $elementText.Length - $WordToComplete.Length)
+        }
+    }
+
+    $tokensBeforeCurrent = @(Get-MarkItDownArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
+    $results = @(Get-MarkItDownWordCompletion -CurrentWord $currentWord -TokensBeforeCurrent $tokensBeforeCurrent)
+    if (-not $segmentPrefix) {
+        return $results
+    }
+
+    $segmentResults = @(Select-MarkItDownSegmentCompletion -Results $results -SegmentPrefix $segmentPrefix)
+    if ($segmentResults.Count -eq 0 -and $WordToComplete) {
+        # Echo the typed segment so PowerShell's filename fallback adds no
+        # candidate that would break the list; an empty segment cannot be
+        # echoed (PowerShell rejects an empty completion text).
+        return @(New-MarkItDownCompletionResult -CompletionText $WordToComplete -ToolTip 'Nothing continues this comma list; quote the whole value to complete a name that contains a comma.')
+    }
+
+    $segmentResults
 }
 
 Register-ArgumentCompleter -Native -CommandName @('markitdown', 'markitdown.exe') -ScriptBlock {
