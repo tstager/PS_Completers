@@ -130,32 +130,47 @@ function New-JqCompletionResult {
     )
 }
 
-function Remove-JqOuterQuotes {
+function ConvertFrom-JqTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-JqQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-JqQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-JqCommandTokens {
@@ -178,49 +193,61 @@ function Get-JqCommandTokens {
     )
 }
 
+function Get-JqCurrentToken {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The typed word as written: wordToComplete normalizes quotes to ASCII, closes them and
+    # undoes their escapes. The whole word is read because PowerShell replaces the whole word,
+    # even when the cursor is inside it. An unterminated quoted word is one element.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text
+        }
+    }
+
+    ''
+}
+
 function Get-JqPathCompletions {
     param(
         [string]$InputPath,
         [switch]$DirectoriesOnly
     )
 
-    $cleanInput = Remove-JqOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-JqTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The directory part is kept exactly as typed (.\, ./, ..\ included) and the leaf filters.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') -and (-not $DirectoriesOnly -or $_.PSIsContainer) } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
+        # A bare name starting with a dash would parse as a parameter, so it gets the
+        # current-directory prefix, as PowerShell's own file completion does.
+        $pathText = if (-not $directoryText -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $directoryText + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-JqQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-JqQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-JqCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -238,6 +265,7 @@ function Complete-Jq {
 
     $currentToken = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
     $tokens = @(Get-JqCommandTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
+    $typedWord = Get-JqCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     # A slot is a placeholder, 'path', 'dir' (-L takes a module directory) or an array of the
     # literal values it accepts (--indent n, max 7).
@@ -290,11 +318,11 @@ function Complete-Jq {
         }
 
         if ($kind -eq 'path') {
-            return Get-JqPathCompletions -InputPath $currentToken
+            return Get-JqPathCompletions -InputPath $typedWord
         }
 
         if ($kind -eq 'dir') {
-            return Get-JqPathCompletions -InputPath $currentToken -DirectoriesOnly
+            return Get-JqPathCompletions -InputPath $typedWord -DirectoriesOnly
         }
 
         if ([string]::IsNullOrWhiteSpace($currentToken)) {
@@ -327,7 +355,7 @@ function Complete-Jq {
         )
     }
 
-    Get-JqPathCompletions -InputPath $currentToken
+    Get-JqPathCompletions -InputPath $typedWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'jq', 'jq.exe' -ScriptBlock {

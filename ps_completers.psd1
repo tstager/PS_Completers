@@ -528,7 +528,7 @@
         @{
             Path    = 'jq_completer/jq_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:28D1754347EA84AA391F8C37B4C59EF21AC9A2CECC8B0E5F788943A307898BF8'
+            Hash    = 'SHA256:79731BC30DB55EFE6B35BD0326D5B39C9A43CF77779C1B845AEC0ABAD4C52659'
             Targets = @(
                 @{ CommandName = 'jq'; Native = $true }
                 @{ CommandName = 'jq.exe'; Native = $true }
