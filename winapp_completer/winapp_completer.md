@@ -186,13 +186,16 @@ crash).
 
 ## Quoted words
 
-A word opened with `'` or `"` (closed or not) is read from the parser up to the
-cursor and matched on its unquoted value, so `winapp find-api "mem` offers
-`"members"` and `winapp new --template 'winui-t` offers `'winui-tabview'`.
-Subcommands, value choices and placeholders come back in the quote the user
-typed (`'` doubled inside single quotes; `` ` ``, `"` and `$` backtick-escaped
-inside double quotes). File and directory slots hand the typed text to
-PowerShell's filename completer, which does its own quoting.
+A word opened with `'` or `"` (closed or not; typographic quotes count too) is
+read by the tokenizer up to the cursor and matched on its unquoted value, so
+`winapp find-api "mem` offers `"members"` and `winapp new --template 'winui-t`
+offers `'winui-tabview'`. Subcommands, value choices and placeholders come back
+in the quote the user typed (single quotes doubled inside single quotes; `` ` ``,
+`"` and `$` backtick-escaped inside double quotes). File and directory slots
+take PowerShell's filename completer results, unwrap and unescape them, and
+quote each path once: bare when safe, otherwise in the typed quote (single by
+default). The inline form keeps the option outside the quotes
+(`--output='.\sp ace.png'`).
 
 ## Passthrough commands
 

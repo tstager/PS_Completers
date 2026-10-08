@@ -163,25 +163,39 @@ function New-WinAppCompletion {
 }
 
 # Splits the text typed so far into its value and the opening quote the user
-# typed ('' when bare), dropping a closing quote and undoing that quote style's
-# escapes.
+# typed ('' when bare).  A word opened with a quote (ASCII or typographic) is
+# read by the PowerShell tokenizer, which drops the quotes and undoes that quote
+# style's escapes.
 function ConvertFrom-WinAppTypedWord {
     param([string]$Text)
 
-    $quote = ''
-    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
-        $quote = $Text.Substring(0, 1)
-        $Text  = $Text.Substring(1)
-        if ($Text.EndsWith($quote)) {
-            $Text = $Text.Substring(0, $Text.Length - 1)
-        }
-        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    if ($Text -notmatch '^[''"\u2018-\u201E]') {
+        return [pscustomobject]@{ Value = $Text; Quote = '' }
     }
-    [pscustomobject]@{ Value = $Text; Quote = $quote }
+    $tokens    = $null
+    $parseErrs = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrs)
+    [pscustomobject]@{ Value = $tokens[0].Value; Quote = $Text.Substring(0, 1) }
+}
+
+# Renders a value as one PowerShell argument: bare when safe and no quote was
+# typed, otherwise in the quote the user typed (single by default).  PowerShell
+# reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double.
+function ConvertTo-WinAppQuotedValue {
+    param([string]$Value, [string]$Quote = '')
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+        $Quote = "'"
+    }
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
+    }
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 # Re-emits value completions inside the quote the user opened.  Filesystem
-# results (CompleteFilename already quotes them) and option names pass through.
+# results (already quoted by Write-WinAppPathValue) and option names pass through.
 function Format-WinAppQuotedResult {
     param(
         [Parameter(ValueFromPipeline)]
@@ -194,13 +208,9 @@ function Format-WinAppQuotedResult {
             $Result.ResultType -ne [System.Management.Automation.CompletionResultType]::ParameterValue) {
             return $Result
         }
-        $text = if ($Quote -eq "'") {
-                    "'" + $Result.CompletionText.Replace("'", "''") + "'"
-                } else {
-                    '"' + ($Result.CompletionText -replace '([`"$])', '`$1') + '"'
-                }
         [System.Management.Automation.CompletionResult]::new(
-            $text, $Result.ListItemText, $Result.ResultType, $Result.ToolTip
+            (ConvertTo-WinAppQuotedValue -Value $Result.CompletionText -Quote $Quote),
+            $Result.ListItemText, $Result.ResultType, $Result.ToolTip
         )
     }
 }
@@ -251,30 +261,31 @@ function Resolve-WinAppSubcommandName {
     return $null
 }
 
-# Emits filesystem completions for a path-valued slot of the given kind.
+# Emits filesystem completions for a path-valued slot of the given kind
+# ('Directory' keeps containers only).  CompleteFilename quotes for PowerShell
+# and wildcard-escapes (tick``x.txt), so each result is unwrapped by the
+# tokenizer and unescaped, then quoted once in the quote the user typed.
 function Write-WinAppPathValue {
     param(
         [string]$Kind,
+        # The word as typed (opening quote kept).
         [string]$WordToComplete,
         [string]$InlinePrefix = ''
     )
 
-    if ($Kind -eq 'Directory') {
-        Write-WinAppDirectoryCompletion -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix
-        return
-    }
-
-    [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-        ForEach-Object {
-            if ($InlinePrefix) {
-                New-WinAppCompletion "$InlinePrefix$($_.CompletionText)" `
-                    -ListItemText $_.ListItemText `
-                    -ResultType   $_.ResultType `
-                    -Tooltip      $_.ToolTip
-            } else {
-                $_
-            }
+    $typed = ConvertFrom-WinAppTypedWord -Text $WordToComplete
+    foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($typed.Value)) {
+        if ($Kind -eq 'Directory' -and
+            $item.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
+            continue
         }
+        $path = [System.Management.Automation.WildcardPattern]::Unescape(
+                    (ConvertFrom-WinAppTypedWord -Text $item.CompletionText).Value)
+        New-WinAppCompletion ($InlinePrefix + (ConvertTo-WinAppQuotedValue -Value $path -Quote $typed.Quote)) `
+            -ListItemText $item.ListItemText `
+            -ResultType   $item.ResultType `
+            -Tooltip      $item.ToolTip
+    }
 }
 
 # Returns the option node object for a (possibly aliased) token in the given
@@ -434,7 +445,7 @@ function Write-WinAppOptionValue {
 
     # 3. Directory path (directories only).
     if ($valueType -like '*System.IO.DirectoryInfo*') {
-        Write-WinAppDirectoryCompletion -WordToComplete $PathWord -InlinePrefix $InlinePrefix
+        Write-WinAppPathValue -Kind 'Directory' -WordToComplete $PathWord -InlinePrefix $InlinePrefix
         return
     }
 
@@ -453,28 +464,6 @@ function Write-WinAppOptionValue {
         $text = if ($InlinePrefix) { "$InlinePrefix$ph" } else { $ph }
         New-WinAppCompletion $text -ListItemText $ph -Tooltip "Value for $canonical"
     }
-}
-
-# Directory-only completion (filters CompleteFilename results to containers).
-function Write-WinAppDirectoryCompletion {
-    param(
-        [string]$WordToComplete,
-        [string]$InlinePrefix = ''
-    )
-    [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-        Where-Object {
-            $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
-        } |
-        ForEach-Object {
-            if ($InlinePrefix) {
-                New-WinAppCompletion "$InlinePrefix$($_.CompletionText)" `
-                    -ListItemText $_.ListItemText `
-                    -ResultType   $_.ResultType `
-                    -Tooltip      $_.ToolTip
-            } else {
-                $_
-            }
-        }
 }
 
 # Builds the canonical option name -> option-node map for the current node,
@@ -626,11 +615,11 @@ function Write-WinAppPositionalValue {
         return
     }
     if ($valueType -like '*System.IO.FileInfo*' -or $valueType -like '*System.IO.FileSystemInfo*') {
-        [System.Management.Automation.CompletionCompleters]::CompleteFilename($PathWord)
+        Write-WinAppPathValue -Kind 'Any' -WordToComplete $PathWord
         return
     }
     if ($valueType -like '*System.IO.DirectoryInfo*') {
-        Write-WinAppDirectoryCompletion -WordToComplete $PathWord
+        Write-WinAppPathValue -Kind 'Directory' -WordToComplete $PathWord
         return
     }
 
@@ -803,7 +792,7 @@ function Complete-WinAppNative {
     $wordElement = $null
     $typedQuote  = ''
     $pathWord    = $WordToComplete
-    if ($isNativeConvention -and $WordToComplete -match '^[''"]') {
+    if ($isNativeConvention -and $WordToComplete -match '^[''"\u2018-\u201E]') {
         $wordElement = $allElements | Select-Object -Skip 1 | Where-Object {
             $_.Extent.StartOffset -lt $cursorCol -and $cursorCol -le $_.Extent.EndOffset
         } | Select-Object -First 1
@@ -900,8 +889,23 @@ function Complete-WinAppNative {
         $eqIdx    = $WordToComplete.IndexOf('=')
         $flagPart = $WordToComplete.Substring(0, $eqIdx)
         $valPfx   = $WordToComplete.Substring($eqIdx + 1)
+        # PowerShell drops a quote typed after '=' from the word it hands over
+        # but replaces the whole word, so path slots read the value as typed
+        # from the element under the cursor.
+        $valPathWord = $valPfx
+        if ($isNativeConvention) {
+            $inlineElement = $allElements | Select-Object -Skip 1 | Where-Object {
+                $_.Extent.StartOffset -lt $cursorCol -and $cursorCol -le $_.Extent.EndOffset
+            } | Select-Object -First 1
+            if ($null -ne $inlineElement) {
+                $inlineText = $inlineElement.Extent.Text.Substring(0, $cursorCol - $inlineElement.Extent.StartOffset)
+                if ($inlineText.Contains('=')) {
+                    $valPathWord = $inlineText.Substring($inlineText.IndexOf('=') + 1)
+                }
+            }
+        }
         Write-WinAppOptionValue -Node $currentNode -OptionToken $flagPart `
-            -WordToComplete $valPfx -InlinePrefix "$flagPart=" -CommandPath $commandPath
+            -WordToComplete $valPfx -InlinePrefix "$flagPart=" -CommandPath $commandPath -PathWord $valPathWord
         return
     }
 
