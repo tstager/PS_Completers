@@ -96,37 +96,47 @@ function New-CutCompletionResult {
     )
 }
 
-function Remove-CutOuterQuotes {
+function ConvertFrom-CutTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-CutQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false,
-        [string]$QuoteChar = '"'
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if ($QuoteChar -eq "'" -and ($AlwaysQuote -or $Value -match '\s')) {
-        return "'" + $Value.Replace("'", "''") + "'"
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-CutQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-CutCurrentToken {
@@ -149,14 +159,8 @@ function Get-CutCurrentToken {
 function Get-CutPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-CutOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-    $quoteChar = if ($alwaysQuote) { $InputPath.Substring(0, 1) } else { '"' }
-    if ($quoteChar -eq "'") {
-        $cleanInput = $cleanInput.Replace("''", "'")
-    } elseif ($alwaysQuote) {
-        $cleanInput = $cleanInput -replace '`(.)', '$1'
-    }
+    $cleanInput = ConvertFrom-CutTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -173,27 +177,28 @@ function Get-CutPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Keep the directory part exactly as typed (.\, ./, ..\ and the typed separators).
+    $typedDirectory = $cleanInput.Substring(0, $cleanInput.Length - $leaf.Length)
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        # A bare word starting with a dash parses as a parameter, so anchor it like PowerShell does.
+        if (-not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-CutQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote -QuoteChar $quoteChar
+        $quotedPath = ConvertTo-CutQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-CutCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -264,9 +269,11 @@ function Get-CutOptionValueCompletions {
 
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
+        # Quote the whole word, so an attached --opt=value stays one constant argument.
+        $quoteChar = if ($prefix -match '^[''"\u2018-\u201E]') { $prefix.Substring(0, 1) } else { '' }
         return @(
             foreach ($result in Get-CutPathCompletions -InputPath $prefix) {
-                New-CutCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+                New-CutCompletionResult -CompletionText (ConvertTo-CutQuotedValue -Value ($attached + $result.ListItemText) -QuoteChar $quoteChar) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
             }
         )
     }
