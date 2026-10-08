@@ -126,20 +126,53 @@ function Test-PwshOptionToken {
     $false
 }
 
-function Remove-PwshOuterQuotes {
+function ConvertFrom-PwshTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-PwshQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Test-PwshPathLike {
     param([string]$Value)
 
-    $clean = Remove-PwshOuterQuotes -Value $Value
+    $clean = ConvertFrom-PwshTypedWord -Value $Value
     -not [string]::IsNullOrWhiteSpace($clean) -and $clean -match '^(?:\.{1,2}[\\/]|~[\\/]|[A-Za-z]:[\\/]|\\\\|[\\/])'
 }
 
@@ -153,7 +186,20 @@ function Get-PwshPathCompletions {
     )
 
     $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($InputPath)) {
+        # CompleteFilename quotes for PowerShell and wildcard-escapes (tick``x.txt inside single
+        # quotes), so unwrap each result with the parser and unescape it, then quote it once.
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
         $isContainer = $item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
         if (-not $isContainer) {
             if ($ContainersOnly) {
@@ -161,20 +207,21 @@ function Get-PwshPathCompletions {
             }
 
             if ($Extension.Count -gt 0) {
-                $leaf = Remove-PwshOuterQuotes -Value $item.ListItemText
-                $itemExtension = [System.IO.Path]::GetExtension($leaf)
+                $itemExtension = [System.IO.Path]::GetExtension($path)
                 if (-not ($Extension -contains $itemExtension)) {
                     continue
                 }
             }
         }
 
-        if ([string]::IsNullOrEmpty($AttachedPrefix)) {
-            $results.Add($item)
-            continue
+        # Attached forms keep the option bare (-File='a b.ps1') when a quote was typed after the
+        # separator; otherwise the whole word is quoted when the value needs it ('-File=a b.ps1').
+        $completionText = if ($quoteChar -or [string]::IsNullOrEmpty($AttachedPrefix)) {
+            "$AttachedPrefix$(ConvertTo-PwshQuotedValue -Value $path -QuoteChar $quoteChar)"
+        } else {
+            ConvertTo-PwshQuotedValue -Value "$AttachedPrefix$path"
         }
 
-        $completionText = "$AttachedPrefix$($item.CompletionText)"
         $results.Add([System.Management.Automation.CompletionResult]::new(
             $completionText,
             $item.ListItemText,
