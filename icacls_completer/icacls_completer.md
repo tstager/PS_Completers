@@ -76,14 +76,10 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
         switch ($expectedValueOption) {
             '/save' {
-                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
+                return Get-IcaclsPathCompletions -InputPath $currentWord
             }
             '/restore' {
-                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
+                return Get-IcaclsPathCompletions -InputPath $currentWord
             }
             '/grant' {
                 $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
@@ -152,9 +148,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
     if (-not $hasTargetPath) {
         if ([string]::IsNullOrWhiteSpace($currentWord) -or -not $currentWord.StartsWith('/')) {
-            return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-            }
+            return Get-IcaclsPathCompletions -InputPath $currentWord
         }
 
         return @('/?') |
@@ -165,9 +159,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $currentWord.StartsWith('/')) {
-        return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-        }
+        return Get-IcaclsPathCompletions -InputPath $currentWord
     }
 
     if ($activeCommand) {
@@ -242,7 +234,7 @@ The registered completer scriptblock:
 - determines whether the previous token expects a value with `Get-IcaclsExpectedValueOption`
 
 ### Specialized value completion
-- `Get-IcaclsPathCompletions` uses `Get-ChildItem` and automatically quotes paths that contain spaces; a trailing separator lists that directory's children.
+- `Get-IcaclsPathCompletions` uses `Get-ChildItem`; a trailing separator lists that directory's children. A typed quoted word is read with the PowerShell tokenizer (`ConvertFrom-IcaclsTypedWord`), and `ConvertTo-IcaclsQuotedPath` single-quotes any path containing whitespace or PowerShell metacharacters (or keeps the quote the user typed), so names such as `a$b.txt`, `amp&c.txt` or `it's.txt` stay one literal argument. Directories end with a separator inside the quotes.
 - `Get-IcaclsIdentityList` builds the principals a `Sid` operand can name: well-known accounts, the current user, local users and groups (once per session), plus the identities already on the operand path's ACL (`Get-Acl`, cached per path for 30 s). `Get-IcaclsIdentityCompletions` serves them to `/setowner`, `/findsid`, `/remove[:g|:d]` and both `/substitute` operands, and as `Identity:` to the `/grant`, `/grant:r` and `/deny` slots before the colon is typed.
 - `Get-IcaclsInlineOptionCompletions` supports inline forms for:
   - `/inheritance:e|d|r`
@@ -334,4 +326,4 @@ Because the completion catalog is generated from help text, availability and wor
 - Catalog initialization is one-time per session; the script does not refresh the cached data automatically.
 - If `icacls.exe` cannot be found or returns no help text, the catalog stays effectively empty and completion results will be limited.
 - Principal completion is local-only (well-known accounts, local users and groups, the operand's own ACL); domain accounts and numeric `*S-1-...` SIDs are not enumerated.
-- Path completion uses `Get-ChildItem` and returns fully qualified paths, quoting them when they contain spaces.
+- Path completion uses `Get-ChildItem`. A bare name completes to the fully qualified path; a typed directory part (`.\`, `./`, `..\`, `sub\`) is kept exactly as typed. Paths are quoted when they contain whitespace or PowerShell metacharacters or start with a dash.

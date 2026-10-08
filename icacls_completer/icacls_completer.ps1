@@ -319,20 +319,54 @@ function Initialize-IcaclsCompletionCatalog {
     $script:IcaclsCompletionCatalog.Initialized = $true
 }
 
-function ConvertTo-IcaclsQuotedPath {
-    param([string]$Path)
+function ConvertFrom-IcaclsTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ($Path -match '\s' -and -not ($Path.StartsWith('"') -and $Path.EndsWith('"'))) {
-        return '"' + $Path + '"'
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    $Path
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-IcaclsQuotedPath {
+    # Renders a path as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Path,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Path)) {
+        return $Path
+    }
+
+    if (-not $QuoteChar) {
+        if ($Path -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Path
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Path -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Path -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-IcaclsPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
+    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { ConvertFrom-IcaclsTypedWord -Value $InputPath }
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     # A trailing separator means "list this directory"; Split-Path -Leaf would return the directory itself.
     $parent = '.'
@@ -353,7 +387,25 @@ function Get-IcaclsPathCompletions {
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object {
         [string]::IsNullOrWhiteSpace($leaf) -or $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
     })
-    $items | ForEach-Object { ConvertTo-IcaclsQuotedPath -Path $_.FullName }
+    # A typed directory part ('.\', '..\', 'sub/') is kept exactly as typed; a bare name completes
+    # to the full path. '~' is the exception: a quoted '~\...' reaches icacls unexpanded.
+    $typedDirectory = ''
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $lastSeparator = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($lastSeparator -ge 0 -and -not $cleanInput.StartsWith('~')) {
+        $typedDirectory = $cleanInput.Substring(0, $lastSeparator + 1)
+        $separator = $cleanInput[$lastSeparator]
+    }
+
+    foreach ($item in $items) {
+        $pathText = if ($typedDirectory) { $typedDirectory + $item.Name } else { $item.FullName }
+        if ($item.PSIsContainer -and -not $pathText.EndsWith($separator)) {
+            $pathText += $separator
+        }
+
+        $quotedPath = ConvertTo-IcaclsQuotedPath -Path $pathText -QuoteChar $quoteChar
+        New-IcaclsCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ParameterValue' -ToolTip $item.FullName
+    }
 }
 
 function Get-IcaclsIdentityList {
@@ -393,7 +445,7 @@ function Get-IcaclsIdentityList {
 
     $aclNames = @()
     if (-not [string]::IsNullOrWhiteSpace($OperandPath)) {
-        $cleanPath = $OperandPath.Trim('"')
+        $cleanPath = ConvertFrom-IcaclsTypedWord -Value $OperandPath
         $cache = $script:IcaclsCompletionCatalog.AclIdentityCache
         $entry = if ($cache.ContainsKey($cleanPath)) { $cache[$cleanPath] } else { $null }
         if ($entry -and ((Get-Date) - $entry.UpdatedAt).TotalSeconds -lt 30) {
@@ -451,16 +503,21 @@ function New-IcaclsCompletionResult {
     param(
         [string]$CompletionText,
         [string]$ResultType,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$ListItemText
     )
 
     if ([string]::IsNullOrWhiteSpace($ToolTip)) {
         $ToolTip = $CompletionText
     }
 
+    if ([string]::IsNullOrEmpty($ListItemText)) {
+        $ListItemText = $CompletionText
+    }
+
     [System.Management.Automation.CompletionResult]::new(
         $CompletionText,
-        $CompletionText,
+        $ListItemText,
         $ResultType,
         $ToolTip
     )
@@ -808,7 +865,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     $currentWord = if (
         (-not [string]::IsNullOrEmpty($lineCurrentWord)) -and
         (-not [string]::IsNullOrWhiteSpace($wordToComplete)) -and
-        ($lineCurrentWord.Length -gt $wordToComplete.Length)
+        ($lineCurrentWord.Length -ge $wordToComplete.Length)
     ) {
         $lineCurrentWord
     } else {
@@ -858,14 +915,10 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
         switch ($expectedValueOption) {
             '/save' {
-                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
+                return Get-IcaclsPathCompletions -InputPath $currentWord
             }
             '/restore' {
-                return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                    New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-                }
+                return Get-IcaclsPathCompletions -InputPath $currentWord
             }
             '/grant' {
                 $completionText = @(Get-IcaclsPermissionCompletions -WordToComplete $currentWord)
@@ -934,9 +987,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
 
     if (-not $hasTargetPath) {
         if ([string]::IsNullOrWhiteSpace($currentWord) -or -not $currentWord.StartsWith('/')) {
-            return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-                New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-            }
+            return Get-IcaclsPathCompletions -InputPath $currentWord
         }
 
         return @('/?') |
@@ -947,9 +998,7 @@ Register-ArgumentCompleter -Native -CommandName 'icacls', 'icacls.exe' -ScriptBl
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord) -and -not $currentWord.StartsWith('/')) {
-        return Get-IcaclsPathCompletions -InputPath $currentWord | ForEach-Object {
-            New-IcaclsCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip $_
-        }
+        return Get-IcaclsPathCompletions -InputPath $currentWord
     }
 
     if ($activeCommand) {
