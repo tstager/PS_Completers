@@ -1197,7 +1197,7 @@
         @{
             Path    = 'sigcheck_completer/sigcheck_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:9EDD29796DE2DB7150D8A6ED12B75CBA54A84A68163480EB0D801A17C9E83341'
+            Hash    = 'SHA256:C3EF67D96298C7E5D55E616056B0CE5E0FFD4F380E578D6CC8C4EB3250223849'
             Targets = @(
                 @{ CommandName = 'sigcheck'; Native = $true }
                 @{ CommandName = 'sigcheck.exe'; Native = $true }

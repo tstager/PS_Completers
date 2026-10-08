@@ -127,7 +127,7 @@ function ConvertTo-SigcheckQuotedValue {
     # block, so CatRoot\{GUID}\ must be quoted too) needs quoting; a bare
     # word without one stays bare unless the user already opened a quote.
     if ([string]::IsNullOrEmpty($QuoteChar)) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#\-\u2013-\u2015]') {
             return $Value
         }
 
@@ -249,21 +249,11 @@ function Get-SigcheckPathCompletions {
     $quoteChar = Get-SigcheckQuoteChar -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            $candidateParent = Split-Path -Path $typedValue -Parent
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                $leaf = Split-Path -Path $typedValue -Leaf
-            }
-        }
-    }
+    # Keep the typed directory part (.\, ../, C:, sub/) exactly as typed and
+    # complete only the leaf after it.
+    $typedParent = $typedValue.Substring(0, $typedValue.LastIndexOfAny([char[]]'\/:') + 1)
+    $leaf = $typedValue.Substring($typedParent.Length)
+    $parentPath = if ($typedParent) { $typedParent } else { '.' }
 
     $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
 
@@ -289,7 +279,12 @@ function Get-SigcheckPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
+        # A bare relative name starting with a dash would parse as a parameter,
+        # so give it the current-directory prefix the way PowerShell does.
+        $candidate = $typedParent + $item.Name
+        if (-not $typedParent -and $item.Name -match '^[-\u2013-\u2015]') {
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+        }
         if ($item.PSIsContainer) {
             $candidate += '\'
         }
