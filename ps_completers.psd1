@@ -408,7 +408,7 @@
         @{
             Path    = 'fsutil_completer/fsutil_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6149D66ECB9080562C251D4C024B8F09476A694FA49F3D7A39D4B8B47A56944F'
+            Hash    = 'SHA256:C78726405430FAB984CC399750BF849DFBED693D658CD6CFAA4995919D3C0261'
             Targets = @(
                 @{ CommandName = 'fsutil'; Native = $true }
                 @{ CommandName = 'fsutil.exe'; Native = $true }

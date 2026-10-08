@@ -50,22 +50,47 @@ function Remove-FsutilOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-FsutilQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-FsutilTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-FsutilQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Resolve-FsutilCommandName {
@@ -996,8 +1021,8 @@ function Get-FsutilPathCompletions {
         [string]$ItemMode = 'Any'
     )
 
-    $cleanInput = Remove-FsutilOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-FsutilTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -1017,8 +1042,9 @@ function Get-FsutilPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    # Keep the typed directory part (.\, ./, ..\, C:) exactly as typed.
+    $typedDirectory = if ($cleanInput -match '^[A-Za-z]:$') { $parent } else { [regex]::Match($cleanInput, '^.*[\\/:]').Value }
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = @($items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') })
 
     if ($ItemMode -eq 'File') {
@@ -1028,19 +1054,14 @@ function Get-FsutilPathCompletions {
     }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        }
-
+        $pathText = $typedDirectory + $item.Name
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quoted = ConvertTo-FsutilQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        # A bare word starting with a dash is read as a parameter: anchor it to the current directory.
+        $wordText = if (-not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') { '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText } else { $pathText }
+        $quoted = ConvertTo-FsutilQuotedValue -Value $wordText -QuoteChar $quoteChar
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
         New-FsutilCompletionResult -CompletionText $quoted -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
@@ -1611,8 +1632,24 @@ function Get-FsutilGenericArgumentCompletions {
     $currentTag = Get-FsutilTagInfo -Spec $Spec -Token $CurrentWord
     if ($currentTag) {
         $tagName = [string]$currentTag.Name
-        $valuePrefix = (Remove-FsutilOuterQuotes -Value $CurrentWord).Substring($tagName.Length + 1)
+        # A quote typed before the name or after '=' quotes the whole word.
+        $typedWord = ConvertFrom-FsutilTypedWord -Value $CurrentWord
+        $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+        $valuePrefix = $typedWord.Substring($tagName.Length + 1)
+        if (-not $quoteChar -and $valuePrefix -match '^[''"\u2018-\u201E]') {
+            $quoteChar = $valuePrefix.Substring(0, 1)
+            $valuePrefix = ConvertFrom-FsutilTypedWord -Value $valuePrefix
+        }
+
+        $pathResults = New-Object System.Collections.Generic.List[object]
         $items = foreach ($item in @(Get-FsutilValueKindCompletions -ValueKind ([string]$currentTag.ValueKind) -CurrentValue $valuePrefix -Context $state)) {
+            if ($item.ResultType -eq 'ProviderItem' -or $item.ResultType -eq 'ProviderContainer') {
+                # Quote 'name=path' as one constant argument.
+                $wordText = "$tagName=$($item.ListItemText)"
+                $pathResults.Add((New-FsutilCompletionResult -CompletionText (ConvertTo-FsutilQuotedValue -Value $wordText -QuoteChar $quoteChar) -ListItemText $wordText -ResultType $item.ResultType -ToolTip $item.ToolTip))
+                continue
+            }
+
             [pscustomobject]@{
                 CompletionText = "$tagName=$($item.CompletionText)"
                 ListItemText   = "$tagName=$($item.ListItemText)"
@@ -1620,7 +1657,10 @@ function Get-FsutilGenericArgumentCompletions {
             }
         }
 
-        return @(Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @($items) -DefaultToolTip ($tagName + '= value'))
+        return @(
+            $pathResults.ToArray()
+            Get-FsutilLiteralCompletions -CurrentValue $CurrentWord -Items @($items) -DefaultToolTip ($tagName + '= value')
+        )
     }
 
     $results = New-Object System.Collections.Generic.List[object]
