@@ -84,64 +84,102 @@ function New-Sha1sumCompletionResult {
     )
 }
 
-function Remove-Sha1sumOuterQuotes {
+function Get-Sha1sumTypedQuote {
+    # The quote style the user opened the word with ('' when bare). PowerShell treats the
+    # typographic quotes U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
 }
 
-function ConvertTo-Sha1sumQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-Sha1sumTypedWord {
+    # The value of a typed word without its quotes and that quote style's escapes. The parser
+    # undoes every doubled quote and backtick escape, typographic quotes included; an
+    # unterminated quote is closed first.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    $quote = Get-Sha1sumTypedQuote -Value $Value
+    if (-not $quote) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    foreach ($candidate in @($Value, ($Value + $quote))) {
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput('sha1sum ' + $candidate, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            continue
+        }
+
+        $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+        if ($null -ne $command -and $command.CommandElements.Count -eq 2 -and $command.CommandElements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            return $command.CommandElements[1].Value
+        }
+
+        break
     }
 
-    $Value
+    $Value.Substring(1)
+}
+
+function ConvertTo-Sha1sumQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). Whitespace and argument-mode
+    # metacharacters (including the typographic quotes) end or split a bare word, and a
+    # leading '@' or '#' would start a splat or a comment.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -ceq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-Sha1sumCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The word under the cursor is the parser element that contains it, cut at the cursor. An
+    # unterminated quote is one element running to the end, so '"my d' stays one word.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($CursorPosition -gt $element.Extent.StartOffset -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-Sha1sumPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-Sha1sumOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-Sha1sumTypedWord -Value $InputPath
+    $quoteChar = Get-Sha1sumTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -162,7 +200,7 @@ function Get-Sha1sumPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -178,7 +216,7 @@ function Get-Sha1sumPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-Sha1sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-Sha1sumQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-Sha1sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -270,17 +308,14 @@ function Complete-Sha1sumShortFlagCluster {
 }
 
 function Complete-Sha1sum {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-Sha1sumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-Sha1sumCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
