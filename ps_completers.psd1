@@ -1395,7 +1395,7 @@
         @{
             Path    = 'uniq_completer/uniq_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:9733C1ADCFE2594BF7341D23B83D366A41064E9684774A3364A468B2E78CF562'
+            Hash    = 'SHA256:94E50D2E7DD9C3F9018A29EFE2255747B824AA2A7BE1671B8AAFF9086FB643D8'
             Targets = @(
                 @{ CommandName = 'uniq'; Native = $true }
                 @{ CommandName = 'uniq.exe'; Native = $true }
