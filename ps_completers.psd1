@@ -1341,7 +1341,7 @@
         @{
             Path    = 'truncate_completer/truncate_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:562E4CBFDD78A3D89C037540B555DF0030E268491BFDDD7941F9B65A3B2B0F02'
+            Hash    = 'SHA256:465A7A72F5975EF3052D0732B291E3E37C2DA34215271E2D5B35AA7C1E95D31D'
             Targets = @(
                 @{ CommandName = 'truncate'; Native = $true }
                 @{ CommandName = 'truncate.exe'; Native = $true }
