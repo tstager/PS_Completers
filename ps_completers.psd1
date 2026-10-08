@@ -835,7 +835,7 @@
         @{
             Path    = 'pslist_completer/pslist_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:10E99F8F905348568B664A80F7F47854681C47659BE6A391F632A02394DFBDA7'
+            Hash    = 'SHA256:C29B2DAA0339C35BE5913762E168FF5AB85BE5A191670A4224AB816536BF1276'
             Targets = @(
                 @{ CommandName = 'pslist'; Native = $true }
                 @{ CommandName = 'pslist.exe'; Native = $true }

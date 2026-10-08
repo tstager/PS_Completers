@@ -68,7 +68,7 @@ It then runs `pslist /?` when available and parses the parameter lines to refine
 The completer:
 
 - reads command elements from `$commandAst`
-- reconstructs the current token from the command line when needed
+- takes the current word from the parser element under the cursor, so an unterminated quote (`pslist "Docker D`) is one word running to the cursor
 - distinguishes trailing-space completion from in-token completion
 - scans previously entered tokens to determine:
   - which singleton switches are already present
@@ -129,6 +129,8 @@ When completing the final target slot with no remote computer specified, the com
 - unique local PIDs
 
 Both are returned as `ParameterValue` results.
+
+Names that contain whitespace or an argument-mode metacharacter (`Docker Desktop`, `ollama app`) are inserted quoted so pslist receives them as one operand: single quotes by default, or the quote style the user already typed (`pslist "Docker D<TAB>` gives `"Docker Desktop"`). The menu shows the bare name.
 
 ### Remote target behavior
 

@@ -22,16 +22,21 @@ function New-PslistCompletionResult {
     param(
         [string]$CompletionText,
         [string]$ResultType,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$ListItemText
     )
 
     if ([string]::IsNullOrWhiteSpace($ToolTip)) {
         $ToolTip = $CompletionText
     }
 
+    if ([string]::IsNullOrEmpty($ListItemText)) {
+        $ListItemText = $CompletionText
+    }
+
     [System.Management.Automation.CompletionResult]::new(
         $CompletionText,
-        $CompletionText,
+        $ListItemText,
         $ResultType,
         $ToolTip
     )
@@ -64,12 +69,12 @@ function Get-PslistStaticPositionalCatalog {
 }
 
 function Get-PslistCommandPath {
-    $command = Get-Command -Name pslist.exe -ErrorAction SilentlyContinue
+    $command = Get-Command -Name pslist.exe -ErrorAction Ignore
     if ($command) {
         return $command.Source
     }
 
-    $command = Get-Command -Name pslist -ErrorAction SilentlyContinue
+    $command = Get-Command -Name pslist -ErrorAction Ignore
     if ($command) {
         return $command.Source
     }
@@ -157,29 +162,48 @@ function Initialize-PslistCompletionCatalog {
     $script:PslistCompletionCatalog.Initialized = $true
 }
 
-function Get-PslistCurrentToken {
+function ConvertFrom-PslistTypedWord {
+    # Splits the text typed so far into its value and the opening quote the
+    # user typed ('' when bare), undoing that quote style's escapes.
+    param([string]$Text)
+
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
+    }
+
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
+}
+
+function ConvertTo-PslistArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the typed quote style (single by default).
+    # Whitespace and argument-mode metacharacters end or split a bare word; a
+    # leading '@' or '#' would start a splat or a comment.
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [string]$Value,
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Remove-PslistOuterQuotes {
@@ -306,7 +330,7 @@ function Get-PslistCommandState {
 
     $processTargetKind = $null
     if ($processTarget) {
-        if (Test-PslistNumericToken -Value (Remove-PslistOuterQuotes -Value $processTarget)) {
+        if (Test-PslistNumericToken -Value (ConvertFrom-PslistTypedWord -Text $processTarget).Value) {
             $processTargetKind = 'Pid'
         } else {
             $processTargetKind = 'Name'
@@ -431,14 +455,20 @@ function Get-PslistLocalProcessTargetCompletions {
 
     Update-PslistProcessCache
 
-    $typedValue = Remove-PslistOuterQuotes -Value $CurrentWord
+    # Names such as 'Docker Desktop' must reach pslist as one operand, so they
+    # are quoted on insertion (in the quote style the user typed, if any).
+    $typed = ConvertFrom-PslistTypedWord -Text $CurrentWord
     $script:PslistCompletionCatalog.ProcessEntries |
         Where-Object {
-            [string]::IsNullOrWhiteSpace($typedValue) -or
-            $_.CompletionText.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)
+            [string]::IsNullOrWhiteSpace($typed.Value) -or
+            $_.CompletionText.StartsWith($typed.Value, [System.StringComparison]::OrdinalIgnoreCase)
         } |
         ForEach-Object {
-            New-PslistCompletionResult -CompletionText $_.CompletionText -ResultType $_.ResultType -ToolTip $_.ToolTip
+            New-PslistCompletionResult `
+                -CompletionText (ConvertTo-PslistArgument -Value $_.CompletionText -Quote $typed.Quote) `
+                -ListItemText $_.CompletionText `
+                -ResultType $_.ResultType `
+                -ToolTip $_.ToolTip
         }
 }
 
@@ -547,6 +577,7 @@ function Get-PslistTerminalCompletions {
 }
 
 function Complete-Pslist {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -557,11 +588,16 @@ function Complete-Pslist {
 
     # Tokens are split at the cursor rather than at the end of the line, so a
     # cursor inside an earlier token completes that token and ignores the rest.
-    $line = $commandAst.ToString()
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
+    # The word comes from the parser, so an unterminated quote is one word
+    # running to the cursor, spaces included.
+    $currentElement = $commandAst.CommandElements |
+        Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $cursorPosition -and $_.Extent.EndOffset -ge $cursorPosition } |
+        Select-Object -First 1
+    $currentWord = if ($currentElement) {
+        $currentElement.Extent.Text.Substring(0, $cursorPosition - $currentElement.Extent.StartOffset)
     } else {
-        Get-PslistCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        ''
     }
 
     [object[]]$tokensBeforeCurrent = @(
