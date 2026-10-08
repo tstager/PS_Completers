@@ -219,29 +219,25 @@ function New-PrintfCompletionResult {
     )
 }
 
-function Remove-PrintfOuterQuotes {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
 function ConvertTo-PrintfQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Keep the quote the user typed; otherwise single-quote anything argument mode
+    # would split or expand. PowerShell reads the typographic quotes as quotes too, so
+    # they are escaped (U+201C-U+201E) or doubled (U+2018-U+201B) like their ASCII forms.
+    if ($Quote -eq '"') {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    }
+
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]') {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
     $Value
@@ -249,34 +245,40 @@ function ConvertTo-PrintfQuotedValue {
 
 function Get-PrintfCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the cursor,
+    # so '"C:\Program Fi' is one word, not 'Fi'. No element under the cursor means a
+    # new, empty word.
+    foreach ($element in $CommandAst.CommandElements) {
+        if ($CursorPosition -gt $element.Extent.StartOffset -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-PrintfPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-PrintfOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    # Read the typed word through the parser: an opening ASCII or typographic quote is
+    # recognised, and doubled quotes and backtick escapes resolve to the real name.
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $InputPath, [ref]$tokens, [ref]$errors)
+    if ($tokens.Count -lt 2 -or $tokens[1].Extent.EndOffset -ne ($InputPath.Length + 2)) {
+        return @()
+    }
+
+    $cleanInput = if ($tokens[1] -is [System.Management.Automation.Language.StringToken]) { $tokens[1].Value } else { $tokens[1].Text }
+    $quote = switch ([string]$tokens[1].Kind) {
+        'StringLiteral' { "'" }
+        'StringExpandable' { '"' }
+        default { '' }
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -297,7 +299,7 @@ function Get-PrintfPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -313,7 +315,7 @@ function Get-PrintfPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-PrintfQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-PrintfQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-PrintfCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -416,19 +418,14 @@ function ConvertTo-PrintfFormatArgument {
     # Keep the user's quote and typed text, escaping only what is appended; a bare word
     # is single-quoted once the result needs it.
     if ($Context.TokenKind -eq 'StringLiteral') {
-        return $Context.Quote + $Context.Raw + $Insert.Replace("'", "''") + $Context.Quote
+        return $Context.Quote + $Context.Raw + ($Insert -replace '([''\u2018-\u201B])', '$1$1') + $Context.Quote
     }
 
     if ($Context.TokenKind -eq 'StringExpandable') {
-        return $Context.Quote + $Context.Raw + ($Insert -replace '([`"$])', '`$1') + $Context.Quote
+        return $Context.Quote + $Context.Raw + ($Insert -replace '([`"$\u201C-\u201E])', '`$1') + $Context.Quote
     }
 
-    $text = $Context.Value + $Insert
-    if ($text -match '[\s{}();,|&<>''"`$]' -or $text -match '^[@#]') {
-        return "'" + $text.Replace("'", "''") + "'"
-    }
-
-    $text
+    ConvertTo-PrintfQuotedValue -Value ($Context.Value + $Insert)
 }
 
 function Get-PrintfFormatCompletion {
@@ -454,26 +451,23 @@ function Get-PrintfFormatCompletion {
 }
 
 function Complete-Printf {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-PrintfCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
-
+    $currentWord = Get-PrintfCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()
     }
 
     # A FORMAT word ending in an open '%' spec gets the conversions; one ending in an
-    # unpaired backslash gets the escapes, unless it names a directory (.\, C:\).
+    # unpaired backslash gets the escapes, unless it names a directory (.\, C:\). A lone
+    # backslash is the start of an escape, not the drive root.
     $format = Get-PrintfFormatContext -CommandAst $commandAst -CursorPosition $cursorPosition
-    if ($null -ne $format -and -not ($format.Kind -eq 'Escape' -and (Test-Path -LiteralPath $format.Value -PathType Container))) {
+    if ($null -ne $format -and -not ($format.Kind -eq 'Escape' -and $format.Value.Length -gt 1 -and (Test-Path -LiteralPath $format.Value -PathType Container))) {
         return @(Get-PrintfFormatCompletion -Context $format)
     }
 
