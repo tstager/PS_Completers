@@ -176,7 +176,7 @@
         @{
             Path    = 'comm_completer/comm_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:1795F9C6ED7FA783FAD00E9566867608C65879BABB68B637DC7AC1D3F763F3E1'
+            Hash    = 'SHA256:F14CFE06462F99F49A17DF3653E5EA2FCCBB4FB054603C37078047A0E6AC3D6E'
             Targets = @(
                 @{ CommandName = 'comm'; Native = $true }
                 @{ CommandName = 'comm.exe'; Native = $true }
