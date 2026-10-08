@@ -1413,7 +1413,7 @@
         @{
             Path    = 'uptime_completer/uptime_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:D17C17A3F99636EE76FF7F5CF47FA0700124412B4AFC05559714635B6817B4E6'
+            Hash    = 'SHA256:AE0973FF3E99C276B274190A19A1BB74A7EAAB8EEC3CD00475645BD3F3919066'
             Targets = @(
                 @{ CommandName = 'uptime'; Native = $true }
                 @{ CommandName = 'uptime.exe'; Native = $true }
