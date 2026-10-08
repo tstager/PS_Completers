@@ -1007,7 +1007,7 @@
         @{
             Path    = 'robocopy_completer/robocopy_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7F59AFD94B3EE454A8BF2C66040F3EF662AC259DBA6F16A0AF5C4B0D8E9BB46E'
+            Hash    = 'SHA256:39A2E84B0238FA4A40DD96FC34E81918360B02043E37ADB340CC985FFCD3015F'
             Targets = @(
                 @{ CommandName = 'robocopy'; Native = $true }
                 @{ CommandName = 'robocopy.exe'; Native = $true }

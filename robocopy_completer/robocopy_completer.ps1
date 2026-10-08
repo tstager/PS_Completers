@@ -395,7 +395,7 @@ function ConvertTo-RobocopyQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#\-\u2013-\u2015]') {
             return $Value
         }
 
@@ -670,7 +670,8 @@ function Get-RobocopyPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
+    # The directory part exactly as typed (.\, ./, ..\, C:/x/), kept verbatim.
+    $typedDirectory = [regex]::Match($cleanInput, '^.*[\\/]').Value
     $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
@@ -682,10 +683,16 @@ function Get-RobocopyPathCompletions {
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($item in $items | Sort-Object -Property Name | Select-Object -First $script:RobocopyCompletionCatalog.MaxPathResults) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        if ($typedDirectory) {
+            $pathText = $typedDirectory + $item.Name
         } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
+            # A bare name starting with a dash would be parsed as a parameter;
+            # name it through the current directory as PowerShell does.
+            $pathText = if ([string]::IsNullOrEmpty($CompletionPrefix) -and $item.Name -match '^[-\u2013-\u2015]') {
+                '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+            } else {
+                $item.Name
+            }
         } else {
             $pathText = Join-Path -Path $parent -ChildPath $item.Name
         }
@@ -751,6 +758,7 @@ function Get-RobocopySourceRelativeCompletions {
         Join-Path -Path $SourcePath -ChildPath $relativeParent
     }
 
+    $typedDirectory = [regex]::Match($cleanInput, '^.*[\\/]').Value
     $items = @(Get-ChildItem -LiteralPath $basePath -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
@@ -763,7 +771,10 @@ function Get-RobocopySourceRelativeCompletions {
     # A source such as System32 holds thousands of entries; cap what is emitted
     # so the completion thread never builds the whole listing.
     foreach ($item in $items | Sort-Object -Property Name | Select-Object -First $script:RobocopyCompletionCatalog.MaxPathResults) {
-        $pathText = if ([string]::IsNullOrWhiteSpace($relativeParent)) {
+        # Keep the directory part exactly as typed (.\, ./, ..\).
+        $pathText = if ($typedDirectory) {
+            $typedDirectory + $item.Name
+        } elseif ([string]::IsNullOrWhiteSpace($relativeParent)) {
             $item.Name
         } else {
             Join-Path -Path $relativeParent -ChildPath $item.Name
