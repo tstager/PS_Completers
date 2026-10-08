@@ -131,7 +131,7 @@ function ConvertTo-VdirQuotedValue {
 
     # Keep the quote style the user typed; a bare value that needs quoting gets single quotes.
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
             return $Value
         }
 
@@ -190,13 +190,14 @@ function Get-VdirPathCompletions {
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Keep the typed directory text exactly (.\ ./ ..\ C: and its separators).
+    $typedDirectory = if ($cleanInput -match '^.*[\\/]') { $Matches[0] } elseif ($cleanInput -match '^[A-Za-z]:') { $Matches[0] } else { '' }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        # A bare word starting with a dash parses as a parameter, so a dash-leading name gets the .\ prefix.
+        if (-not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {

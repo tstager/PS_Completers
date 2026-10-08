@@ -139,6 +139,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - The current word is the parser's command element under the cursor, cut at the cursor, so completion works mid-line and when the command is not the first statement on the line. An unterminated quote (`vdir "C:\Program Fi`) is one word running to the cursor.
 - The typed word is read the way PowerShell reads it: the tokenizer strips its quotes and undoes doubled quotes and backtick escapes, and the typographic quotes U+2018-U+201B and U+201C-U+201E count as `'` and `"`.
 - Path completions keep the quote style the user typed: a single-quoted word completes in single quotes with every single-quote character (`'` and U+2018-U+201B) doubled, a double-quoted word in double quotes with `` ` ``, `"`, `$` and U+201C-U+201E backtick-escaped. An unquoted path that contains whitespace, one of `` { } ( ) ; , | & < > ' " ` $ @ # `` or a typographic quote is single-quoted.
+- Path completions keep the typed directory text exactly as typed (`.\`, `./`, `..\`, `C:` and their separators). A name that starts with `-` or U+2013-U+2015 and has no directory typed gets the `.\` prefix, so it is not read as a parameter (`vdir .\-dash.txt`).
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe, the tool lookup and the directory listing use `-ErrorAction Ignore`, so a missing tool or an unreadable folder adds nothing to `$Error`.
 
 ## Option values
