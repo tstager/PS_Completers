@@ -22,7 +22,7 @@
         @{
             Path    = 'agy_completer/agy_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:8283B861871194C2F386096E15ED19B95CBA3824D34B33F65AD4E4640AD3D4B5'
+            Hash    = 'SHA256:03670B1641242D91E914E602233C9D7F9EA3C42B2CE84D655C0E79809EA994F2'
             Targets = @(
                 @{ CommandName = 'agy'; Native = $true }
                 @{ CommandName = 'agy.exe'; Native = $true }

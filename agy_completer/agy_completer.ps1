@@ -90,49 +90,72 @@ function Get-AgyValueKind {
     return ''
 }
 
+function ConvertFrom-AgyTypedWord {
+    # A word opened with a quote (ASCII or typographic) is read by the PowerShell tokenizer.
+    param([string]$Word)
+    if ($Word -notmatch '^[''"\u2018-\u201E]') { return $Word }
+    $parsedTokens = $null; $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Word, [ref]$parsedTokens, [ref]$parseErrors)
+    $parsedTokens[0].Value
+}
+
+function ConvertTo-AgyQuotedValue {
+    # Bare when safe and no quote was typed, otherwise in the typed quote (single by default).
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param([string]$Value, [string]$QuoteChar = '')
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+        $QuoteChar = "'"
+    }
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') { return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar }
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function New-AgyCompletion {
-    param([string]$Text, [string]$Description, [string]$Type = 'ParameterValue')
-    $quoted = $Text
-    if ($Text -match '[\s''"`$;|&(){}<>#@]') { $quoted = "'" + $Text.Replace("'", "''") + "'" }
-    [System.Management.Automation.CompletionResult]::new($quoted, $Text, $Type, $Description)
+    param([string]$Text, [string]$Description, [string]$Type = 'ParameterValue', [string]$QuoteChar = '')
+    [System.Management.Automation.CompletionResult]::new((ConvertTo-AgyQuotedValue $Text $QuoteChar), $Text, $Type, $Description)
 }
 
 function Get-AgyValueCompletion {
     param([string]$Kind, [string]$Word, [string]$Prefix = '')
-    $Word = $Word.Trim("'", '"')
+    $quote = if ($Word -match '^[''"\u2018-\u201E]') { $Word.Substring(0, 1) } else { '' }
+    $Word = ConvertFrom-AgyTypedWord $Word
     if ($Kind -eq 'schema') {
-        if (-not $Word -or $Word.StartsWith('{')) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { '<json-schema>' })) 'Enter a JSON schema string or local schema file' }
+        if (-not $Word -or $Word.StartsWith('{')) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { '<json-schema>' })) 'Enter a JSON schema string or local schema file' -QuoteChar $quote }
         if ($Word.StartsWith('{')) { return }
         $Kind = 'file'
     }
     if ($Kind -in @('file','directory')) {
         if ($Word -match '^(?:\\\\|//)' -or $Word -match '^[^:]+::') {
-            New-AgyCompletion ($Prefix + $Word) 'Enter a path; remote paths are not enumerated'
+            New-AgyCompletion ($Prefix + $Word) 'Enter a path; remote paths are not enumerated' -QuoteChar $quote
             return
         }
-        $parent = '.'; $leaf = $Word
-        if ($Word -match '[/\\]$') { $parent = $Word; $leaf = '' }
-        elseif ($Word -match '[/\\]') { $parent = Split-Path -Path $Word -Parent; $leaf = Split-Path -Path $Word -Leaf }
+        # Keep the typed directory text (including a leading .\ or ./) exactly as typed.
+        $split = $Word.LastIndexOfAny([char[]]@('/', '\'))
+        $directoryText = $Word.Substring(0, $split + 1); $leaf = $Word.Substring($split + 1)
+        $parent = if ($directoryText) { $directoryText } else { '.' }
         $found = $false
         if (Test-Path -LiteralPath $parent -PathType Container) {
             foreach ($entry in (Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)) {
                 if ($Kind -eq 'directory' -and -not $entry.PSIsContainer) { continue }
                 if (-not $entry.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-                $path = if ($parent -eq '.') { $entry.Name } else { Join-Path $parent $entry.Name }
+                $path = $directoryText + $entry.Name
+                # A whole-word name starting with a dash would parse as a parameter: anchor it to the current directory.
+                if (-not $directoryText -and -not $Prefix -and $path -match '^[-–-―]') { $path = '.' + [System.IO.Path]::DirectorySeparatorChar + $path }
                 if ($entry.PSIsContainer) { $path += [System.IO.Path]::DirectorySeparatorChar }
-                New-AgyCompletion ($Prefix + $path) $entry.FullName
+                New-AgyCompletion ($Prefix + $path) $entry.FullName -QuoteChar $quote
                 $found = $true
             }
         }
-        if (-not $found) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { '<path>' })) 'Enter a local path' }
+        if (-not $found) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { '<path>' })) 'Enter a local path' -QuoteChar $quote }
         return
     }
-    if ($Kind.StartsWith('<')) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { $Kind })) "Enter $Kind"; return }
+    if ($Kind.StartsWith('<')) { New-AgyCompletion ($Prefix + $(if ($Word) { $Word } else { $Kind })) "Enter $Kind" -QuoteChar $quote; return }
     $found = $false
     foreach ($value in ($Kind -split '\|')) {
-        if ($value.StartsWith($Word, [System.StringComparison]::Ordinal)) { New-AgyCompletion ($Prefix + $value) $value; $found = $true }
+        if ($value.StartsWith($Word, [System.StringComparison]::Ordinal)) { New-AgyCompletion ($Prefix + $value) $value -QuoteChar $quote; $found = $true }
     }
-    if (-not $found) { New-AgyCompletion ($Prefix + $Word) "Expected: $Kind" }
+    if (-not $found) { New-AgyCompletion ($Prefix + $Word) "Expected: $Kind" -QuoteChar $quote }
 }
 
 function Get-AgyCompletion {
