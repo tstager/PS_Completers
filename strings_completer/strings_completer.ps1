@@ -62,22 +62,81 @@ function Remove-StringsOuterQuotes {
     $Value.TrimStart('"')
 }
 
-function ConvertTo-StringsQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-StringsTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes;
+    # text glued after the closing quote ("C:\Program Files"\) joins the same argument.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$tokens, [ref]$parseErrors)
+    -join @($tokens | Select-Object -Skip 1 | Where-Object { $_.Kind -ne 'EndOfInput' } | ForEach-Object {
+            if ($_ -is [System.Management.Automation.Language.StringToken]) { $_.Value } else { $_.Text }
+        })
+}
+
+function ConvertTo-StringsQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes. A bare word
+    # starting with a dash (- or U+2013-U+2015) would be read as a parameter.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-StringsCurrentWord {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The parser keeps an unterminated quoted word (any quote style) as one element running
+    # to the cursor, which is the word PowerShell replaces. A quoted string glued to a path
+    # tail ("C:\Program Files"\x) is one argument, and PowerShell then replaces all of it.
+    $elements = @($CommandAst.CommandElements)
+    for ($index = 1; $index -lt $elements.Count; $index++) {
+        $extent = $elements[$index].Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            $start = $index
+            while ($start -gt 1 -and
+                $elements[$start - 1].Extent.EndOffset -eq $elements[$start].Extent.StartOffset -and
+                $elements[$start].Extent.Text -match '^[\\/]' -and
+                $elements[$start - 1].PSObject.Properties['StringConstantType'] -and
+                $elements[$start - 1].StringConstantType -ne 'BareWord') {
+                $start--
+            }
+
+            $startOffset = $elements[$start].Extent.StartOffset
+            return $CommandAst.Extent.Text.Substring($startOffset - $CommandAst.Extent.StartOffset, $CursorPosition - $startOffset)
+        }
+    }
+
+    ''
 }
 
 function Get-StringsTokenState {
@@ -235,8 +294,8 @@ function Get-StringsPathCompletions {
         [string]$Placeholder = '<file-or-directory>'
     )
 
-    $typedValue = Remove-StringsOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $typedValue = ConvertFrom-StringsTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
 
     # Split on the typed text (so the completion keeps the user's prefix verbatim) and
@@ -249,7 +308,17 @@ function Get-StringsPathCompletions {
         $leaf = $typedValue.Substring($separatorIndex + 1)
     }
 
-    $enumeratePath = if ([string]::IsNullOrEmpty($typedParent)) { '.' } else { Expand-StringsPathText -Path $typedParent }
+    # Single quotes keep $env: literal, so only an unquoted or double-quoted parent expands it.
+    # A leading ~ resolves to the home folder in every quote style, as PowerShell's own path
+    # completion does; quoted candidates then spell out the expanded parent.
+    $expandedParent = if ($quoteChar -notmatch '^[''\u2018-\u201B]$') {
+        Expand-StringsPathText -Path $typedParent
+    } elseif ($typedParent -match '^~[\\/]') {
+        $HOME + $typedParent.Substring(1)
+    } else {
+        $typedParent
+    }
+    $enumeratePath = if ([string]::IsNullOrEmpty($typedParent)) { '.' } else { $expandedParent }
     $items = @()
     try {
         $items = @(Get-ChildItem -LiteralPath $enumeratePath -ErrorAction Ignore)
@@ -263,13 +332,29 @@ function Get-StringsPathCompletions {
             continue
         }
 
-        $candidate = $typedParent + $item.Name
+        $name = $item.Name
         if ($item.PSIsContainer) {
-            $candidate += '\'
+            $name += '\'
         }
 
-        $completionText = ConvertTo-StringsQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        [void]$results.Add((New-StringsCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip))
+        $parent = $typedParent
+        $valueParent = $expandedParent
+        if (-not $typedParent -and $name -match '^[-\u2013-\u2015]') {
+            # A name starting with a dash gets the current-directory prefix, as PowerShell's
+            # own file completion does, so it cannot be read as a parameter.
+            $parent = $valueParent = '.' + [System.IO.Path]::DirectorySeparatorChar
+        }
+
+        $candidate = $parent + $name
+        # A bare $env:/~ prefix stays live while the name needs no quoting; a quoted word
+        # would not expand it, so quoted candidates spell out the expanded parent instead.
+        if (-not $quoteChar -and $parent -ne $valueParent -and (ConvertTo-StringsQuotedValue -Value $name) -eq $name) {
+            $completionText = $candidate
+        } else {
+            $completionText = ConvertTo-StringsQuotedValue -Value ($valueParent + $name) -QuoteChar $quoteChar
+        }
+
+        [void]$results.Add((New-StringsCompletionResult -CompletionText $completionText -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
     # With nothing typed, the placeholder keeps the slot visible; with a typed value that
@@ -358,7 +443,7 @@ function Complete-Strings {
     $tokenState = Get-StringsTokenState -Line $line -CursorPosition $relativeCursor
     $argumentsState = Get-StringsArgumentsFromTokenState -TokenState $tokenState
     $state = Get-StringsCommandState -ArgumentsBeforeCurrent $argumentsState.ArgumentsBeforeCurrent
-    $currentWord = $argumentsState.CurrentArgument
+    $currentWord = Get-StringsCurrentWord -CommandAst $CommandAst -CursorPosition $CursorPosition
 
     switch ($state.ValueContext) {
         'Bytes' { return Get-StringsStaticValueResults -CurrentWord $currentWord -Values $script:StringsCompletionCatalog.ByteHints -ToolTip 'Bytes of file to scan.' }
