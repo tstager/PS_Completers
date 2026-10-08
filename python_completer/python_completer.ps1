@@ -168,21 +168,23 @@ function Get-PythonCommandLineState {
     $prefix = $line.Substring(0, $safeCursor)
     $tokens = New-Object System.Collections.Generic.List[string]
     $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
+    $quoteKind = ''
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
+        # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+        $characterKind = if ($character -match '[''\u2018-\u201B]') { 'Single' } elseif ($character -match '["\u201C-\u201E]') { 'Double' } else { '' }
+        if ($characterKind) {
+            if (-not $quoteKind) {
+                $quoteKind = $characterKind
+            } elseif ($quoteKind -eq $characterKind) {
+                $quoteKind = ''
             }
 
             [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
+        if ([char]::IsWhiteSpace($character) -and -not $quoteKind) {
             if ($builder.Length -gt 0) {
                 $tokens.Add($builder.ToString())
                 [void]$builder.Clear()
@@ -482,6 +484,55 @@ function Get-PythonXOptionCompletions {
     @(Get-PythonUniqueResults -Results $results.ToArray())
 }
 
+function ConvertFrom-PythonTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    # A quote closed mid-word ('my dir'\s) is more than one token and yields $null.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0].Extent.EndOffset -lt $Value.Length) {
+        return $null
+    }
+
+    $tokens[0].Value
+}
+
+function ConvertTo-PythonQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        # A bare word starting with a dash would be read as a parameter name.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function Get-PythonPathResults {
     param(
         [string]$CurrentWord,
@@ -489,10 +540,39 @@ function Get-PythonPathResults {
     )
 
     $results = New-Object System.Collections.Generic.List[object]
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+    $typedValue = ConvertFrom-PythonTypedWord -Value $CurrentWord
+    $items = if ($null -eq $typedValue) { @() } else { [System.Management.Automation.CompletionCompleters]::CompleteFilename($typedValue) }
 
-    foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord)) {
+    # CompleteFilename rewrites a typed .\ ./ ..\ ../ directory relative to the current location
+    # (./s becomes .\spam.py); the typed directory is kept verbatim instead.
+    $typedDirectory = ''
+    if ($typedValue -match '^\.{1,2}[\\/]') {
+        $typedDirectory = $typedValue.Substring(0, $typedValue.LastIndexOfAny([char[]]@('\', '/')) + 1)
+        if ($typedDirectory -match '[*?\[]') {
+            $typedDirectory = ''
+        }
+    }
+
+    # CompleteFilename returns PowerShell-quoted, wildcard-escaped text (tick``x.txt inside
+    # single quotes), so each result is unwrapped by the parser and unescaped, then quoted once.
+    foreach ($item in $items) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($typedDirectory) {
+            $path = $typedDirectory + [System.IO.Path]::GetFileName($path.TrimEnd([char[]]@('\', '/')))
+        }
+
         [void]$results.Add([System.Management.Automation.CompletionResult]::new(
-                $item.CompletionText,
+                (ConvertTo-PythonQuotedValue -Value $path -QuoteChar $quoteChar),
                 $item.ListItemText,
                 $item.ResultType,
                 $item.ToolTip
