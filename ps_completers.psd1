@@ -327,7 +327,7 @@
         @{
             Path    = 'du_completer/du_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:46729615D80B4549B6FD372FD8072A660C31FE0CD14252F4B3A68AA2A38AD20E'
+            Hash    = 'SHA256:E2D3718D651571FECBE3E2F77682797EE4A94303A34497D2191B68CA61F0BB5B'
             Targets = @(
                 @{ CommandName = 'du'; Native = $true }
                 @{ CommandName = 'du.exe'; Native = $true }

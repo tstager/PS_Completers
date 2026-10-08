@@ -73,22 +73,47 @@ function Remove-DuOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-DuQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-DuTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-DuQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Initialize-DuCompletionCatalog {
@@ -206,7 +231,7 @@ function Get-DuCurrentToken {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '--[a-z0-9-]+=(?:"[^"]*"?|''[^'']*''?)|"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
+    $parts = @([regex]::Matches($prefix, '--[a-z0-9-]+=(?:["\u201C-\u201E][^"\u201C-\u201E]*["\u201C-\u201E]?|[''\u2018-\u201B][^''\u2018-\u201B]*[''\u2018-\u201B]?)|["\u201C-\u201E][^"\u201C-\u201E]*["\u201C-\u201E]?|[''\u2018-\u201B][^''\u2018-\u201B]*[''\u2018-\u201B]?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -373,8 +398,8 @@ function Get-DuPathCompletions {
         [string]$Prefix = ''
     )
 
-    $cleanInput = Remove-DuOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-DuTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -391,28 +416,34 @@ function Get-DuPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
+    # Candidates keep the directory part exactly as typed (.\, ./, ..\, sub/), separator included.
+    $typedDirectory = if ($cleanInput -match '^(?<directory>.*[\\/])') { $Matches['directory'] } else { '' }
+    $separator = if ($typedDirectory) { $typedDirectory[-1] } else { [System.IO.Path]::DirectorySeparatorChar }
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     # du's operands are FILE...: directories first (they invite the next level), then files.
     foreach ($item in ($items | Sort-Object -Property @{ Expression = { $_ -is [System.IO.FileInfo] } }, Name)) {
-        if ($inputIsRooted) {
+        if ($typedDirectory) {
+            $pathText = $typedDirectory + $item.Name
+        } elseif ($parent -ne '.') {
             $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
         } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+            $pathText = $item.Name
+        }
+
+        # A whole word starting with a dash is a parameter to PowerShell and an option to du, so
+        # anchor it to the current directory as PowerShell's own file completion does.
+        if ($Prefix -eq '' -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + $separator + $pathText
         }
 
         $isDirectory = $item -is [System.IO.DirectoryInfo]
-        if ($isDirectory -and -not $pathText.EndsWith('\')) {
-            $pathText += '\'
+        if ($isDirectory -and $pathText -notmatch '[\\/]$') {
+            $pathText += $separator
         }
 
-        # Whitespace and argument-mode metacharacters would split or expand a bare word.
-        $needsQuote = $alwaysQuote -or $pathText -match '[\s{}();,|&<>''"`$]' -or ($Prefix -eq '' -and $pathText -match '^[@#]')
-        $quotedPath = ConvertTo-DuQuotedValue -Value $pathText -AlwaysQuote $needsQuote
+        $quotedPath = ConvertTo-DuQuotedValue -Value $pathText -QuoteChar $quoteChar
         $resultType = if ($isDirectory) { 'ProviderContainer' } else { 'ProviderItem' }
         New-DuCompletionResult -CompletionText ($Prefix + $quotedPath) -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
