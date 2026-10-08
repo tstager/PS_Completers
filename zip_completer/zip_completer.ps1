@@ -82,22 +82,56 @@ function Remove-ZipOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-ZipQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-ZipTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function Get-ZipTypedQuote {
+    # The opening quote character the user typed ('' when the word is bare).
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') { $Value.Substring(0, 1) } else { '' }
+}
+
+function ConvertTo-ZipQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes. A glued short
+    # option word (-lfa.txt, -x*.zip) is quoted too: PowerShell ends a -parameter token at '.'
+    # or '[' and would hand zip the value as a separate argument.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^-(?!-).*[.\[]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-ZipStaticOptionMetadata {
@@ -670,31 +704,6 @@ function Resolve-ZipShortCluster {
     }
 }
 
-function Get-ZipCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
-}
-
 function Get-ZipCompletedArguments {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
@@ -940,32 +949,29 @@ function Get-ZipUniqueCompletions {
 }
 
 function Get-ZipPathCompletions {
+    # InputPath is the typed value with its quotes already removed; QuoteChar is the quote the
+    # user opened the word with. An attached prefix (--temp-path=, -b) is quoted with the path
+    # so the whole word stays one constant argument.
     param(
         [string]$InputPath,
         [string]$Kind = 'Any',
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteChar = ''
     )
 
-    $cleanInput = Remove-ZipOuterQuotes $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The typed directory part (.\, ../, C:\dir\, C:) is kept exactly as typed in every candidate.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/', ':'))
+    $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # A whole-word name starting with a dash would parse as a PowerShell parameter: give it the
+    # current-directory prefix, as PowerShell's own file completion does.
+    $dashDirectory = if (-not $typedDirectory -and -not $CompletionPrefix) { '.' + [System.IO.Path]::DirectorySeparatorChar } else { $typedDirectory }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
@@ -975,21 +981,18 @@ function Get-ZipPathCompletions {
     }
 
     foreach ($item in $items | Sort-Object -Property Name) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
+        if ($item.Name -match '^[-\u2013-\u2015]') {
+            $pathText = $dashDirectory + $item.Name
         } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+            $pathText = $typedDirectory + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-ZipQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        $completionText = $CompletionPrefix + $quotedPath
         $listItemText = $CompletionPrefix + $pathText
+        $completionText = ConvertTo-ZipQuotedValue -Value $listItemText -QuoteChar $QuoteChar
 
         New-ZipCompletionResult `
             -CompletionText $completionText `
@@ -1002,24 +1005,24 @@ function Get-ZipPathCompletions {
 function Get-ZipArchivePathCompletions {
     param(
         [string]$InputPath,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteChar = ''
     )
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
-    foreach ($result in @(Get-ZipPathCompletions -InputPath $InputPath -Kind 'Any' -CompletionPrefix $CompletionPrefix)) {
+    foreach ($result in @(Get-ZipPathCompletions -InputPath $InputPath -Kind 'Any' -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)) {
         $results.Add($result)
     }
 
-    $cleanInput = Remove-ZipOuterQuotes $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = $InputPath
     if (-not [string]::IsNullOrWhiteSpace($cleanInput) -and
         -not ($cleanInput -match '[\\/]$') -and
         -not $cleanInput.EndsWith('.zip', [System.StringComparison]::OrdinalIgnoreCase) -and
         -not ($cleanInput -match '[\*\?]')) {
-        $archiveSuggestion = ConvertTo-ZipQuotedValue -Value ($cleanInput + '.zip') -AlwaysQuote $alwaysQuote
+        $archiveSuggestion = ConvertTo-ZipQuotedValue -Value ($CompletionPrefix + $cleanInput + '.zip') -QuoteChar $QuoteChar
         $results.Add(
             (New-ZipCompletionResult `
-                -CompletionText ($CompletionPrefix + $archiveSuggestion) `
+                -CompletionText $archiveSuggestion `
                 -ListItemText ($CompletionPrefix + ($cleanInput + '.zip')) `
                 -ResultType 'ParameterValue' `
                 -ToolTip 'Suggested archive path')
@@ -1034,14 +1037,15 @@ function Get-ZipPrefixedSuggestions {
         [string]$Prefix,
         [string]$CurrentValue,
         [string[]]$Suggestions,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$QuoteChar = ''
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
     foreach ($suggestion in ($Suggestions | Sort-Object -Unique)) {
         if ($suggestion.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
             $tokenText = $Prefix + $suggestion
-            New-ZipCompletionResult -CompletionText $tokenText -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
+            New-ZipCompletionResult -CompletionText (ConvertTo-ZipQuotedValue -Value $tokenText -QuoteChar $QuoteChar) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
 }
@@ -1051,7 +1055,8 @@ function Get-ZipSeparatedSuggestions {
         [string]$Prefix,
         [string]$CurrentValue,
         [string[]]$Suggestions,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$QuoteChar = ''
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
@@ -1067,7 +1072,7 @@ function Get-ZipSeparatedSuggestions {
     foreach ($suggestion in ($Suggestions | Sort-Object -Unique)) {
         if ($suggestion.StartsWith($currentSegment, [System.StringComparison]::OrdinalIgnoreCase)) {
             $tokenText = $Prefix + $valuePrefix + $suggestion
-            New-ZipCompletionResult -CompletionText $tokenText -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
+            New-ZipCompletionResult -CompletionText (ConvertTo-ZipQuotedValue -Value $tokenText -QuoteChar $QuoteChar) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
 }
@@ -1075,21 +1080,20 @@ function Get-ZipSeparatedSuggestions {
 function Get-ZipPatternCompletions {
     param(
         [string]$CurrentValue,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteChar = ''
     )
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
-    foreach ($result in @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Any' -CompletionPrefix $CompletionPrefix)) {
+    foreach ($result in @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Any' -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)) {
         $results.Add($result)
     }
 
-    $cleanValue = Remove-ZipOuterQuotes $CurrentValue
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentValue) -and ($CurrentValue.StartsWith('"') -or $CurrentValue.StartsWith("'"))
-    if ([string]::IsNullOrWhiteSpace($cleanValue)) {
+    if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
         foreach ($wildcardSuggestion in @('*', '*.*', '*.zip', '*.log', '*.tmp')) {
             $results.Add(
                 (New-ZipCompletionResult `
-                    -CompletionText ($CompletionPrefix + $wildcardSuggestion) `
+                    -CompletionText (ConvertTo-ZipQuotedValue -Value ($CompletionPrefix + $wildcardSuggestion) -QuoteChar $QuoteChar) `
                     -ListItemText ($CompletionPrefix + $wildcardSuggestion) `
                     -ResultType 'ParameterValue' `
                     -ToolTip 'Wildcard pattern')
@@ -1098,13 +1102,14 @@ function Get-ZipPatternCompletions {
     }
 
     foreach ($directoryResult in @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Directory')) {
-        $directoryText = $directoryResult.CompletionText
+        # ListItemText is the plain path; CompletionText is already quoted.
+        $directoryText = $directoryResult.ListItemText
         $directoryTip = $directoryResult.ToolTip
         $patternText = $directoryText.TrimEnd('\', '/') + '\*'
-        $quotedPattern = ConvertTo-ZipQuotedValue -Value $patternText -AlwaysQuote $alwaysQuote
+        $quotedPattern = ConvertTo-ZipQuotedValue -Value ($CompletionPrefix + $patternText) -QuoteChar $QuoteChar
         $results.Add(
             (New-ZipCompletionResult `
-                -CompletionText ($CompletionPrefix + $quotedPattern) `
+                -CompletionText $quotedPattern `
                 -ListItemText ($CompletionPrefix + $patternText) `
                 -ResultType 'ParameterValue' `
                 -ToolTip ($directoryTip + ' (directory wildcard)'))
@@ -1118,7 +1123,8 @@ function Get-ZipValueCompletions {
     param(
         [string]$OptionKey,
         [string]$CurrentValue,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteChar = ''
     )
 
     $optionInfo = $script:ZipCompletionCatalog.OptionInfoByKey[$OptionKey]
@@ -1130,30 +1136,31 @@ function Get-ZipValueCompletions {
 
     switch ([string]$optionInfo.ValueKind) {
         'Directory' {
-            return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Directory' -CompletionPrefix $CompletionPrefix)
+            return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Directory' -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)
         }
         'ArchivePath' {
-            return @(Get-ZipArchivePathCompletions -InputPath $CurrentValue -CompletionPrefix $CompletionPrefix)
+            return @(Get-ZipArchivePathCompletions -InputPath $CurrentValue -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)
         }
         'Path' {
-            return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Any' -CompletionPrefix $CompletionPrefix)
+            return @(Get-ZipPathCompletions -InputPath $CurrentValue -Kind 'Any' -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)
         }
         'Date' {
-            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description -QuoteChar $QuoteChar)
         }
         'SuffixList' {
-            return @(Get-ZipSeparatedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipSeparatedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description -QuoteChar $QuoteChar)
         }
         'List' {
-            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description)
+            return @(Get-ZipPrefixedSuggestions -Prefix $CompletionPrefix -CurrentValue $CurrentValue -Suggestions $suggestions -ToolTip $optionInfo.Description -QuoteChar $QuoteChar)
         }
         'PatternList' {
-            return @(Get-ZipPatternCompletions -CurrentValue $CurrentValue -CompletionPrefix $CompletionPrefix)
+            return @(Get-ZipPatternCompletions -CurrentValue $CurrentValue -CompletionPrefix $CompletionPrefix -QuoteChar $QuoteChar)
         }
         'Text' {
             # Free-form value: echo what was typed, or a placeholder taken from the display text.
             if (-not [string]::IsNullOrEmpty($CurrentValue)) {
-                return @(New-ZipCompletionResult -CompletionText ($CompletionPrefix + $CurrentValue) -ResultType 'ParameterValue' -ToolTip $optionInfo.Description)
+                $typedText = $CompletionPrefix + $CurrentValue
+                return @(New-ZipCompletionResult -CompletionText (ConvertTo-ZipQuotedValue -Value $typedText -QuoteChar $QuoteChar) -ListItemText $typedText -ResultType 'ParameterValue' -ToolTip $optionInfo.Description)
             }
 
             $placeholder = if ([string]$optionInfo.Display -match '[ =](?<word>[a-z]+)$') { '<' + $matches['word'] + '>' } else { '<value>' }
@@ -1211,18 +1218,26 @@ function Complete-Zip {
 
     Initialize-ZipCompletionCatalog
 
-    $currentWord = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
-    if ([string]::IsNullOrWhiteSpace($currentWord) -and $cursorPosition -le $commandAst.Extent.EndOffset) {
-        $currentWord = Get-ZipCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    # The word as typed, read from the AST: the engine hands a quoted word over re-rendered
+    # ("tick``x" arrives as "tick`x", 'it''s as 'it's'), which would lose escapes.
+    $currentWord = ''
+    foreach ($element in $commandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $element.Extent.EndOffset) {
+            $currentWord = $element.Extent.Text.Substring(0, $cursorPosition - $element.Extent.StartOffset)
+        }
     }
+
+    # Value candidates are built from the unquoted value and re-quoted in the quote the user typed.
+    $typedQuote = Get-ZipTypedQuote -Value $currentWord
+    $typedValue = ConvertFrom-ZipTypedWord -Value $currentWord
 
     $completedArguments = @(Get-ZipCompletedArguments -CommandAst $commandAst -CursorPosition $cursorPosition)
     $context = Get-ZipCompletionContext -Arguments $completedArguments
 
     if (-not $context.LiteralMode) {
-        $inlineValueMatch = Get-ZipInlineValueMatch -Token $currentWord -TreatExactShortValueOptionAsInline $true
+        $inlineValueMatch = Get-ZipInlineValueMatch -Token $typedValue -TreatExactShortValueOptionAsInline $true
         if ($inlineValueMatch) {
-            $inlineCompletions = @(Get-ZipValueCompletions -OptionKey $inlineValueMatch.OptionKey -CurrentValue $inlineValueMatch.Value -CompletionPrefix $inlineValueMatch.Prefix)
+            $inlineCompletions = @(Get-ZipValueCompletions -OptionKey $inlineValueMatch.OptionKey -CurrentValue $inlineValueMatch.Value -CompletionPrefix $inlineValueMatch.Prefix -QuoteChar $typedQuote)
             $exactOptionTyped = [string]::IsNullOrEmpty($inlineValueMatch.Value) -and -not $inlineValueMatch.Prefix.EndsWith('=')
             if ($exactOptionTyped) {
                 # '-t' is one keystroke away from -tt, -T and -TT: offer the sibling options first,
@@ -1243,7 +1258,7 @@ function Complete-Zip {
         }
 
         if ($null -ne $context.ExpectingValueOption) {
-            return @(Get-ZipValueCompletions -OptionKey $context.ExpectingValueOption -CurrentValue $currentWord)
+            return @(Get-ZipValueCompletions -OptionKey $context.ExpectingValueOption -CurrentValue $typedValue -QuoteChar $typedQuote)
         }
 
         if ($null -ne $context.PatternListOption) {
@@ -1251,7 +1266,7 @@ function Complete-Zip {
                 return @(Get-ZipOptionCompletions -WordToComplete $currentWord)
             }
 
-            return @(Get-ZipPatternCompletions -CurrentValue $currentWord)
+            return @(Get-ZipPatternCompletions -CurrentValue $typedValue -QuoteChar $typedQuote)
         }
 
         if (-not [string]::IsNullOrEmpty($currentWord) -and (Test-ZipShouldCompleteOptions -Token $currentWord)) {
@@ -1263,11 +1278,11 @@ function Complete-Zip {
     $positionalCount = $context.Positionals.Count
 
     if ($positionalCount -eq 0) {
-        foreach ($result in @(Get-ZipArchivePathCompletions -InputPath $currentWord)) {
+        foreach ($result in @(Get-ZipArchivePathCompletions -InputPath $typedValue -QuoteChar $typedQuote)) {
             $results.Add($result)
         }
     } else {
-        foreach ($result in @(Get-ZipPathCompletions -InputPath $currentWord -Kind 'Any')) {
+        foreach ($result in @(Get-ZipPathCompletions -InputPath $typedValue -Kind 'Any' -QuoteChar $typedQuote)) {
             $results.Add($result)
         }
     }
