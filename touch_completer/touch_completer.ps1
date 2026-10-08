@@ -128,8 +128,8 @@ function Remove-TouchOuterQuotes {
 function ConvertTo-TouchQuotedValue {
     # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
     # otherwise in the typed quote character (single by default). Whitespace and argument-mode
-    # metacharacters (including the typographic quotes) end or split a bare word, and a
-    # leading '@' or '#' would start a splat or a comment.
+    # metacharacters (including the typographic quotes) end or split a bare word, a
+    # leading '@' or '#' would start a splat or a comment, and a leading dash a parameter.
     param(
         [string]$Value,
         [string]$Quote
@@ -140,7 +140,7 @@ function ConvertTo-TouchQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#\-\u2013-\u2015]') {
             return $Value
         }
 
@@ -177,20 +177,14 @@ function Get-TouchPathCompletions {
     $cleanInput = Remove-TouchOuterQuotes -Value $InputPath
     $quote = Get-TouchTypedQuote -Value $InputPath
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The typed directory part (separators and any .\ prefix exactly as typed) is kept verbatim.
+    $directory = ''
+    if ($cleanInput -match '^(?<dir>.*[\\/:])') {
+        $directory = $Matches['dir']
     }
+
+    $parent = if ($directory) { $directory } else { '.' }
+    $leaf = $cleanInput.Substring($directory.Length)
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
@@ -200,12 +194,10 @@ function Get-TouchPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directory + $item.Name
+        if (-not $directory -and $pathText -match '^[-\u2013-\u2015]') {
+            # A bare dash-leading word parses as a parameter; anchor it to the current directory.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
