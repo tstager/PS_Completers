@@ -1215,7 +1215,7 @@
         @{
             Path    = 'stat_completer/stat_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:BA25FEE7BE5E40E5C004899BF39AEACF0FD4E68DC0764F3B13EA6D13E3A0641A'
+            Hash    = 'SHA256:3A2B5FBD21597F7B6C56B8355CCA1A792C23670F7241CDF6AF9ACD216B860344'
             Targets = @(
                 @{ CommandName = 'stat'; Native = $true }
                 @{ CommandName = 'stat.exe'; Native = $true }
