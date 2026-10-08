@@ -5,7 +5,7 @@
 # tools/Build-Package.ps1 stages this file at the package root; the repository's
 # ps_completers.psd1 is staged as completers/completers.psd1.
 @{
-    ModuleVersion     = '1.1.2'
+    ModuleVersion     = '1.1.3'
     GUID              = '6b0d8c7e-3a41-4f6a-9d2e-5c1a7f0e9b34'
     Author            = 'Trent Stager'
     Description       = 'Argument completers for native commands, as a CompleterActions completer set.'
