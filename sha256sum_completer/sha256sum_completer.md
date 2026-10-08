@@ -65,7 +65,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- A path is inserted in the quote the user typed. PowerShell reads `'` and the typographic quotes U+2018-U+201B as single quotes and `"` and U+201C-U+201E as double quotes, so a typed word that opens with any of them is read by the PowerShell tokenizer, which drops the quote and undoes its escapes. With no quote typed, a path that contains whitespace, an argument-mode metacharacter (`{ } ( ) ; , | & < > ' " `` ` `` `$ @ #`) or a typographic quote is single-quoted. Inside single quotes every single-quote character, typographic ones included, is doubled, so `sha256sum it` completes to `'it''s.txt'` and a name with U+2019 doubles that character. Inside double quotes `` ` ``, `"`, `$` and U+201C-U+201E are backtick-escaped, so `sha256sum "a` completes to ``"a`$b.txt"``.
+- The typed directory text is kept as typed, so a `.\` or `../` prefix and the typed separator survive. A name that starts with a dash (`-` or U+2013-U+2015) would be read by PowerShell as a parameter, so with no directory typed it gets the current-directory prefix: `sha256sum ` completes `-dash.txt` as `.\-dash.txt`.
+- Missing or protected folders are probed with `-ErrorAction Ignore`, so path completion adds nothing to `$Error`.
+- The current word is cut from the command element under the cursor, so completion works when the command is not the first statement on the line and an unterminated quoted word containing spaces stays one word.
 - The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios
