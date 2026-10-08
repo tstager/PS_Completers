@@ -147,7 +147,7 @@ function ConvertTo-SplitQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
             return $Value
         }
 
@@ -208,13 +208,14 @@ function Get-SplitPathCompletions {
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # The directory part exactly as typed (.\ and ./ included), so accepting a candidate never deletes typed text.
+    $typedDirectory = [regex]::Match($cleanInput, '^(?:.*[\\/]|[A-Za-z]:)').Value
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        # A bare word starting with a dash is a parameter to PowerShell; anchor it to the current directory.
+        if (-not $quote -and -not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
