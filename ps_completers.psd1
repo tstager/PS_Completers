@@ -1242,7 +1242,7 @@
         @{
             Path    = 'sum_completer/sum_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:38949C16E1CEB85FA0F058C081A1778BE169C3008320A52AA55B6F7C81029C73'
+            Hash    = 'SHA256:F1D595AD6F3B555BFA478B22F0FAE05950A4496800700537ACC730A858C622C3'
             Targets = @(
                 @{ CommandName = 'sum'; Native = $true }
                 @{ CommandName = 'sum.exe'; Native = $true }
