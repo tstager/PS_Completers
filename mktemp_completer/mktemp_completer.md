@@ -85,6 +85,7 @@ Expected behavior:
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--suffix` shows its documented values in both the separate and the attached form
 - `mktemp ` offers the template shapes and `mktemp tmp.` offers `tmp.XXXXXX`; `mktemp -p ` lists directories only
+- directory candidates keep a typed `.\` or `./` prefix and typed quote, are quoted when a name holds a space or PowerShell metacharacter, and a name starting with a dash gets a `.\` prefix so it is not read as a parameter
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes
