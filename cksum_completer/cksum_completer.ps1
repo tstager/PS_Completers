@@ -94,17 +94,30 @@ function ConvertFrom-CksumHelpText {
 }
 
 function Get-CksumCompletionCatalog {
+    # The catalog is keyed on the resolved binary and its write time, so a PATH change or an
+    # in-place upgrade re-reads the help. Get-Command runs again only when PATH changes.
     $cache = Get-Variable -Name 'CksumCompletionCatalog' -Scope Script -ErrorAction Ignore
-    if ($null -ne $cache -and $null -ne $cache.Value) {
-        return $cache.Value
+    $cached = if ($null -ne $cache) { $cache.Value } else { $null }
+
+    $searchPath = [string]$env:PATH
+    $source = if ($null -ne $cached -and $cached.SearchPath -ceq $searchPath) {
+        $cached.Source
+    } else {
+        $command = Get-Command -Name 'cksum.exe', 'cksum' -ErrorAction Ignore | Select-Object -First 1
+        if ($null -ne $command) { [string]$command.Source } else { '' }
+    }
+    $writeTime = if ($source -and [System.IO.File]::Exists($source)) { [System.IO.File]::GetLastWriteTimeUtc($source) } else { [datetime]::MinValue }
+
+    if ($null -ne $cached -and $cached.Source -ceq $source -and $cached.WriteTime -eq $writeTime) {
+        $cached.SearchPath = $searchPath
+        return $cached
     }
 
     $options = @()
     $algorithmValues = @()
 
-    $command = Get-Command -Name 'cksum.exe', 'cksum' -ErrorAction Ignore | Select-Object -First 1
-    if ($null -ne $command) {
-        $helpOutput = try { $null | & $command.Source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String } catch { '' }
+    if ($source) {
+        $helpOutput = try { $null | & $source --help 2>&1 | ForEach-Object { $_ -replace '\e\[[0-9;?]*[ -/]*[@-~]', '' } | Out-String } catch { '' }
         if (-not [string]::IsNullOrWhiteSpace($helpOutput)) {
             $parsed = ConvertFrom-CksumHelpText -HelpText $helpOutput
             $options = @($parsed.Options)
@@ -137,6 +150,9 @@ function Get-CksumCompletionCatalog {
         ByToken         = $byToken
         AlgorithmValues = @($algorithmValues)
         LengthValues    = @('224', '256', '384', '512')
+        SearchPath      = $searchPath
+        Source          = $source
+        WriteTime       = $writeTime
     }
 
     Set-Variable -Name 'CksumCompletionCatalog' -Value $catalog -Scope Script
@@ -168,63 +184,77 @@ function New-CksumCompletionResult {
 }
 
 function Remove-CksumOuterQuotes {
+    # Strips the opening quote the user typed (and its closing match, when present) and
+    # undoes that quote style's escapes.
     param([string]$Value)
 
     if ($null -eq $Value) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-CksumQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $quote = $Value.Substring(0, 1)
+    $inner = $Value.Substring(1)
+    if ($inner.EndsWith($quote)) {
+        $inner = $inner.Substring(0, $inner.Length - 1)
     }
 
-    $Value
+    if ($quote -eq "'") { $inner.Replace("''", "'") } else { $inner -replace '`(.)', '$1' }
+}
+
+function ConvertTo-CksumQuotedValue {
+    # Bare when safe and no quote was typed; otherwise in the typed quote style (single by
+    # default). Whitespace and argument-mode metacharacters (typographic quotes included)
+    # end or split a bare word, and a leading '@' or '#' starts a splat or a comment.
+    param(
+        [string]$Value,
+        [string]$Quote = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-CksumCurrentToken {
+    # The word under the cursor comes from the parser: an unterminated quote is one element
+    # that runs to the cursor, so a quoted path with a space stays whole.
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $element.Extent.EndOffset -ge $CursorPosition) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-CksumPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-CksumOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quote = if ($InputPath -match '^[''"]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -245,7 +275,7 @@ function Get-CksumPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -261,7 +291,7 @@ function Get-CksumPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-CksumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-CksumQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-CksumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -320,6 +350,7 @@ function Get-CksumOptionCompletion {
 }
 
 function Complete-Cksum {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -327,11 +358,7 @@ function Complete-Cksum {
     )
 
     $catalog = Get-CksumCompletionCatalog
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-CksumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-CksumCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     # The element that ends before the current word decides whether this is a value slot.
     $previousToken = $null

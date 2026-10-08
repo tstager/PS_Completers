@@ -121,7 +121,7 @@
         @{
             Path    = 'cksum_completer/cksum_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:BA4B0E7EB8D2204A18B112E41838B9762D8E83A8D86D638C74D7DA5FA8124761'
+            Hash    = 'SHA256:E0DCE91BD418D7BE8A21C312EA3BB9FCFB104F7CC370AE5DC7406D5EB74C2482'
             Targets = @(
                 @{ CommandName = 'cksum'; Native = $true }
                 @{ CommandName = 'cksum.exe'; Native = $true }
