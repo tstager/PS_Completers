@@ -85,101 +85,60 @@ function New-EnvCompletionResult {
     )
 }
 
-function Remove-EnvOuterQuotes {
+function ConvertFrom-EnvTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-EnvQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
-}
-
-function Get-EnvCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function Get-EnvPathCompletions {
-    param([string]$InputPath)
+    # Attached marks a value glued to its option (--chdir=VALUE): the word starts with the option.
+    param(
+        [string]$InputPath,
+        [switch]$Attached
+    )
 
-    $cleanInput = Remove-EnvOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-EnvTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The directory part is kept exactly as typed (.\, ./, ..\, C:\...); only the leaf is completed.
+    $directory = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/') + 1)
+    if (-not $directory -and $cleanInput -match '^[A-Za-z]:') {
+        $directory = $cleanInput.Substring(0, 2)
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    $parent = if ($directory) { $directory } else { '.' }
+    $leaf = $cleanInput.Substring($directory.Length)
+
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directory + $item.Name
+
+        # A whole word starting with a dash would parse as a parameter: prefix the current directory.
+        if (-not $directory -and -not $Attached -and $item.Name -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-EnvQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-EnvOperandText -Value $pathText -Quote $quoteChar
         if ($item.PSIsContainer) {
             New-EnvCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -270,7 +229,7 @@ function Get-EnvOptionValueCompletions {
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
-            foreach ($result in Get-EnvPathCompletions -InputPath $prefix) {
+            foreach ($result in Get-EnvPathCompletions -InputPath $prefix -Attached:([bool]$attached)) {
                 New-EnvCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
@@ -360,17 +319,8 @@ function Get-EnvCommandLineState {
         }
     }
 
-    $quote = ''
-    $value = $word
-    if ($value.StartsWith("'") -or $value.StartsWith('"')) {
-        $quote = $value.Substring(0, 1)
-        $value = $value.Substring(1)
-        if ($value.EndsWith($quote)) {
-            $value = $value.Substring(0, $value.Length - 1)
-        }
-
-        $value = if ($quote -eq "'") { $value.Replace("''", "'") } else { $value -replace '`(.)', '$1' }
-    }
+    $quote = if ($word -match '^[''"\u2018-\u201E]') { $word.Substring(0, 1) } else { '' }
+    $value = ConvertFrom-EnvTypedWord -Value $word
 
     [pscustomobject]@{
         Phase = if ($pendingValue) { 'Value' } else { $phase }
@@ -383,25 +333,27 @@ function Get-EnvCommandLineState {
 }
 
 function ConvertTo-EnvOperandText {
-    # Bare when safe and no quote was typed, otherwise in the typed quote style (single by default).
+    # Bare when safe and no quote was typed, otherwise in the quote the user typed (single by
+    # default). PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E
+    # as double quotes.
     param(
         [string]$Value,
         [string]$Quote
     )
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
             return $Value
         }
 
         $Quote = "'"
     }
 
-    if ($Quote -eq "'") {
-        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
     }
 
-    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-EnvPathCommandList {
@@ -480,19 +432,16 @@ function Get-EnvOperandCompletionList {
 }
 
 function Complete-Env {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete re-quotes a typed quote.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-EnvCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
-
+    # The word is cut from the element under the cursor: wordToComplete re-quotes a typed quote.
     $state = Get-EnvCommandLineState -commandAst $commandAst -cursorPosition $cursorPosition
+    $currentWord = $state.Word
     if ($state.Phase -ceq 'Argument') {
         # Words after COMMAND belong to COMMAND, not to env.
         if ([string]::IsNullOrEmpty($currentWord) -or $currentWord.StartsWith('-')) {
