@@ -144,7 +144,7 @@ Enumerated values are provided for:
 - `error=`
 - `tag=`
 
-`binPath=` (and `failure` `command=`) are filesystem paths: they complete through the engine's own filename completer, keeping its provider item types, in both the separate (`binPath= C:\Win`) and inline (`binPath=C:\Win`) forms.
+`binPath=` (and `failure` `command=`) are filesystem paths: they complete through the engine's own filename completer, keeping its provider item types, in both the separate (`binPath= C:\Win`) and inline (`binPath=C:\Win`) forms. Each path is quoted once for PowerShell as a literal argument (the filename completer's wildcard escaping, such as a doubled backtick, is undone), in the quote the user typed, typographic quotes included, and in single quotes by default when the name needs quoting.
 
 Free-form value slots such as `group=`, `depend=`, `obj=`, `DisplayName=`, and `password=` return placeholder-style completions to suppress filesystem fallback rather than inventing content.
 

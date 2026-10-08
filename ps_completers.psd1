@@ -1070,7 +1070,7 @@
         @{
             Path    = 'sc_completer/sc_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:9577366C1C3D4BBE1B4FC773D564B843CF4E93E01697806570FFD16197EAC54A'
+            Hash    = 'SHA256:1CFB489C5AF8F3C4518E616696C2E45088F7D5615CBB830DFBC515AB0F67B84D'
             Targets = @(
                 @{ CommandName = 'sc'; Native = $true }
                 @{ CommandName = 'sc.exe'; Native = $true }

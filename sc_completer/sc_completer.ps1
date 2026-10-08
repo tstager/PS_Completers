@@ -345,10 +345,13 @@ function Get-ScCurrentTokenState {
     $quoteChar = [char]0
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34 -or $character -eq [char]39)) {
+        # PowerShell pairs any single quote (' U+2018-U+201B) or double quote (" U+201C-U+201E)
+        # with any other of its kind; track the kind as its ASCII form.
+        $quoteKind = if ("$character" -match '[''\u2018-\u201B]') { [char]39 } elseif ("$character" -match '["\u201C-\u201E]') { [char]34 } else { [char]0 }
+        if ($quoteKind -ne [char]0) {
             if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
+                $quoteChar = $quoteKind
+            } elseif ($quoteChar -eq $quoteKind) {
                 $quoteChar = [char]0
             }
 
@@ -542,8 +545,8 @@ function Get-ScStringValueCompletions {
     # The parser closes an open string, so 'sc start "Win' arrives as "Win": strip both
     # quotes and undo the escaping so the bare prefix is what gets matched.
     $matchPrefix = $CurrentWord
-    if ($matchPrefix.Length -gt 0 -and ($matchPrefix[0] -eq [char]34 -or $matchPrefix[0] -eq [char]39)) {
-        $quoteChar = $matchPrefix[0]
+    if ($matchPrefix -match '^[''"\u2018-\u201E]') {
+        $quoteChar = if ($matchPrefix -match '^[''\u2018-\u201B]') { [char]39 } else { [char]34 }
         $matchPrefix = $matchPrefix.Substring(1)
         if ($matchPrefix.Length -gt 0 -and $matchPrefix[$matchPrefix.Length - 1] -eq $quoteChar) {
             $matchPrefix = $matchPrefix.Substring(0, $matchPrefix.Length - 1)
@@ -556,8 +559,8 @@ function Get-ScStringValueCompletions {
     foreach ($value in ($Values | Sort-Object -Unique)) {
         if (Test-ScStartsWith -Value $value -Prefix $matchPrefix) {
             $completionText = $value
-            if ($QuoteWhitespace -and ($value -match '\s' -or ($CurrentWord.Length -gt 0 -and ($CurrentWord[0] -eq [char]34 -or $CurrentWord[0] -eq [char]39)))) {
-                $quoteCharacter = if ($CurrentWord.Length -gt 0 -and $CurrentWord[0] -eq [char]34) { '"' } else { "'" }
+            if ($QuoteWhitespace -and ($value -match '\s' -or $CurrentWord -match '^[''"\u2018-\u201E]')) {
+                $quoteCharacter = if ($CurrentWord -match '^["\u201C-\u201E]') { '"' } else { "'" }
                 $escapedValue = if ($quoteCharacter -eq "'") {
                     $value -replace "'", "''"
                 } else {
@@ -606,6 +609,61 @@ function Get-ScNumericCompletions {
     )
 
     Get-ScStringValueCompletions -Values $Hints -CurrentWord $CurrentWord -ToolTip $ToolTip -Prefix $Prefix
+}
+
+function ConvertTo-ScQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-ScPathCompletions {
+    param([string]$CurrentWord)
+
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (tick``x.txt). sc takes literal paths, so each result is unwrapped by the parser and
+    # unescaped, then quoted once in the style the user typed.
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+    foreach ($item in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord))) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        [pscustomobject]@{
+            CompletionText = ConvertTo-ScQuotedValue -Value $path -QuoteChar $quoteChar
+            ListItemText   = $item.ListItemText
+            ResultType     = [string]$item.ResultType
+            ToolTip        = $item.ToolTip
+        }
+    }
 }
 
 function Get-ScOptionKeyFromToken {
@@ -749,7 +807,7 @@ function Get-ScOptionValueCompletions {
             # binPath= and command= are filesystem paths: hand them to the engine's own
             # filename completer (in-process) and keep its ProviderItem/ProviderContainer types.
             $pathResults = @(
-                foreach ($pathResult in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord))) {
+                foreach ($pathResult in @(Get-ScPathCompletions -CurrentWord $CurrentWord)) {
                     New-ScCompletionResult -CompletionText ($InlinePrefix + $pathResult.CompletionText) -ListItemText $pathResult.ListItemText -ResultType $pathResult.ResultType -ToolTip $pathResult.ToolTip
                 }
             )
@@ -1134,6 +1192,13 @@ function Complete-Sc {
             HasTrailingSpace    = $true
         }
     } elseif (-not [string]::IsNullOrEmpty($wordToComplete)) {
+        # The engine hands a typographic-quoted word over in ASCII quotes (U+2018 ti arrives
+        # as 'ti'); restore the quote the user typed so quoted candidates keep it.
+        $typedQuote = [string]$tokenState.CurrentToken
+        if ($typedQuote -match '^[\u2018-\u201E]' -and $wordToComplete -match '^[''"]') {
+            $wordToComplete = $typedQuote.Substring(0, 1) + $wordToComplete.Substring(1)
+        }
+
         $tokenState = [pscustomobject]@{
             TokensBeforeCurrent = $tokenState.TokensBeforeCurrent
             CurrentToken        = $wordToComplete
