@@ -49,7 +49,7 @@ function Initialize-PsExecCompletionCatalog {
 }
 
 function Expand-PsExecHint {
-    param([string[]]$Hints, [string]$CurrentWord, [string]$ToolTip)
+    param([string[]]$Hints, [string]$CurrentWord, [string]$SpanText, [string]$ToolTip)
 
     $typed = Remove-PsExecOuterQuotes -Value $CurrentWord
     $matched = @(
@@ -63,7 +63,7 @@ function Expand-PsExecHint {
     if ($matched.Count -gt 0) { return $matched }
 
     # Never clobber what the user already typed with an unrelated hint.
-    @(New-PsExecCompletionResult -CompletionText $CurrentWord -ResultType 'ParameterValue' -ToolTip $ToolTip)
+    @(New-PsExecCompletionResult -CompletionText $SpanText -ResultType 'ParameterValue' -ToolTip $ToolTip)
 }
 
 function Split-PsExecPath {
@@ -100,39 +100,44 @@ function New-PsExecCompletionResult {
     [System.Management.Automation.CompletionResult]::new($CompletionText, $ListItemText, $ResultType, $ToolTip)
 }
 
+# PowerShell treats U+2018-U+201B as single quotes and U+201C-U+201E as double
+# quotes, exactly like ' and ", so every quote test below covers both.
 function Get-PsExecTypedQuote {
     param([string]$Value)
-    if ([string]::IsNullOrEmpty($Value)) { return '' }
-    $first = $Value.Substring(0, 1)
-    if ($first -in @('"', "'")) { return $first }
+    if ($Value -match '^([''"\u2018-\u201E])') { return $Matches[1] }
     ''
 }
 
 function Remove-PsExecOuterQuotes {
     param([string]$Value)
-    if ([string]::IsNullOrEmpty($Value)) { return '' }
     $quote = Get-PsExecTypedQuote -Value $Value
     if (-not $quote) { return $Value -replace '`(.)', '$1' }
-    # An unterminated quote is one token running to the cursor: strip the
-    # opening quote, and the closing one when present.
+    # An unterminated quote is one token running to the cursor: read the string
+    # up to its closing quote, when present, and undo that quote style's escapes
+    # (a doubled quote stands for its second character).
     $inner = $Value.Substring(1)
-    if ($inner.Length -gt 0 -and $inner.EndsWith($quote)) { $inner = $inner.Substring(0, $inner.Length - 1) }
-    if ($quote -eq "'") { return $inner.Replace("''", "'") }
-    $inner -replace '`(.)', '$1'
+    if ($quote -match "['\u2018-\u201B]") {
+        return [regex]::Match($inner, "^(?:[^'\u2018-\u201B]|['\u2018-\u201B]{2})*").Value -replace "['\u2018-\u201B](['\u2018-\u201B])", '$1'
+    }
+    [regex]::Match($inner, '^(?:[^`"\u201C-\u201E]|`.|["\u201C-\u201E]{2})*').Value -replace '`(.)|["\u201C-\u201E](["\u201C-\u201E])', '$1$2'
 }
 
 function ConvertTo-PsExecQuotedValue {
     param([string]$Value, [string]$Quote = '')
     if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
-    if (-not $Quote -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') { return $Value }
-    # Keep the quote the user typed; an unquoted value that needs quoting keeps
-    # this completer's double-quote style.
-    if ($Quote -eq "'") { return "'" + $Value.Replace("'", "''") + "'" }
-    '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    if (-not $Quote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+    # Keep the quote the user typed (single by default). Inside single quotes
+    # every single-quote character is doubled; inside double quotes ` " $ and
+    # the typographic double quotes take a backtick.
+    if (-not $Quote) { $Quote = "'" }
+    if ($Quote -match "['\u2018-\u201B]") {
+        return $Quote + ($Value -replace "(['\u2018-\u201B])", '$1$1') + $Quote
+    }
+    $Quote + ($Value -replace '([`$"\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-PsExecArgumentState {
-    param([System.Management.Automation.Language.CommandAst]$CommandAst, [string]$WordToComplete, [int]$CursorPosition)
+    param([System.Management.Automation.Language.CommandAst]$CommandAst, [int]$CursorPosition)
 
     # A bare '@' is an unrecognized token, so the parser splits '@.\hosts.txt'
     # into '@' and '.\hosts.txt'; glue it back onto the element it touches so
@@ -149,20 +154,28 @@ function Get-PsExecArgumentState {
         [void]$words.Add([pscustomobject]@{ Start = $element.Extent.StartOffset; End = $element.Extent.EndOffset; Text = $element.Extent.Text; At = $false })
     }
 
-    # The word under the cursor is the parser's element that contains the
-    # cursor, cut at the cursor; an unterminated quote is one element.
-    # StrandedAt is set when PowerShell's replacement span starts after a glued
-    # '@' ('@.\' replaces only '.\'), so results must keep that '@' valid.
+    # The word under the cursor is read from the parser, never from
+    # $wordToComplete (a registered completer receives it with '$name'
+    # expanded): the element that contains the cursor, cut at the cursor. An
+    # unterminated quote is one element. SpanText is the text PowerShell's
+    # replacement span covers: the whole element, even when the cursor is
+    # mid-word, so an echo of it changes nothing. For a glued '@' the span is
+    # only the path after it (StrandedAt, results must keep that '@' valid), or
+    # only the '@' itself when the cursor sits right after it (AtOnly).
     $currentWord = ''
+    $spanText = ''
     $strandedAt = $false
-    if (-not [string]::IsNullOrEmpty($WordToComplete)) {
-        $currentWord = $WordToComplete
-        foreach ($word in $words) {
-            if ($word.Start -lt $CursorPosition -and $word.End -ge $CursorPosition) {
-                $currentWord = $word.Text.Substring(0, $CursorPosition - $word.Start)
-                $strandedAt = $word.At -and $WordToComplete -eq $currentWord.Substring(1)
-                break
+    $atOnly = $false
+    foreach ($word in $words) {
+        if ($word.Start -lt $CursorPosition -and $word.End -ge $CursorPosition) {
+            $currentWord = $word.Text.Substring(0, $CursorPosition - $word.Start)
+            $spanText = $word.Text
+            if ($word.At) {
+                $atOnly = $CursorPosition -eq $word.Start + 1
+                $strandedAt = -not $atOnly
+                $spanText = if ($atOnly) { '@' } else { $word.Text.Substring(1) }
             }
+            break
         }
     }
 
@@ -177,14 +190,16 @@ function Get-PsExecArgumentState {
     }
 
     [pscustomobject]@{
-        CurrentWord        = $currentWord
-        StrandedAt         = [bool]$strandedAt
+        CurrentWord         = $currentWord
+        SpanText            = $spanText
+        StrandedAt          = $strandedAt
+        AtOnly              = $atOnly
         TokensBeforeCurrent = $tokensBeforeCurrent
     }
 }
 
 function Get-PsExecAtFileCompletions {
-    param([string]$CurrentWord, [bool]$StrandedAt = $false)
+    param([string]$CurrentWord, [string]$SpanText, [bool]$StrandedAt = $false)
 
     $trimmed = Remove-PsExecOuterQuotes -Value $CurrentWord
     if (-not $trimmed.StartsWith('@')) { return @() }
@@ -193,7 +208,7 @@ function Get-PsExecAtFileCompletions {
     $parent = $parts.Parent
     $leaf = $parts.Leaf
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
+    $items = @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)
     $quote = Get-PsExecTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
@@ -213,7 +228,7 @@ function Get-PsExecAtFileCompletions {
         # A stranded '@' stays in the line, and only '@(' keeps it valid: it
         # passes the quoted '@path' to psexec as one argument.
         $completionText = if ($StrandedAt) {
-            '(' + (ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath) -Quote '"') + ')'
+            '(' + (ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath)) + ')'
         } else {
             ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath) -Quote $quote
         }
@@ -221,9 +236,8 @@ function Get-PsExecAtFileCompletions {
     }
 
     if ($results.Count -eq 0) {
-        $placeholder = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { '@file' } elseif ($StrandedAt) { $CurrentWord.Substring(1) } else { $CurrentWord }
         return @(
-            New-PsExecCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.'
+            New-PsExecCompletionResult -CompletionText $SpanText -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.'
         )
     }
 
@@ -231,7 +245,7 @@ function Get-PsExecAtFileCompletions {
 }
 
 function Get-PsExecExecutableCompletions {
-    param([string]$CurrentWord)
+    param([string]$CurrentWord, [string]$SpanText)
 
     $trimmed = Remove-PsExecOuterQuotes -Value $CurrentWord
     $quote = Get-PsExecTypedQuote -Value $CurrentWord
@@ -239,7 +253,7 @@ function Get-PsExecExecutableCompletions {
 
     if ([string]::IsNullOrWhiteSpace($trimmed)) {
         foreach ($sample in @('cmd.exe', 'powershell.exe', 'pwsh.exe')) {
-            [void]$results.Add((New-PsExecCompletionResult -CompletionText $sample -ResultType 'ParameterValue' -ToolTip 'Local executable or script to copy and run with -c.'))
+            [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value $sample -Quote $quote) -ResultType 'ParameterValue' -ToolTip 'Local executable or script to copy and run with -c.'))
         }
     }
 
@@ -247,7 +261,7 @@ function Get-PsExecExecutableCompletions {
         # A UNC copy source is never enumerated: resolving the share blocks the
         # completion thread on SMB name resolution for seconds when the host is
         # unknown, and leaves a Get-ChildItem record in $Error.
-        [void]$results.Add((New-PsExecCompletionResult -CompletionText $CurrentWord -ResultType 'ParameterValue' -ToolTip 'Network path to copy with -c; UNC paths are not enumerated during completion.'))
+        [void]$results.Add((New-PsExecCompletionResult -CompletionText $SpanText -ResultType 'ParameterValue' -ToolTip 'Network path to copy with -c; UNC paths are not enumerated during completion.'))
         return @($results.ToArray())
     }
 
@@ -256,7 +270,7 @@ function Get-PsExecExecutableCompletions {
         $parent = $parts.Parent
         $leaf = $parts.Leaf
         $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-        foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)) {
             $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
                 Join-Path -Path $parent -ChildPath $item.Name
             } elseif ($parent -eq '.') {
@@ -273,12 +287,12 @@ function Get-PsExecExecutableCompletions {
         }
     } else {
         foreach ($command in @(Get-Command -Name "$trimmed*" -CommandType Application -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
-            [void]$results.Add((New-PsExecCompletionResult -CompletionText $command.Name -ResultType 'ParameterValue' -ToolTip ($command.Source ? $command.Source : $command.Name)))
+            [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value $command.Name -Quote $quote) -ResultType 'ParameterValue' -ToolTip ($command.Source ? $command.Source : $command.Name)))
         }
     }
 
     if ($results.Count -eq 0) {
-        $completion = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { '<local-command>' } else { $CurrentWord }
+        $completion = if ([string]::IsNullOrWhiteSpace($SpanText)) { '<local-command>' } else { $SpanText }
         return @(
             New-PsExecCompletionResult -CompletionText $completion -ResultType 'ParameterValue' -ToolTip 'Local executable or script to copy and run with -c.'
         )
@@ -294,6 +308,7 @@ function Get-PsExecExecutableCompletions {
 }
 
 function Complete-PsExec {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'WordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; a registered completer receives WordToComplete with $name expanded.')]
     param(
         [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
@@ -302,8 +317,14 @@ function Complete-PsExec {
 
     Initialize-PsExecCompletionCatalog
 
-    $state = Get-PsExecArgumentState -CommandAst $CommandAst -WordToComplete $WordToComplete -CursorPosition $CursorPosition
+    $state = Get-PsExecArgumentState -CommandAst $CommandAst -CursorPosition $CursorPosition
+    # Tab between a bare '@' and the path after it replaces only the '@':
+    # anything else would fuse with the typed path, so keep the line as it is.
+    if ($state.AtOnly) {
+        return @(New-PsExecCompletionResult -CompletionText '@' -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.')
+    }
     $currentWord = $state.CurrentWord
+    $spanText = $state.SpanText
     $tokensBeforeCurrent = @($state.TokensBeforeCurrent)
     $usedSwitches = @{}
     $valueContext = $null
@@ -361,47 +382,47 @@ function Complete-PsExec {
 
     switch ($valueContext) {
         'User' {
-            return @(Expand-PsExecHint -Hints @('<username>', '<domain\user>', "$env:USERDOMAIN\$env:USERNAME") -CurrentWord $currentWord -ToolTip 'Remote user name, Domain\User syntax when network access is needed.')
+            return @(Expand-PsExecHint -Hints @('<username>', '<domain\user>', "$env:USERDOMAIN\$env:USERNAME") -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Remote user name, Domain\User syntax when network access is needed.')
         }
         'Password' {
-            $value = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<password>' } else { $currentWord }
+            $value = if ([string]::IsNullOrWhiteSpace($spanText)) { '<password>' } else { $spanText }
             return @(New-PsExecCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'Remote password value.')
         }
         'Timeout' {
-            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.TimeoutHints -CurrentWord $currentWord -ToolTip 'Remote connection timeout in seconds.')
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.TimeoutHints -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Remote connection timeout in seconds.')
         }
         'ServiceName' {
-            return @(Expand-PsExecHint -Hints @('PSEXESVC', '<service-name>') -CurrentWord $currentWord -ToolTip 'Remote service name for PsExec (PSEXESVC is the default).')
+            return @(Expand-PsExecHint -Hints @('PSEXESVC', '<service-name>') -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Remote service name for PsExec (PSEXESVC is the default).')
         }
         'Session' {
-            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.SessionHints -CurrentWord $currentWord -ToolTip 'Interactive session number for -i.')
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.SessionHints -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Interactive session number for -i.')
         }
         'RemoteDirectory' {
-            $value = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<remote-directory>' } else { $currentWord }
+            $value = if ([string]::IsNullOrWhiteSpace($spanText)) { '<remote-directory>' } else { $spanText }
             return @(New-PsExecCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'Remote working directory path for -w.')
         }
         'ProcessorGroup' {
-            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.GroupHints -CurrentWord $currentWord -ToolTip 'Processor group number for -g.')
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.GroupHints -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Processor group number for -g.')
         }
         'Affinity' {
-            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.AffinityHints -CurrentWord $currentWord -ToolTip 'Comma-separated CPU list for -a, where 1 is the lowest numbered CPU.')
+            return @(Expand-PsExecHint -Hints $script:PsExecCompletionCatalog.AffinityHints -CurrentWord $currentWord -SpanText $spanText -ToolTip 'Comma-separated CPU list for -a, where 1 is the lowest numbered CPU.')
         }
     }
 
     if ((Remove-PsExecOuterQuotes -Value $currentWord).StartsWith('@')) {
-        return Get-PsExecAtFileCompletions -CurrentWord $currentWord -StrandedAt $state.StrandedAt
+        return Get-PsExecAtFileCompletions -CurrentWord $currentWord -SpanText $spanText -StrandedAt $state.StrandedAt
     }
 
     if ($copyMode -and -not $commandToken -and [string]::IsNullOrEmpty($currentWord)) {
-        return Get-PsExecExecutableCompletions -CurrentWord $currentWord
+        return Get-PsExecExecutableCompletions -CurrentWord $currentWord -SpanText $spanText
     }
 
     if ($commandToken) {
         if ($copyMode -and -not $commandTail) {
-            return Get-PsExecExecutableCompletions -CurrentWord $currentWord
+            return Get-PsExecExecutableCompletions -CurrentWord $currentWord -SpanText $spanText
         }
 
-        $argumentValue = if ([string]::IsNullOrWhiteSpace($currentWord)) { '<argument>' } else { $currentWord }
+        $argumentValue = if ([string]::IsNullOrWhiteSpace($spanText)) { '<argument>' } else { $spanText }
         return @(New-PsExecCompletionResult -CompletionText $argumentValue -ResultType 'ParameterValue' -ToolTip 'Command tail is intentionally conservative and non-enumerating.')
     }
 
@@ -412,11 +433,11 @@ function Complete-PsExec {
         # 'If you omit the computer name PsExec runs the application on the
         # local system', so the local-run command slot is a local program.
         if ($copyMode -or -not $remoteTarget) {
-            return Get-PsExecExecutableCompletions -CurrentWord $currentWord
+            return Get-PsExecExecutableCompletions -CurrentWord $currentWord -SpanText $spanText
         }
 
         return @(
-            New-PsExecCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip 'Remote command or command path.'
+            New-PsExecCompletionResult -CompletionText $spanText -ResultType 'ParameterValue' -ToolTip 'Remote command or command path.'
             New-PsExecCompletionResult -CompletionText '<command>' -ResultType 'ParameterValue' -ToolTip 'Remote command or command path.'
         )
     }
@@ -446,7 +467,7 @@ function Complete-PsExec {
     }
 
     if ($copyMode -and -not $currentWord.StartsWith('-')) {
-        [void]$results.AddRange(@(Get-PsExecExecutableCompletions -CurrentWord $currentWord))
+        [void]$results.AddRange(@(Get-PsExecExecutableCompletions -CurrentWord $currentWord -SpanText $spanText))
     }
 
     if ($results.Count -eq 0 -and ($typedTarget.StartsWith('\') -or $typedTarget.StartsWith('/'))) {
@@ -454,7 +475,7 @@ function Complete-PsExec {
         # echo it back rather than proposing a command in a slot that cannot
         # hold one.
         $echoToolTip = if ($typedTarget.StartsWith('\')) { 'Remote computer name.' } else { 'PsExec switch or command.' }
-        [void]$results.Add((New-PsExecCompletionResult -CompletionText $currentWord -ResultType 'ParameterValue' -ToolTip $echoToolTip))
+        [void]$results.Add((New-PsExecCompletionResult -CompletionText $spanText -ResultType 'ParameterValue' -ToolTip $echoToolTip))
     }
 
     @($results.ToArray())
