@@ -30,15 +30,9 @@ Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock 
     Initialize-GrepCompletionCatalog
     $catalog = Get-GrepCompletionCatalog
 
-    # When the cursor sits past the parsed command extent the user is on a fresh
-    # token after trailing whitespace, which $commandAst.Extent.Text has trimmed
-    # away. Treat that as an empty current token so terminal/positional routing
-    # runs instead of falling through to the option-name branch.
-    $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-GrepCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    # A cursor in whitespace (including past the parsed extent after a trailing space)
+    # sits on a fresh, empty token so terminal/positional routing runs.
+    $currentToken = Get-GrepCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     $tokensBeforeCurrent = Get-GrepArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-GrepCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -157,6 +151,7 @@ grep -e pat .\
 - Combined short-flag clusters (for example `-rni`) are not split; an unknown leading-`-` token is treated as a consumed boolean switch.
 - `--color` / `--colour` are optional-value flags (`--color[=<WHEN>]`); their `WHEN` enum values are offered only via the inline `--color=` form. A bare `--color` or `--colour` followed by a space is a completed flag and does not consume the next token as its value.
 - The option and value branches complete the token up to the cursor, so editing an earlier token (`grep --includ|e= pattern`) offers completions for the prefix under the cursor.
+- The word under the cursor comes from the PowerShell parser, so a quoted path with spaces (`grep foo "C:\Program F`) keeps its directory. Path results reuse the quote the user typed (single quotes double an embedded `'`; double quotes escape `` ` ``, `"` and `$`); an unquoted path is double-quoted only when it contains whitespace.
 - GNU's `-NUM` context shortcut is accepted as typed (`grep -1` keeps `-1`, tooltip `same as --context=1`).
 - The four enum value sets are curated in the script rather than scraped from grep's `[possible values: ...]` help text.
 - The completer does not validate glob or regular-expression syntax for pattern, glob, label, or separator slots.

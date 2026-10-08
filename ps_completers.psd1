@@ -455,7 +455,7 @@
         @{
             Path    = 'grep_completer/grep_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E6BE4473B5AB3781B36CD0E331D36D466287E640969EDC44F7D95D5115362915'
+            Hash    = 'SHA256:54211A7C4347D81707A2C510652B8FA65B853F645ED7ADBAC9B469FBAF23E09E'
             Targets = @(
                 @{ CommandName = 'grep'; Native = $true }
                 @{ CommandName = 'grep.exe'; Native = $true }

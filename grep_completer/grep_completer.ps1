@@ -72,7 +72,7 @@ function Resolve-GrepCommandName {
         return $catalog.CommandName
     }
 
-    $command = Get-Command -Name grep.exe, grep -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name grep.exe, grep -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $catalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -108,15 +108,19 @@ function Remove-GrepOuterQuotes {
 function ConvertTo-GrepQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
+    if ($Quote -eq "'") {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    if ($Quote -eq '"' -or $Value -match '\s') {
+        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
 
@@ -139,27 +143,19 @@ function Get-GrepTokenText {
 
 function Get-GrepCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser already knows the word under the cursor: an unterminated quote is one
+    # element running to the cursor, so a quoted path with spaces keeps its directory.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-GrepArgumentTokens {
@@ -435,8 +431,9 @@ function Get-GrepPathCompletions {
         [switch]$DirectoriesOnly
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    # Honour the quote the user opened: strip it before matching and reuse it when emitting.
+    $quote = if (-not [string]::IsNullOrEmpty($InputPath) -and $InputPath[0] -in @([char]34, [char]39)) { [string]$InputPath[0] } else { '' }
+    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } elseif ($quote) { $InputPath.Trim([char]$quote) } else { $InputPath.Trim('"') }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -453,7 +450,7 @@ function Get-GrepPathCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
@@ -473,7 +470,7 @@ function Get-GrepPathCompletions {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-GrepQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-GrepQuotedValue -Value $completionText -Quote $quote
         $completionText = $Prefix + $completionText
 
         New-GrepCompletionResult -CompletionText $completionText -ListItemText $item.Name -ResultType 'ParameterValue' -ToolTip $item.FullName
@@ -776,15 +773,9 @@ Register-ArgumentCompleter -Native -CommandName 'grep', 'grep.exe' -ScriptBlock 
     Initialize-GrepCompletionCatalog
     $catalog = Get-GrepCompletionCatalog
 
-    # When the cursor sits past the parsed command extent the user is on a fresh
-    # token after trailing whitespace, which $commandAst.Extent.Text has trimmed
-    # away. Treat that as an empty current token so terminal/positional routing
-    # runs instead of falling through to the option-name branch.
-    $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-GrepCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    # A cursor in whitespace (including past the parsed extent after a trailing space)
+    # sits on a fresh, empty token so terminal/positional routing runs.
+    $currentToken = Get-GrepCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     $tokensBeforeCurrent = Get-GrepArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-GrepCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 
