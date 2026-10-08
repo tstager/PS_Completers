@@ -80,7 +80,10 @@ The script provides:
   as `'table':` / `'json':`
 - filename completion for path-shaped options (`--config`, `--file`,
   `--env-file`, `--tlscacert`, `--project-directory`, ...) and for any
-  path-shaped word, so `docker compose -f .\<TAB>` still walks the filesystem
+  path-shaped word, so `docker compose -f .\<TAB>` still walks the filesystem.
+  Names that need it are quoted once, in the quote the user typed (single by
+  default, typographic quotes included), and the attached form quotes the whole
+  word (`--config=<TAB>` -> `'--config=.\sp ace.txt'`)
 - live object names in operand and option-value slots, taken from the CLI's
   own cobra completion (`docker __complete <settled words> ""`): containers for
   `docker logs <TAB>` / `docker exec <TAB>`, images for `docker run <TAB>` /

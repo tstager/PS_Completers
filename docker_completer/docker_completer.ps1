@@ -831,13 +831,86 @@ function Test-DockerPathLikeWord {
     return ($Word -match '^[.~]|[\\/]|^[A-Za-z]:')
 }
 
+function ConvertFrom-DockerTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    return $tokens[0].Value
+}
+
+function ConvertTo-DockerQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    return $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-DockerPathCompletion {
+    param(
+        [string]$WordToComplete,
+        [string]$Prefix
+    )
+
+    # CompleteFilename quotes for PowerShell and wildcard-escapes (tick``x.txt), so each
+    # result is unwrapped by the parser and unescaped, then quoted once in the style the
+    # user typed. An attached --opt= prefix goes inside the quotes: one constant argument.
+    $quoteChar = if ($WordToComplete -match '^[''"\u2018-\u201E]') { $WordToComplete.Substring(0, 1) } else { '' }
+    $value = ConvertFrom-DockerTypedWord -Value $WordToComplete
+    $separator = [string][System.IO.Path]::DirectorySeparatorChar
+
+    foreach ($item in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($value))) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer -and -not $path.EndsWith($separator)) {
+            $path += $separator
+        }
+
+        $completionText = ConvertTo-DockerQuotedValue -Value ($Prefix + $path) -QuoteChar $quoteChar
+        New-DockerCompletionResult -CompletionText $completionText -ResultType ([string]$item.ResultType) -ToolTip $item.ToolTip -ListItemText $item.ListItemText
+    }
+}
+
 function Get-DockerOptionValueCompletion {
     param(
         [object]$Option,
         [string]$WordToComplete,
         [string]$Prefix,
         [object]$Context,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [string]$TypedValue
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -854,12 +927,8 @@ function Get-DockerOptionValueCompletion {
         return [object[]]$results
     }
 
-    if ($Option.IsPathValue -or (Test-DockerPathLikeWord -Word $WordToComplete)) {
-        if ([string]::IsNullOrEmpty($Prefix)) {
-            return @([System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete))
-        }
-
-        return @()
+    if ($Option.IsPathValue -or (Test-DockerPathLikeWord -Word (ConvertFrom-DockerTypedWord -Value $TypedValue))) {
+        return @(Get-DockerPathCompletion -WordToComplete $TypedValue -Prefix $Prefix)
     }
 
     # Live values (contexts, networks, ...) replace the placeholder when the
@@ -900,11 +969,21 @@ function Complete-DockerCommand {
     $results = New-Object System.Collections.Generic.List[object]
     $pattern = [System.Management.Automation.WildcardPattern]::Escape($prefix) + '*'
 
+    # The word as typed: the engine hands a typographic opening quote over as ', and
+    # path candidates keep the quote the user typed.
+    $typedWord = ''
+    foreach ($element in @($commandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $element.Extent.EndOffset) {
+            $typedWord = $element.Extent.Text.Substring(0, $cursorPosition - $element.Extent.StartOffset)
+        }
+    }
+
     # Attached form: --log-level=de
     if ($prefix -match '^(?<name>--?[A-Za-z0-9][A-Za-z0-9-]*)=(?<value>.*)$') {
         $option = Find-DockerOption -Catalog $context.Catalog -Name $Matches.name
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $Matches.value -Prefix "$($Matches.name)=" -Context $context -Arguments @(@($context.Tokens) + @($Matches.name)))
+            $typedValue = $typedWord.Substring($typedWord.IndexOf('=') + 1)
+            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $Matches.value -Prefix "$($Matches.name)=" -Context $context -Arguments @(@($context.Tokens) + @($Matches.name)) -TypedValue $typedValue)
         }
 
         return @()
@@ -926,7 +1005,7 @@ function Complete-DockerCommand {
     if ($context.Previous.StartsWith('-') -and -not $context.Previous.Contains('=')) {
         $option = Find-DockerOption -Catalog $context.Catalog -Name $context.Previous
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $prefix -Prefix '' -Context $context -Arguments @($context.Tokens))
+            return @(Get-DockerOptionValueCompletion -Option $option -WordToComplete $prefix -Prefix '' -Context $context -Arguments @($context.Tokens) -TypedValue $typedWord)
         }
     }
 

@@ -302,7 +302,7 @@
         @{
             Path    = 'docker_completer/docker_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7A9F459B8E29030E3F5E47984B74426F8A6B2010FBDB7AEF0988B4B8566AB7DD'
+            Hash    = 'SHA256:1C63A449E4104BECC114BB2C8FB3098301C9C6CE7F98D2D52B5C609ABC2DBB91'
             Targets = @(
                 @{ CommandName = 'docker'; Native = $true }
                 @{ CommandName = 'docker.exe'; Native = $true }
