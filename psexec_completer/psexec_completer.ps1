@@ -79,11 +79,39 @@ function Split-PsExecPath {
         return [pscustomobject]@{ Parent = $Path; Leaf = '' }
     }
 
+    # A drive-relative 'C:name' lives in that drive's current folder.
+    if ($Path -match '^([A-Za-z]:)([^\\/]*)$') {
+        return [pscustomobject]@{ Parent = $Matches[1]; Leaf = $Matches[2] }
+    }
+
     $leaf = Split-Path -Path $Path -Leaf
     $parent = Split-Path -Path $Path -Parent
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
 
     [pscustomobject]@{ Parent = $parent; Leaf = $leaf }
+}
+
+# The completed path keeps the folder text exactly as typed ('.\', '../', 'C:');
+# a bare '.' or '..' gains a separator. A whole-word name with no folder that
+# starts with a dash gets '.\', as PowerShell's own file completion does: a
+# word starting with a dash is read as a parameter ('@-name' is not one).
+function Get-PsExecCompletionPath {
+    param([string]$Typed, [string]$Leaf, [System.IO.FileSystemInfo]$Item, [switch]$WholeWord)
+
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $prefix = if ($Typed -match '^(.*[\\/]|[A-Za-z]:)') {
+        $Matches[1]
+    } elseif ($Typed -and -not $Leaf) {
+        $Typed + $sep
+    } elseif ($WholeWord -and $Item.Name -match '^[-\u2013-\u2015]') {
+        '.' + $sep
+    } else {
+        ''
+    }
+
+    $completionPath = $prefix + $Item.Name
+    if ($Item.PSIsContainer) { $completionPath += $sep }
+    $completionPath
 }
 
 function New-PsExecCompletionResult {
@@ -125,7 +153,7 @@ function Remove-PsExecOuterQuotes {
 function ConvertTo-PsExecQuotedValue {
     param([string]$Value, [string]$Quote = '')
     if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
-    if (-not $Quote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+    if (-not $Quote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') { return $Value }
     # Keep the quote the user typed (single by default). Inside single quotes
     # every single-quote character is doubled; inside double quotes ` " $ and
     # the typographic double quotes take a backtick.
@@ -213,17 +241,7 @@ function Get-PsExecAtFileCompletions {
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {
-        $completionPath = if ($pathPortion -and -not [System.IO.Path]::IsPathRooted($pathPortion) -and $parent -ne '.') {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.') {
-            $item.Name
-        } else {
-            $item.FullName
-        }
-
-        if ($item.PSIsContainer -and -not $completionPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionPath += [System.IO.Path]::DirectorySeparatorChar
-        }
+        $completionPath = Get-PsExecCompletionPath -Typed $pathPortion -Leaf $leaf -Item $item
 
         # A stranded '@' stays in the line, and only '@(' keeps it valid: it
         # passes the quoted '@path' to psexec as one argument.
@@ -271,18 +289,7 @@ function Get-PsExecExecutableCompletions {
         $leaf = $parts.Leaf
         $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
         foreach ($item in @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)) {
-            $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
-                Join-Path -Path $parent -ChildPath $item.Name
-            } elseif ($parent -eq '.') {
-                $item.Name
-            } else {
-                $item.FullName
-            }
-
-            if ($item.PSIsContainer -and -not $completionPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-                $completionPath += [System.IO.Path]::DirectorySeparatorChar
-            }
-
+            $completionPath = Get-PsExecCompletionPath -Typed $trimmed -Leaf $leaf -Item $item -WholeWord
             [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value $completionPath -Quote $quote) -ResultType $(if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }) -ToolTip $item.FullName))
         }
     } else {

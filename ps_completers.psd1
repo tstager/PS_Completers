@@ -790,7 +790,7 @@
         @{
             Path    = 'psexec_completer/psexec_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:DF8B78B155FCFB7CAB73858BB1E40E1E6CDE98A1F26DDD1976B7BFE4B87545A6'
+            Hash    = 'SHA256:59829F9371FD819DDB2B490B01F2CB003EAACCAB265199C6561C8F38CB116B82'
             Targets = @(
                 @{ CommandName = 'psexec'; Native = $true }
                 @{ CommandName = 'psexec.exe'; Native = $true }
