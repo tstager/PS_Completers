@@ -132,8 +132,8 @@ function ConvertFrom-Sha1sumTypedWord {
 function ConvertTo-Sha1sumQuotedValue {
     # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
     # otherwise in the typed quote style (single by default). Whitespace and argument-mode
-    # metacharacters (including the typographic quotes) end or split a bare word, and a
-    # leading '@' or '#' would start a splat or a comment.
+    # metacharacters (including the typographic quotes) end or split a bare word, a leading
+    # '@' or '#' would start a splat or a comment, and a leading dash a parameter.
     param(
         [string]$Value,
         [string]$QuoteChar = ''
@@ -144,7 +144,7 @@ function ConvertTo-Sha1sumQuotedValue {
     }
 
     if (-not $QuoteChar) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#\-\u2013-\u2015]') {
             return $Value
         }
 
@@ -181,20 +181,12 @@ function Get-Sha1sumPathCompletions {
     $cleanInput = ConvertFrom-Sha1sumTypedWord -Value $InputPath
     $quoteChar = Get-Sha1sumTypedQuote -Value $InputPath
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # The typed directory part (separators and any .\ or ./ kept exactly as typed) is reused as
+    # the candidate prefix, so completion never rewrites or drops typed text.
+    $null = $cleanInput -match '(?s)^(?<prefix>.*[\\/:])?(?<leaf>[^\\/:]*)$'
+    $prefix = if ($Matches.ContainsKey('prefix')) { $Matches['prefix'] } else { '' }
+    $leaf = $Matches['leaf']
+    $parent = if ($prefix) { $prefix } else { '.' }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
@@ -204,12 +196,12 @@ function Get-Sha1sumPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $prefix + $item.Name
+
+        # A bare relative name starting with a dash would parse as a parameter; PowerShell's own
+        # file completion prefixes the current directory instead.
+        if (-not $prefix -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {

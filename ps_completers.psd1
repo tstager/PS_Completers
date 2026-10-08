@@ -1125,7 +1125,7 @@
         @{
             Path    = 'sha1sum_completer/sha1sum_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E3E071CD7C631268DACC7E294F158EFF035989FC71CE42F7D046DC5230B974FB'
+            Hash    = 'SHA256:871930E3356E60083100E147ACFED6937ADCFE7E155EC6595172FDFE44D37DB0'
             Targets = @(
                 @{ CommandName = 'sha1sum'; Native = $true }
                 @{ CommandName = 'sha1sum.exe'; Native = $true }
