@@ -665,7 +665,7 @@
         @{
             Path    = 'ollama_completer/ollama_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:C8CB0217771ABBF790F8468F5D11C334F946D1DA209AC1EF158BA05628F522B0'
+            Hash    = 'SHA256:FAE7445705840A3FCBB8EA3E52F1D34DF9DAC8D9B9EFF317943D7F10248A0AF7'
             Targets = @(
                 @{ CommandName = 'ollama'; Native = $true }
                 @{ CommandName = 'ollama.exe'; Native = $true }

@@ -543,75 +543,66 @@ function Resolve-OllamaIntegrationAlias {
 }
 
 function Get-OllamaQuoteCharacter {
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param([string]$InputText)
 
-    if ([string]::IsNullOrEmpty($InputText)) {
-        return $null
-    }
-
-    if ($InputText.StartsWith("'", [System.StringComparison]::Ordinal)) {
-        return "'"
-    }
-
-    if ($InputText.StartsWith('"', [System.StringComparison]::Ordinal)) {
-        return '"'
+    if ($InputText -match '^[''"\u2018-\u201E]') {
+        return $InputText.Substring(0, 1)
     }
 
     $null
 }
 
 function Remove-OllamaOuterQuotes {
+    # A word opened with a quote is read by the PowerShell tokenizer, which drops the quotes and
+    # undoes that quote style's escapes (doubled single quotes, backticks).
+    # Returns $null when the quote closes mid-word ('it's): PowerShell then completes only the
+    # text after the quote, so the word has no single value to complete.
     param([string]$InputText)
 
     if ([string]::IsNullOrEmpty($InputText)) {
         return ''
     }
 
-    $quoteCharacter = Get-OllamaQuoteCharacter -InputText $InputText
-    if ($null -eq $quoteCharacter) {
+    if ($null -eq (Get-OllamaQuoteCharacter -InputText $InputText)) {
         return $InputText
     }
 
-    $unquoted = $InputText.Substring(1)
-    if ($unquoted.EndsWith($quoteCharacter, [System.StringComparison]::Ordinal)) {
-        $unquoted = $unquoted.Substring(0, $unquoted.Length - 1)
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($InputText, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0].Extent.EndOffset -lt $InputText.Length) {
+        return $null
     }
 
-    if ($quoteCharacter -eq "'") {
-        return $unquoted.Replace("''", "'")
-    }
-
-    $unquoted.Replace('`"', '"')
+    $tokens[0].Value
 }
 
 function ConvertTo-OllamaQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default).
     param(
         [string]$Value,
         [string]$QuoteCharacter
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    $effectiveQuote = $QuoteCharacter
-    if ([string]::IsNullOrEmpty($effectiveQuote)) {
-        $effectiveQuote = if ($Value -match '\s') { '"' } else { '' }
+    if ([string]::IsNullOrEmpty($QuoteCharacter)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if ([string]::IsNullOrEmpty($effectiveQuote)) {
-        return $Value
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    if (($effectiveQuote -eq "'") -and $Value.Contains("'")) {
-        $effectiveQuote = '"'
-    }
-
-    if ($effectiveQuote -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('$', '`$').Replace('"', '`"') + '"'
-    }
-
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-OllamaPathCompletions {
@@ -623,11 +614,33 @@ function Get-OllamaPathCompletions {
 
     $quoteCharacter = Get-OllamaQuoteCharacter -InputText $InputText
     $cleanInput = Remove-OllamaOuterQuotes -InputText $InputText
+    if ($null -eq $cleanInput) {
+        return @()
+    }
+
+    # Candidates keep the typed directory text exactly (./, ..\, sub/); CompleteFilename rewrites its separators.
+    $typedDirectory = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]@('\', '/')) + 1)
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput)) {
-        # CompleteFilename quotes paths with spaces itself; re-quote from the bare path in the user's quote style.
-        $completionText = ConvertTo-OllamaQuotedValue -Value (Remove-OllamaOuterQuotes -InputText $item.CompletionText) -QuoteCharacter $quoteCharacter
+        # CompleteFilename quotes for PowerShell and wildcard-escapes the path, so unwrap it with the
+        # parser and unescape it before quoting the plain path once in the user's quote style.
+        $path = $item.CompletionText
+        if ($null -ne (Get-OllamaQuoteCharacter -InputText $path)) {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($typedDirectory -and $path.Length -gt $typedDirectory.Length -and
+            $path.Substring(0, $typedDirectory.Length).Replace('/', '\') -eq $typedDirectory.Replace('/', '\')) {
+            $path = $typedDirectory + $path.Substring($typedDirectory.Length)
+        }
+
+        $completionText = ConvertTo-OllamaQuotedValue -Value $path -QuoteCharacter $quoteCharacter
         if (-not [string]::IsNullOrEmpty($InlinePrefix)) {
             $completionText = $InlinePrefix + $completionText
         }
@@ -757,6 +770,9 @@ function Get-OllamaModelCompletion {
 
     $quoteCharacter = Get-OllamaQuoteCharacter -InputText $CurrentWord
     $cleanWord = Remove-OllamaOuterQuotes -InputText $CurrentWord
+    if ($null -eq $cleanWord) {
+        return @()
+    }
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($name in @(Get-OllamaLocalModelName)) {
@@ -815,8 +831,9 @@ function Get-OllamaTokenState {
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
     $hasTrailingSpace = $prefix -match '\s$'
-    # A quote still being typed has no partner yet, so both quoted forms accept a missing closing quote.
-    $allTokens = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
+    # A word runs through quoted parts (ASCII or typographic, escapes included), so 'a b' and --file='a b' stay
+    # whole. A quote still being typed has no partner yet, so both quoted forms accept a missing closing quote.
+    $allTokens = @([regex]::Matches($prefix, '(?:["\u201C-\u201E](?:[^"`\u201C-\u201E]|`.)*["\u201C-\u201E]?|[''\u2018-\u201B](?:[^''\u2018-\u201B]|[''\u2018-\u201B]{2})*[''\u2018-\u201B]?|[^\s''"\u2018-\u201E])+') | ForEach-Object { $_.Value })
 
     if ($hasTrailingSpace) {
         return [pscustomobject]@{
