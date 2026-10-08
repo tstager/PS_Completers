@@ -572,6 +572,46 @@ function New-DismCompletionResult {
     [System.Management.Automation.CompletionResult]::new($CompletionText, $ListItemText, $ResultType, $ToolTip)
 }
 
+function ConvertFrom-DismTypedWord {
+    # The value of a typed word and the quote it opened with ('' when bare). A word opened with a quote (ASCII or
+    # typographic) is read by the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return [pscustomobject]@{ Value = $Value; Quote = '' }
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    [pscustomobject]@{ Value = [string]$tokens[0].Value; Quote = $Value.Substring(0, 1) }
+}
+
+function ConvertTo-DismQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed, otherwise in the quote the
+    # user typed (single by default). PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E
+    # as double quotes.
+    param([string]$Value, [string]$QuoteChar = '')
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function Get-DismPathCompletions {
     param(
         [string]$InputPath,
@@ -585,17 +625,18 @@ function Get-DismPathCompletions {
     $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
     if ($separatorIndex -ge 0) {
         $parentText = $cleanInput.Substring(0, $separatorIndex + 1)
-        $leaf = $cleanInput.Substring($separatorIndex + 1)
+    } elseif ($cleanInput -match '^[A-Za-z]:') {
+        $parentText = $cleanInput.Substring(0, 2)
     } else {
         $parentText = ''
-        $leaf = $cleanInput
     }
+    $leaf = $cleanInput.Substring($parentText.Length)
 
     $parent = if ([string]::IsNullOrEmpty($parentText)) { '.' } else { $parentText }
     $pattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
     $extensions = @($AllowedExtensions | ForEach-Object { $_.ToLowerInvariant() })
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like $pattern } | Sort-Object -Property Name)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $pattern } | Sort-Object -Property Name)
     foreach ($item in $items) {
         if (-not $item.PSIsContainer) {
             if ($Kind -eq 'Directory') { continue }
@@ -617,18 +658,29 @@ function Get-DismOptionValueCompletion {
         [string]$OptionPrefix,
         [string]$TypedValue,
         [object]$Spec,
-        [string]$QuoteStyle
+        [string]$TokenQuote
     )
 
-    $valueQuoted = $TypedValue.StartsWith('"')
-    $cleanValue = $TypedValue.Trim('"')
-    if ($valueQuoted -and $QuoteStyle -eq 'None') { $QuoteStyle = 'Value' }
+    # A quote typed before the option ('/ImageFile:...) wraps the whole word and one typed after the colon
+    # (/ImageFile:'...) wraps only the value; with neither, a value that needs quoting quotes the whole word.
+    $valueQuote = ''
+    $cleanValue = $TypedValue
+    if (-not $TokenQuote) {
+        $valueWord = ConvertFrom-DismTypedWord -Value $TypedValue
+        $valueQuote = $valueWord.Quote
+        $cleanValue = $valueWord.Value
+    }
+    $formatValue = {
+        param([string]$Value)
+        if ($valueQuote) { $OptionPrefix + (ConvertTo-DismQuotedValue -Value $Value -QuoteChar $valueQuote) }
+        else { ConvertTo-DismQuotedValue -Value ($OptionPrefix + $Value) -QuoteChar $TokenQuote }
+    }
 
     switch ($Spec.Kind) {
         'Enum' {
             foreach ($value in @($Spec.Values)) {
                 if ($value.StartsWith($cleanValue, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    New-DismCompletionResult -CompletionText ($OptionPrefix + $value) -ResultType 'ParameterValue' -ToolTip $Spec.Description
+                    New-DismCompletionResult -CompletionText (& $formatValue $value) -ListItemText ($OptionPrefix + $value) -ResultType 'ParameterValue' -ToolTip $Spec.Description
                 }
             }
             return
@@ -644,15 +696,8 @@ function Get-DismOptionValueCompletion {
             }
 
             foreach ($path in $paths) {
-                $style = $QuoteStyle
-                if ($style -eq 'None' -and $path.Text -match '\s') { $style = 'Token' }
-                $text = switch ($style) {
-                    'Token' { '"' + $OptionPrefix + $path.Text + '"' }
-                    'Value' { $OptionPrefix + '"' + $path.Text + '"' }
-                    default { $OptionPrefix + $path.Text }
-                }
                 $resultType = if ($path.IsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
-                New-DismCompletionResult -CompletionText $text -ListItemText ($OptionPrefix + $path.Text) -ResultType $resultType -ToolTip $path.FullName
+                New-DismCompletionResult -CompletionText (& $formatValue $path.Text) -ListItemText ($OptionPrefix + $path.Text) -ResultType $resultType -ToolTip $path.FullName
             }
             return
         }
@@ -723,12 +768,8 @@ function Complete-Dism {
     }
     if ([string]::IsNullOrEmpty($currentWord) -and -not [string]::IsNullOrEmpty($WordToComplete)) { $currentWord = $WordToComplete }
 
-    $quoteStyle = 'None'
-    $cleanWord = $currentWord
-    if ($cleanWord.StartsWith('"')) {
-        $quoteStyle = 'Token'
-        $cleanWord = $cleanWord.Trim('"')
-    }
+    $typedWord = ConvertFrom-DismTypedWord -Value $currentWord
+    $cleanWord = $typedWord.Value
 
     $activeCommand = Get-DismActiveCommand -Tokens @($tokensBefore.ToArray())
     $online = [bool](@($tokensBefore.ToArray()) | Where-Object { (Get-DismOptionKey -Token $_) -eq '/online' })
@@ -741,7 +782,7 @@ function Complete-Dism {
         $typedValue = $matches[2]
         $spec = Get-DismOptionSpec -Key $optionPrefix.ToLowerInvariant() -ActiveCommand $activeCommand
         if ($spec) {
-            return @(Get-DismOptionValueCompletion -OptionPrefix $optionPrefix -TypedValue $typedValue -Spec $spec -QuoteStyle $quoteStyle)
+            return @(Get-DismOptionValueCompletion -OptionPrefix $optionPrefix -TypedValue $typedValue -Spec $spec -TokenQuote $typedWord.Quote)
         }
 
         return @()
@@ -753,7 +794,7 @@ function Complete-Dism {
 
     if ($cleanWord -like '*\*' -or $cleanWord -like '[A-Za-z]:*') {
         return @(Get-DismPathCompletions -InputPath $cleanWord -Kind 'File' -AllowedExtensions @() | ForEach-Object {
-            New-DismCompletionResult -CompletionText $_.Text -ResultType $(if ($_.IsContainer) { 'ProviderContainer' } else { 'ProviderItem' }) -ToolTip $_.FullName
+            New-DismCompletionResult -CompletionText (ConvertTo-DismQuotedValue -Value $_.Text -QuoteChar $typedWord.Quote) -ListItemText $_.Text -ResultType $(if ($_.IsContainer) { 'ProviderContainer' } else { 'ProviderItem' }) -ToolTip $_.FullName
         })
     }
 

@@ -45,7 +45,7 @@ Tokens that end before the cursor form the context and the element under the cur
     - `/WimFile:` -> `.wim`; under `/Add-ProvisioningPackage` and `/Get-ProvisioningPackageInfo`, `/PackagePath:` -> `.ppkg` and `/CatalogPath:` -> `.cat`
     - `/AppPath:` -> `.msi`, `/AppPatchPath:` and `/PatchLocation:` -> `.msp`
   - offers a placeholder such as `/FeatureName:<feature-name>` for free-text values
-- Path values keep exactly the prefix that was typed (`.\`, `C:\` and a trailing separator list that directory's children) and are quoted as a whole token when they contain spaces; a token that was already quoted keeps its quote style.
+- Path values keep exactly the prefix that was typed (`.\`, `C:\` and a trailing separator list that directory's children) and are quoted as a whole token (single quotes) when they contain spaces or PowerShell metacharacters; a quote typed before the option or after its colon is kept and the value is escaped for that quote style.
 - Every result carries the documented description as its tooltip.
 
 ## Dependencies or external command expectations
