@@ -390,7 +390,7 @@
         @{
             Path    = 'fmt_completer/fmt_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:CD4E34B896D04C3458AD81E87D2033A8AB84FFF9395D70BE21A73CD03EE83A32'
+            Hash    = 'SHA256:0E0993BAAFDA1DBBCDAF56FCB9B1023667497512E124500EAACF157B68B9CC9F'
             Targets = @(
                 @{ CommandName = 'fmt'; Native = $true }
                 @{ CommandName = 'fmt.exe'; Native = $true }
