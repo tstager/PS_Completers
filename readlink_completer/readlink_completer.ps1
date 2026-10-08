@@ -137,7 +137,7 @@ function ConvertTo-ReadlinkQuotedValue {
     }
 
     if (-not $QuoteChar) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
             return $Value
         }
 
@@ -174,20 +174,12 @@ function Get-ReadlinkPathCompletions {
     $cleanInput = ConvertFrom-ReadlinkTypedWord -Value $InputPath
     $quoteChar = Get-ReadlinkTypedQuote -Value $InputPath
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # The typed directory part is kept verbatim (a .\ or ./ prefix, the separator style)
+    # so a candidate never deletes typed text; only the leaf is completed.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/', ':'))
+    $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
@@ -197,16 +189,16 @@ function Get-ReadlinkPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+
+        # A bare word starting with a dash parses as a parameter; PowerShell's own file
+        # completion prefixes the current directory in that case.
+        if ($pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer -and $pathText -notmatch '[\\/]$') {
+            $pathText += if ($directoryText -match '/$') { '/' } else { [System.IO.Path]::DirectorySeparatorChar }
         }
 
         $quotedPath = ConvertTo-ReadlinkQuotedValue -Value $pathText -QuoteChar $quoteChar
