@@ -953,7 +953,7 @@
         @{
             Path    = 'readlink_completer/readlink_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:1FC113A59368772CC716F464410448963D3D964A62DA3132EE8996E0456B3A2D'
+            Hash    = 'SHA256:6F165C38144688D87EAAB0629A435232EB480D6BA48E1089C883B02D28FD548D'
             Targets = @(
                 @{ CommandName = 'readlink'; Native = $true }
                 @{ CommandName = 'readlink.exe'; Native = $true }

@@ -12,7 +12,7 @@ function Get-ReadlinkCompletionOptions {
     $fallbackOptions = @('-f', '--canonicalize', '-e', '--canonicalize-existing', '-m', '--canonicalize-missing', '-n', '--no-newline', '-q', '--quiet', '-s', '--silent', '-v', '--verbose', '-z', '--zero', '-h', '--help', '-V', '--version')
     $commandCandidates = @('readlink.exe', 'readlink')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -85,64 +85,94 @@ function New-ReadlinkCompletionResult {
     )
 }
 
-function Remove-ReadlinkOuterQuotes {
+function Get-ReadlinkTypedQuote {
+    # The quote style the user opened the word with ('' when bare). PowerShell reads the
+    # typographic quotes U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
+    }
+
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-ReadlinkTypedWord {
+    # The value of a typed word without its quotes and escapes, read by the parser in
+    # argument mode so doubled quotes and backticks resolve exactly as PowerShell will.
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-ReadlinkQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput('readlink ' + $Value, [ref]$null, [ref]$null)
+    $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    if ($null -ne $command -and $command.CommandElements.Count -eq 2) {
+        $element = $command.CommandElements[1]
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            $element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+            return $element.Value
+        }
     }
 
     $Value
 }
 
-function Get-ReadlinkCurrentToken {
+function ConvertTo-ReadlinkQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). Whitespace and argument-mode
+    # metacharacters, the typographic quotes among them, end, split or rewrite a bare word.
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [string]$Value,
+        [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    if ($QuoteChar -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
-    $Fallback
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
+function Get-ReadlinkCurrentToken {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The parser keeps an unterminated quote as one element running to the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
+    }
+
+    ''
 }
 
 function Get-ReadlinkPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-ReadlinkOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-ReadlinkTypedWord -Value $InputPath
+    $quoteChar = Get-ReadlinkTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -163,7 +193,7 @@ function Get-ReadlinkPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -179,7 +209,7 @@ function Get-ReadlinkPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-ReadlinkQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-ReadlinkQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-ReadlinkCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -206,11 +236,11 @@ function Complete-Readlink {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-ReadlinkCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    if ([string]::IsNullOrEmpty($wordToComplete)) {
+        return @()
     }
+
+    $currentWord = Get-ReadlinkCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ([string]::IsNullOrEmpty($currentWord)) {
         return @()

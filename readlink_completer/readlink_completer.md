@@ -66,8 +66,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option names come from the installed tool's `--help` output, parsed once per session and cached in script scope. A static fallback list is used when the tool is not installed. The description text of each help line becomes the completion tooltip.
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped. Hidden and system entries are included, so dot-directories such as `.git` and the Windows compatibility junctions readlink is meant to resolve (for example `C:\Users\<name>\Cookies`) are offered alongside ordinary entries.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the command element whose extent contains the cursor, taken from the PowerShell parser rather than a whitespace split, so completion works when the command is not the first statement on the line. An unterminated quote (`readlink "C:\Users\<name>\My Doc`) is one element running to the cursor, so the whole typed path is completed rather than its last space-separated fragment.
+- The typed word is read through the PowerShell parser, so doubled quotes and backtick escapes in it resolve to the real name before the directory is listed (`'apos''` finds `apos's`).
+- Path completions keep the quote style the user typed, with the typographic quotes counted as PowerShell counts them (U+2018-U+201B single, U+201C-U+201E double). A single-quoted path doubles every single-quote character, typographic ones included; a double-quoted path backtick-escapes `` ` ``, `"`, `$` and U+201C-U+201E. An unquoted path stays bare unless it contains whitespace, a typographic quote or any of `` { } ( ) ; , | & < > ' " ` $ @ # ``, in which case it is single-quoted (`'semi;x\'`, `` 'tick`x\' ``, `'C:\$Recycle.Bin\'`).
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input. The cache probe, the tool lookup and the directory listing all use `-ErrorAction Ignore`, so a cold load, a missing tool or an unreadable directory (such as the `My Documents` junction) adds nothing to `$Error`.
 
 ## Representative validation scenarios
 
