@@ -31,13 +31,27 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
     if ($expectedOption) {
         switch ($expectedOption.ValueKind) {
             'Path' {
-                foreach ($path in (Get-NetshFilePathCompletions -InputPath $currentWord)) {
-                    [System.Management.Automation.CompletionResult]::new($path, $path, 'ProviderItem', $path)
+                $cursorWord = Get-NetshCursorWord -CommandAst $commandAst -CursorPosition $cursorPosition
+                if ($null -ne $cursorWord.Segment) {
+                    # Past an unquoted comma no path fits PowerShell's span as one argument.
+                    # The typed segment is echoed so the filename fallback adds none either;
+                    # an empty segment cannot be (PowerShell rejects an empty completion text).
+                    if ($cursorWord.Segment) {
+                        [System.Management.Automation.CompletionResult]::new($cursorWord.Segment, $cursorWord.Segment, 'ParameterValue', "An unquoted comma splits the path into an array; quote it: 'C:\a,b.txt'")
+                    }
+                    return
+                }
+
+                $word = ConvertFrom-NetshTypedWord -Text $cursorWord.Text
+                foreach ($item in (Get-NetshFilePathCompletions -Value $word.Value)) {
+                    $completionText = ConvertTo-NetshArgumentText -Value $item.Path -Quote $word.Quote
+                    [System.Management.Automation.CompletionResult]::new($completionText, $item.ListItemText, $item.ResultType, $item.ToolTip)
                 }
                 return
             }
             'Context' {
-                foreach ($item in (Get-NetshContextValueCompletions -WordToComplete $currentWord)) {
+                $word = ConvertFrom-NetshTypedWord -Text (Get-NetshCursorWord -CommandAst $commandAst -CursorPosition $cursorPosition).Text
+                foreach ($item in (Get-NetshContextValueCompletions -Word $word)) {
                     New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
                 }
                 return
@@ -186,7 +200,7 @@ Key helpers:
 
 ### Command-line context detection
 The registered completer:
-- reconstructs the current token with `Get-NetshCurrentToken`
+- reconstructs the current token with `Get-NetshCurrentToken`; option values (`-a`, `-f`, `-c`) and attached tag values instead take the parser's word under the cursor (`Get-NetshCursorWord`) and decode it with `ConvertFrom-NetshTypedWord`, which keeps the opening quote (ASCII or typographic) and resolves doubled quotes and backtick escapes through the tokenizer
 - finds prior tokens with `Get-NetshTokensBeforeCurrent`, which keeps only the command elements whose extent ends before the cursor, so mid-token, end-of-token and trailing-space cursors behave the same and a command after another statement on the line still resolves
 - offers the global options (`-a`, `-c`, `-r`, `-u`, `-p`, `-f`, `/?`, `-?`) for a `-` or `/` prefixed word or before any context is typed; `-r` and `-u` complete a `<RemoteMachine>` (plus the local machine name) or `<DomainName\UserName>` placeholder rather than the command tree
 - separates root global-option state from command tokens with `Get-NetshParsedState`
@@ -205,11 +219,11 @@ When the word under the cursor is an attached `tag=value`, `Get-NetshTagValueSou
 | `wlan ...` | `name=` | `netsh wlan show profiles` (names only) |
 | `trace ...` | `scenario=`, and `name=` under `show scenario` | registry `HKLM\SYSTEM\CurrentControlSet\Control\NetTrace\Scenarios` (the keys `netsh trace show scenarios` lists) |
 | `advfirewall firewall ...` | `service=` | `ServiceController.GetServices()` service names, alongside the help's `any` |
-| `advfirewall firewall ...` | `program=` | file paths via `CompletionCompleters.CompleteFilename` |
-| `trace ...` | `traceFile=` | file paths via `CompletionCompleters.CompleteFilename` |
+| `advfirewall firewall ...` | `program=` | file paths via `Get-NetshFilePathCompletions` |
+| `trace ...` | `traceFile=` | file paths via `Get-NetshFilePathCompletions` |
 
 - The two `netsh` listings run through the same bounded spawn as the help pages (`Invoke-NetshProcess`: stdin closed, asynchronous reads, 5 s timeout, ANSI strip). The listings are cached for 60 s, including an empty answer when `netsh` or the WLAN service is missing.
-- Values keep the typed tag casing and the typed quote character. With no quote typed, a value with whitespace or an argument-mode metacharacter is single-quoted: `name='Ethernet 2'`, `name='vEthernet (Default Switch)'`.
+- Values keep the typed tag casing and the typed quote character (a typographic quote counts as its ASCII kind). With no quote typed, a value with whitespace, any of `{ } ( ) ; , | & < > ' " $ @ #`, a backtick, or a typographic quote is single-quoted: `name='Ethernet 2'`, `name='vEthernet (Default Switch)'`, `program='C:\Tools\it''s.exe'`. Inside single quotes every single-quote character (ASCII and U+2018-U+201B) is doubled; inside double quotes `` ` ``, `"`, `$` and U+201C-U+201E are backtick-escaped. PowerShell removes the quotes, so `program='C:\a b\x.exe'` reaches netsh as the one argument `program=C:\a b\x.exe`.
 - `scenario=` takes a comma list. In an unquoted list (`scenario=InternetClient,Net`) PowerShell replaces only the segment after the last comma. In a quoted list the earlier segments are kept as a prefix. Scenarios already in the list are not offered again.
 - Any other unquoted tag value keeps a comma as part of the value (`name=Ethernet,`). PowerShell still replaces only the text after the comma, so a live name matching the full value is offered as its remainder, an unmatched remainder is echoed back, and an empty remainder offers the command's tags. None of these cases fall through to the filesystem.
 - `program=` and `traceFile=` complete paths once part of the path is typed. An empty value (or a lone quote) returns the bare tag, so the current directory is not listed.
@@ -223,7 +237,11 @@ The completer includes special handling for root options:
 - `-p`: suggests `*` as the password-prompt form
 - `-r` and `-u`: recognized as value-taking options so command parsing stays aligned
 
-For `-c`, discovered context paths are cached from parsed help pages. Single-token contexts are suggested directly, while multi-token context paths are suggested in quotes.
+For `-a` and `-f`, `Get-NetshFilePathCompletions` lists paths with `CompletionCompleters.CompleteFilename`. Its results are quoted and wildcard-escaped for PowerShell `-Path` parameters (``'br`[1`].txt'``, ```'tick``x.txt'```), so each one is unwrapped by the parser and `WildcardPattern.Unescape` to the literal path, then quoted once by `ConvertTo-NetshArgumentText` in the style the user typed, with the same rules as tag values: `netsh -f C:\Scripts\amp<TAB>` gives `'C:\Scripts\amp&sand.txt'`, never a bare `&` that would end the statement or a bare `$x` that would expand.
+
+An unquoted comma makes the typed word an array, and PowerShell then replaces only the text after the last comma, so no path can be inserted there as one argument. The completer offers no path: `netsh -f comma,x<TAB>` echoes `x` back (with a tooltip to quote the path) so PowerShell's own filename completion does not add a second array item. After a trailing comma (`netsh -f comma,<TAB>`) nothing can be echoed (PowerShell rejects an empty completion text), so PowerShell's own filename completion runs. Quote the path instead: `netsh -f 'comma,<TAB>` gives `'.\comma,x.pdf'`.
+
+For `-c`, discovered context paths are cached from parsed help pages. Single-token contexts are suggested directly, while multi-token context paths are suggested in double quotes, or in the quote the user opened (`-c 'interface ip<TAB>` gives `'interface ipv4'`). A quoted `-c` value is read back with the same decoding, so `netsh -c 'interface ipv4' show <TAB>` resolves the context.
 
 ## Examples
 ```powershell
@@ -254,7 +272,7 @@ For `-c`, discovered context paths are cached from parsed help pages. Single-tok
 ## Dependencies or external command expectations
 - Requires `netsh.exe`
 - Relies on the local formatting of `netsh /?` and nested `netsh <path> /?` output
-- Uses `Get-ChildItem` for file path completion
+- Uses `CompletionCompleters.CompleteFilename` for file path completion
 
 Because the catalog is derived from built-in help, the exact command surface depends on the Windows version and installed networking features on the local machine.
 
@@ -262,4 +280,4 @@ Because the catalog is derived from built-in help, the exact command surface dep
 - The parser is intentionally format-driven, so changes in `netsh` help text could affect discovery.
 - The script focuses first on command and subcommand coverage. Value completion is intentionally lightweight and best for literal keywords and enum-like `tag=value` forms.
 - Free-form values such as IP addresses, SDDL strings and firewall rule names are not completed. Values in the positional form (`[name=]<string>` written without the tag) are not completed either.
-- Context discovery is lazy. A deep context path is only offered for `-c` after its parent help page has been loaded in the current session.
+- Context discovery is lazy. For `-c`, the context levels already typed in a quoted value are loaded first (`-c "interface ip<TAB>` loads `interface`), but a deeper path is not offered until its parent help page has been loaded in the current session.

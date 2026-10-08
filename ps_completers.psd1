@@ -600,7 +600,7 @@
         @{
             Path    = 'netsh_completer/netsh_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:225F19B305294E6604DFE0FFA2E278C6516145C003B8911813943D69F992E82C'
+            Hash    = 'SHA256:B882419F0C38E2023889F609D6AA46BF768AC548E8960A916ACC0D2833EE960D'
             Targets = @(
                 @{ CommandName = 'netsh'; Native = $true }
                 @{ CommandName = 'netsh.exe'; Native = $true }

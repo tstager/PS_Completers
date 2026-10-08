@@ -612,29 +612,6 @@ function Initialize-NetshCompletionCatalog {
     $script:NetshCompletionCatalog.Initialized = $true
 }
 
-function ConvertTo-NetshQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value + '"'
-    }
-
-    $Value
-}
-
-function ConvertTo-NetshQuotedPath {
-    param([string]$Path)
-
-    ConvertTo-NetshQuotedValue -Value $Path
-}
-
 function Get-NetshCurrentToken {
     param(
         [string]$Line,
@@ -686,7 +663,7 @@ function ConvertTo-NetshContextTokens {
     }
 
     @(
-        $Value.Trim('"') -split '\s+' |
+        (ConvertFrom-NetshTypedWord -Text $Value).Value -split '\s+' |
             Where-Object { $_ }
     )
 }
@@ -791,48 +768,56 @@ function Resolve-NetshCommandPath {
 }
 
 function Get-NetshFilePathCompletions {
-    param([string]$InputPath)
+    param([string]$Value)
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
-        $candidateParent = Split-Path -Path $cleanInput -Parent
-        if (-not [string]::IsNullOrWhiteSpace($candidateParent)) {
-            $parentPath = $candidateParent
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (br`[1`].txt, tick``x.txt). netsh takes literal paths, so each result is unwrapped
+    # by the parser, which undoes every doubled quote, typographic ones included, and
+    # unescaped; the caller quotes the plain path once in the style the user typed.
+    foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($Value)) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
         }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        [pscustomobject]@{
+            Path         = [System.Management.Automation.WildcardPattern]::Unescape($path)
+            ListItemText = $item.ListItemText
+            ToolTip      = $item.ToolTip
+            ResultType   = [string]$item.ResultType
+        }
     }
-
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-
-    @(
-        Get-ChildItem -Path $parentPath -Filter $filter -ErrorAction Ignore |
-            ForEach-Object { ConvertTo-NetshQuotedPath -Path $_.FullName }
-    )
 }
 
 function Get-NetshContextValueCompletions {
-    param([string]$WordToComplete)
+    param([psobject]$Word)
 
-    $alwaysQuote = $false
-    $prefix = $WordToComplete
-    if ($prefix.StartsWith('"')) {
-        $alwaysQuote = $true
+    $prefix = $Word.Value
+    $results = New-Object System.Collections.Generic.List[object]
+
+    # Context paths are discovered lazily, so load the levels already typed in a quoted
+    # path ("interface ip loads 'interface') before matching.
+    $typedTokens = @(-split $prefix)
+    if ($typedTokens.Count -gt 0 -and $prefix -notmatch '\s$') {
+        $typedTokens = @($typedTokens | Select-Object -SkipLast 1)
     }
 
-    $prefix = $prefix.Trim('"')
-    $results = New-Object System.Collections.Generic.List[object]
+    if ($typedTokens.Count -gt 0) {
+        $resolved = Resolve-NetshCommandPath -BasePathTokens @() -Tokens $typedTokens
+        Ensure-NetshPathLoaded -PathTokens $resolved.PathTokens
+    }
 
     foreach ($contextPath in $script:NetshCompletionCatalog.ContextPathsByKey.Values) {
         $contextPath = @($contextPath)
         $pathText = Get-NetshPathText -PathTokens $contextPath
         if ([string]::IsNullOrWhiteSpace($prefix) -or $pathText -like ([System.Management.Automation.WildcardPattern]::Escape($prefix) + '*')) {
-            $completionText = ConvertTo-NetshQuotedValue -Value $pathText -AlwaysQuote:$alwaysQuote
-            if ($contextPath.Count -gt 1) {
-                $completionText = ConvertTo-NetshQuotedValue -Value $pathText -AlwaysQuote:$true
-            }
+            # Multi-token context paths are double-quoted unless the user opened a quote.
+            $quote = if ($Word.Quote -or $contextPath.Count -eq 1) { $Word.Quote } else { '"' }
+            $completionText = ConvertTo-NetshArgumentText -Value $pathText -Quote $quote
 
             $results.Add([pscustomobject]@{
                     CompletionText = $completionText
@@ -917,44 +902,89 @@ function Get-NetshInlineTagValueSuggestions {
     @($results | Sort-Object -Property CompletionText -Unique)
 }
 
-function Get-NetshCursorTagValue {
+function Get-NetshCursorWord {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
     # The word comes from the parser, so an open quote ('name="Ethernet 2') stays one
-    # word. An unquoted comma list parses as an array and PowerShell replaces only the
-    # segment after the last comma (SegmentOnly).
+    # word; '' between words. An unquoted comma makes the word an array (a trailing one
+    # an error element), and PowerShell then replaces only Segment, the typed part of
+    # the item under the cursor; Segment is $null for any other word.
     $element = $CommandAst.CommandElements |
         Select-Object -Skip 1 |
         Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
         Select-Object -First 1
     if (-not $element) {
-        return $null
+        return [pscustomobject]@{ Text = ''; Segment = $null }
     }
 
     $text = $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
-    if ($text -notmatch '^(?<Tag>[A-Za-z][A-Za-z0-9-]*)=(?<Raw>(?<Quote>[''"]?)(?<Value>.*))$') {
+    $segment = $null
+    if ($element -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+        $item = $element.Elements |
+            Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+            Select-Object -First 1
+        $segment = if ($item) { $item.Extent.Text.Substring(0, $CursorPosition - $item.Extent.StartOffset) } else { '' }
+    } elseif ($element -is [System.Management.Automation.Language.ErrorExpressionAst] -and $text.EndsWith(',')) {
+        $segment = ''
+    }
+
+    [pscustomobject]@{
+        Text    = $text
+        Segment = $segment
+    }
+}
+
+function ConvertFrom-NetshTypedWord {
+    param([string]$Text)
+
+    # The quote the word opens with, normalized to ' or " (PowerShell also takes the
+    # typographic quotes), and the value the tokenizer reads from it: doubled quotes,
+    # backtick escapes and an open or closing quote are all resolved.
+    $quote = ''
+    if ($Text -match '^[''\u2018-\u201B]') {
+        $quote = "'"
+    } elseif ($Text -match '^["\u201C-\u201E]') {
+        $quote = '"'
+    }
+
+    $value = if ($quote) {
+        $tokens = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$null)
+        $tokens[0].Value
+    } else {
+        $Text -replace '`(.)', '$1'
+    }
+
+    [pscustomobject]@{
+        Quote = $quote
+        Value = $value
+    }
+}
+
+function Get-NetshCursorTagValue {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # An unquoted comma list parses as an array and PowerShell replaces only the
+    # segment after the last comma (SegmentOnly).
+    $text = (Get-NetshCursorWord -CommandAst $CommandAst -CursorPosition $CursorPosition).Text
+    if ($text -notmatch '^(?<Tag>[A-Za-z][A-Za-z0-9-]*)=(?<Raw>.*)$') {
         return $null
     }
 
-    $quote = $matches.Quote
-    $value = $matches.Value
-    if ($quote -and $value.EndsWith($quote)) {
-        $value = $value.Substring(0, $value.Length - 1)
-    }
-
-    if ($quote -eq "'") {
-        $value = $value.Replace("''", "'")
-    } elseif ($quote -eq '"') {
-        $value = $value -replace '`(.)', '$1'
-    }
-
+    $raw = $matches.Raw
+    $word = ConvertFrom-NetshTypedWord -Text $raw
+    $quote = $word.Quote
+    $value = $word.Value
     $cut = $value.LastIndexOf(',') + 1
     [pscustomobject]@{
         Tag         = $matches.Tag
-        RawValue    = $matches.Raw
+        RawValue    = $raw
         Quote       = $quote
         Value       = $value
         ListPrefix  = $value.Substring(0, $cut)
@@ -969,14 +999,16 @@ function ConvertTo-NetshArgumentText {
         [string]$Quote
     )
 
-    # Keep the user's quote; otherwise single-quote anything an argument-mode
-    # metacharacter or whitespace would split ('vEthernet (Default Switch)').
+    # Keep the user's quote; otherwise single-quote anything whitespace, an argument-mode
+    # metacharacter or a typographic quote would split or change ('vEthernet (Default
+    # Switch)', it's.txt, amp&sand.txt, dollar$x.txt). A leading @ or # would start a
+    # splat or a comment.
     if ($Quote -eq '"') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
 
-    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
     $Value
@@ -1140,11 +1172,12 @@ function Get-NetshTagValueSuggestion {
                 ResultType     = 'ParameterName'
             }
         } elseif (-not $TagValue.SegmentOnly) {
-            foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($TagValue.RawValue)) {
+            # tag='C:\a b\it''s.txt' reaches netsh as the one argument tag=C:\a b\it's.txt.
+            foreach ($item in (Get-NetshFilePathCompletions -Value $TagValue.Value)) {
                 [pscustomobject]@{
-                    CompletionText = $TagValue.Tag + '=' + $item.CompletionText
+                    CompletionText = $TagValue.Tag + '=' + (ConvertTo-NetshArgumentText -Value $item.Path -Quote $TagValue.Quote)
                     ToolTip        = $item.ToolTip
-                    ResultType     = [string]$item.ResultType
+                    ResultType     = $item.ResultType
                 }
             }
         }
@@ -1215,13 +1248,27 @@ Register-ArgumentCompleter -Native -CommandName 'netsh', 'netsh.exe' -ScriptBloc
     if ($expectedOption) {
         switch ($expectedOption.ValueKind) {
             'Path' {
-                foreach ($path in (Get-NetshFilePathCompletions -InputPath $currentWord)) {
-                    [System.Management.Automation.CompletionResult]::new($path, $path, 'ProviderItem', $path)
+                $cursorWord = Get-NetshCursorWord -CommandAst $commandAst -CursorPosition $cursorPosition
+                if ($null -ne $cursorWord.Segment) {
+                    # Past an unquoted comma no path fits PowerShell's span as one argument.
+                    # The typed segment is echoed so the filename fallback adds none either;
+                    # an empty segment cannot be (PowerShell rejects an empty completion text).
+                    if ($cursorWord.Segment) {
+                        [System.Management.Automation.CompletionResult]::new($cursorWord.Segment, $cursorWord.Segment, 'ParameterValue', "An unquoted comma splits the path into an array; quote it: 'C:\a,b.txt'")
+                    }
+                    return
+                }
+
+                $word = ConvertFrom-NetshTypedWord -Text $cursorWord.Text
+                foreach ($item in (Get-NetshFilePathCompletions -Value $word.Value)) {
+                    $completionText = ConvertTo-NetshArgumentText -Value $item.Path -Quote $word.Quote
+                    [System.Management.Automation.CompletionResult]::new($completionText, $item.ListItemText, $item.ResultType, $item.ToolTip)
                 }
                 return
             }
             'Context' {
-                foreach ($item in (Get-NetshContextValueCompletions -WordToComplete $currentWord)) {
+                $word = ConvertFrom-NetshTypedWord -Text (Get-NetshCursorWord -CommandAst $commandAst -CursorPosition $cursorPosition).Text
+                foreach ($item in (Get-NetshContextValueCompletions -Word $word)) {
                     New-NetshCompletionResult -CompletionText $item.CompletionText -ResultType $item.ResultType -ToolTip $item.ToolTip
                 }
                 return
