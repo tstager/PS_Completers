@@ -384,6 +384,16 @@ function Get-CursorAgentPathCompletions {
         return @()
     }
 
+    # A typed directory part ('.\', '../', 'C:\dir/') is kept verbatim, with
+    # the separator the user typed; '~' is expanded as before.
+    $typedDirectory = ''
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $separatorIndex = $WordToComplete.LastIndexOfAny([char[]]'\/')
+    if ($separatorIndex -ge 0 -and -not $WordToComplete.StartsWith('~')) {
+        $typedDirectory = $WordToComplete.Substring(0, $separatorIndex + 1)
+        $separator = $WordToComplete[$separatorIndex]
+    }
+
     $items = @(Get-ChildItem -LiteralPath $basePath -Force -ErrorAction Ignore)
     $results = New-Object System.Collections.Generic.List[object]
 
@@ -394,15 +404,21 @@ function Get-CursorAgentPathCompletions {
 
         $displayText = $item.Name
         if ($item.PSIsContainer) {
-            $displayText = $displayText + [System.IO.Path]::DirectorySeparatorChar
+            $displayText = $displayText + $separator
         }
 
         $displayPath = $displayText
-        if ($prefix -match '[\\/]' -or $prefix.StartsWith('~') -or $prefix.StartsWith('.')) {
+        if ($typedDirectory) {
+            $displayPath = $typedDirectory + $displayText
+        } elseif ($WordToComplete.StartsWith('~')) {
             $displayPath = Join-Path -Path $basePath -ChildPath $item.Name
             if ($item.PSIsContainer) {
                 $displayPath = $displayPath + [System.IO.Path]::DirectorySeparatorChar
             }
+        } elseif (-not $CompletionPrefix -and $displayPath -match '^[-\u2013-\u2015]') {
+            # PowerShell reads a bare word starting with a dash as a parameter
+            # name; as PowerShell's own path completion does, lead with '.\'.
+            $displayPath = '.' + $separator + $displayPath
         }
 
         # A quoted directory drops its trailing separator, as PowerShell's own
