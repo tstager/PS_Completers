@@ -26,62 +26,66 @@ function New-PsSuspendCompletionResult {
     param(
         [string]$CompletionText,
         [string]$ResultType,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$ListItemText
     )
 
     if ([string]::IsNullOrWhiteSpace($ToolTip)) {
         $ToolTip = $CompletionText
     }
 
+    if ([string]::IsNullOrEmpty($ListItemText)) {
+        $ListItemText = $CompletionText
+    }
+
     [System.Management.Automation.CompletionResult]::new(
         $CompletionText,
-        $CompletionText,
+        $ListItemText,
         $ResultType,
         $ToolTip
     )
 }
 
-function Get-PsSuspendCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
+function ConvertFrom-PsSuspendTypedWord {
+    # Splits the word typed so far into its value and the opening quote the
+    # user typed ('' when bare), undoing that quote style's escapes.
+    param([string]$Text)
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    $quote = ''
+    if ($Text.StartsWith("'") -or $Text.StartsWith('"')) {
+        $quote = $Text.Substring(0, 1)
+        $Text = $Text.Substring(1)
+        if ($Text.EndsWith($quote)) {
+            $Text = $Text.Substring(0, $Text.Length - 1)
+        }
+
+        $Text = if ($quote -eq "'") { $Text.Replace("''", "'") } else { $Text -replace '`(.)', '$1' }
     }
 
-    if ($CursorPosition -gt $Line.Length) {
-        return ''
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    [pscustomobject]@{ Value = $Text; Quote = $quote }
 }
 
-function Remove-PsSuspendOuterQuotes {
-    param([string]$Value)
+function ConvertTo-PsSuspendArgument {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the typed quote style (single by default).
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
 
-    if ([string]::IsNullOrEmpty($Value)) {
-        return ''
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
-        return $Value.Substring(1, $Value.Length - 2)
+    if ($Quote -eq "'") {
+        return "'" + $Value.Replace("'", "''") + "'"
     }
 
-    $Value.TrimStart('"')
+    '"' + ($Value -replace '([`"$])', '`$1') + '"'
 }
 
 function Update-PsSuspendProcessCache {
@@ -149,13 +153,14 @@ function Get-PsSuspendProcessCompletions {
 
     Update-PsSuspendProcessCache
 
-    $typedValue = Remove-PsSuspendOuterQuotes -Value $CurrentWord
+    $typed = ConvertFrom-PsSuspendTypedWord -Text $CurrentWord
+    $typedValue = $typed.Value
     $results = $script:PsSuspendCompletionCatalog.ProcessEntries |
         Where-Object {
             [string]::IsNullOrWhiteSpace($typedValue) -or $_.CompletionText.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)
         } |
         ForEach-Object {
-            New-PsSuspendCompletionResult -CompletionText $_.CompletionText -ResultType $_.ResultType -ToolTip $_.ToolTip
+            New-PsSuspendCompletionResult -CompletionText (ConvertTo-PsSuspendArgument -Value $_.CompletionText -Quote $typed.Quote) -ListItemText $_.CompletionText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 
     if (@($results).Count -gt 0) {
@@ -272,27 +277,15 @@ function Complete-PsSuspend {
         [int]$cursorPosition
     )
 
-    $line = $commandAst.ToString()
-    $safeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
-    $linePrefix = $line.Substring(0, $safeCursor)
-    $commandTokens = @([regex]::Matches($linePrefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    $argumentTokens = @($commandTokens | Select-Object -Skip 1)
-
-    $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
-        Get-PsSuspendCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    } else {
-        $wordToComplete
-    }
-
-    $hasTrailingSpace = [string]::IsNullOrEmpty($currentWord) -and (($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length))
-    $tokensBeforeCurrent = if ($hasTrailingSpace) {
-        $argumentTokens
-    } elseif ($argumentTokens.Count -gt 1) {
-        @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
-    } else {
-        @()
-    }
-    $tokensBeforeCurrent = @($tokensBeforeCurrent)
+    # Read the words from the parser: an unterminated quote is one element
+    # (and one $wordToComplete), so a quoted multi-word name stays one word.
+    $currentWord = $wordToComplete
+    $tokensBeforeCurrent = @(
+        $commandAst.CommandElements |
+            Select-Object -Skip 1 |
+            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+            ForEach-Object { $_.Extent.Text }
+    )
 
     $state = Get-PsSuspendCommandState -TokensBeforeCurrent $tokensBeforeCurrent
 

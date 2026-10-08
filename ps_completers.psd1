@@ -898,7 +898,7 @@
         @{
             Path    = 'pssuspend_completer/pssuspend_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B8868D6933E31485885783C0D95ECFA317B83CAE624911326BB9CCEBDA1BC28F'
+            Hash    = 'SHA256:56E28F83EED1B242D5335949B55D6A4E31C7CE5D965F2DA2073AA2FD8483F290'
             Targets = @(
                 @{ CommandName = 'pssuspend'; Native = $true }
                 @{ CommandName = 'pssuspend.exe'; Native = $true }

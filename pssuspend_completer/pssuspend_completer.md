@@ -53,6 +53,8 @@ For local usage, the first positional process slot is completed from `Get-Proces
 - process names (alphabetical, offered first)
 - process IDs (numeric order, after the names)
 
+Names containing spaces or PowerShell metacharacters (`Docker Desktop`, `Wispr Flow`) are emitted quoted so they reach PsSuspend as one argument. A name you start with a quote (`pssuspend "Docker Des<TAB>` or `pssuspend 'Wispr F<TAB>`) is read as one word and completed in the quote style you typed; unquoted input gets single quotes when a name needs them.
+
 ## Key completion behaviors / supported values
 
 ### Root completion
