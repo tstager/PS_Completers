@@ -609,7 +609,7 @@
         @{
             Path    = 'nl_completer/nl_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:15F8478BE3E0251823B746470E7B5DBE81D3E83ABFC22B716EC9701D0E66BA52'
+            Hash    = 'SHA256:2A8533E1ECE0B37ACE9C0DBB877662617A0C1DA34C71C3C702CECC398E127810'
             Targets = @(
                 @{ CommandName = 'nl'; Native = $true }
                 @{ CommandName = 'nl.exe'; Native = $true }
