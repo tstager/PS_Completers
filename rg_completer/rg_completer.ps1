@@ -142,7 +142,7 @@ function Resolve-RgCommandName {
         return $catalog.CommandName
     }
 
-    $command = Get-Command -Name rg.exe, rg -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name rg.exe, rg -ErrorAction Ignore | Select-Object -First 1
     if ($command) {
         $catalog.CommandName = if ($command.Source) { $command.Source } else { $command.Name }
     }
@@ -165,6 +165,17 @@ function Invoke-RgCapture {
     }
 }
 
+function Get-RgQuoteChar {
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value) -or $Value[0] -notin [char[]]@(0x27, 0x2018, 0x2019, 0x201A, 0x201B, 0x22, 0x201C, 0x201D, 0x201E)) {
+        return ''
+    }
+
+    [string]$Value[0]
+}
+
 function Remove-RgOuterQuotes {
     param([string]$Value)
 
@@ -172,25 +183,55 @@ function Remove-RgOuterQuotes {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    # A quoted word is read the way PowerShell reads it, closing an open quote first, so typed
+    # escapes ('' `" `$) are undone; anything the parser cannot reduce to a constant is trimmed.
+    $quoteChar = Get-RgQuoteChar -Value $Value
+    if ($quoteChar) {
+        foreach ($candidate in @($Value, ($Value + $quoteChar))) {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($candidate, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                continue
+            }
+
+            $constant = $ast.Find({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $node.Extent.Text -eq $candidate
+                }, $true)
+            if ($constant) {
+                return $constant.Value
+            }
+        }
+    }
+
+    $Value.Trim([char[]]@(0x27, 0x2018, 0x2019, 0x201A, 0x201B, 0x22, 0x201C, 0x201D, 0x201E))
 }
 
 function ConvertTo-RgQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    # Keep the quote the user typed; an unquoted value that needs quoting gets single quotes.
+    if ($QuoteChar -in [string[]]@('"', [string][char]0x201C, [string][char]0x201D, [string][char]0x201E)) {
+        return $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace "(['\u2018-\u201B])", '$1$1') + $QuoteChar
 }
 
 function Test-RgPathLikeInput {
@@ -231,16 +272,23 @@ function Get-RgCurrentToken {
 
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
     $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
+
+    # The word is the PowerShell token that ends at the cursor, which is exactly the span PowerShell
+    # replaces: an open quote runs to the cursor ("C:\Program Fi, --opt="a b), while a closed quoted
+    # segment ends its token, so in "a b"c or ""x only the bare text after it is the word.
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($prefix, [ref]$tokens, [ref]$parseErrors)
+    $last = @($tokens | Where-Object { $_.Kind -ne [System.Management.Automation.Language.TokenKind]::EndOfInput }) | Select-Object -Last 1
+    if ($null -eq $last) {
+        return $Fallback
+    }
+
+    if ($last.Extent.EndOffset -lt $prefix.Length) {
         return ''
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    $last.Text
 }
 
 function Get-RgArgumentTokens {
@@ -512,8 +560,8 @@ function Get-RgPathCompletions {
         [switch]$DirectoriesOnly
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    $quoteChar = Get-RgQuoteChar -Value $InputPath
+    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { Remove-RgOuterQuotes -Value $InputPath }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -530,7 +578,7 @@ function Get-RgPathCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
@@ -550,7 +598,7 @@ function Get-RgPathCompletions {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-RgQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-RgQuotedValue -Value $completionText -QuoteChar $quoteChar
         $completionText = $Prefix + $completionText
 
         New-RgCompletionResult -CompletionText $completionText -ListItemText $item.Name -ResultType 'ParameterValue' -ToolTip $item.FullName

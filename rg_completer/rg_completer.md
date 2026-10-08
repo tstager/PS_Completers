@@ -122,6 +122,10 @@ The completer tracks ripgrep's main positional modes:
 
 Free-form slots such as regex patterns, globs, replacements, separators, and preprocessor commands intentionally return placeholders or the typed value instead of generic filesystem completions.
 
+### Quoted paths
+
+The word under the cursor is the PowerShell token that ends at the cursor, which is the span PowerShell replaces: an open quote runs to the cursor, so `rg foo "C:\Program Fi` completes the whole `C:\Program Fi` prefix rather than the fragment after the last space, and attached forms such as `--ignore-file="C:\Program Fi` work the same way. A closed quoted segment ends its token, so in `rg foo "bar baz"qux` only `qux` is completed and the quoted text before it is left alone. Typed escapes are undone before matching (`'it''s` looks for `it's`). Path completions keep the quote the user typed, including the typographic quotes PowerShell accepts: a single-quoted word gets every single-quote character doubled, a double-quoted word gets `` ` ``, `"`, `$` and the typographic double quotes backtick-escaped, and an unquoted path containing whitespace or a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " `` ` `` $ @ #`) gets single quotes.
+
 ## Usage examples
 
 ```powershell

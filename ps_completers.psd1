@@ -998,7 +998,7 @@
         @{
             Path    = 'rg_completer/rg_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:33CB690F05DAA6CBC9E3F37D97DF34E536D2A94B4FF7E96607BCE1870246447D'
+            Hash    = 'SHA256:B4C5295B11F1FEE6394EC8AF021F546AF04BC7B8BD9D22AD8A3802DAB701A064'
             Targets = @(
                 @{ CommandName = 'rg'; Native = $true }
                 @{ CommandName = 'rg.exe'; Native = $true }
