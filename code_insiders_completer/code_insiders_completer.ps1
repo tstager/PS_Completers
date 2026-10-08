@@ -338,7 +338,7 @@ function Resolve-CodeInsidersCommandName {
     $cache.CommandPath = $null
 
     foreach ($name in @('code-insiders.cmd', 'code-insiders')) {
-        $command = Get-Command -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        $command = Get-Command -Name $name -ErrorAction Ignore | Select-Object -First 1
         if ($command) {
             $cache.CommandPath = if ($command.Source) { $command.Source } else { $command.Name }
             break
@@ -373,21 +373,47 @@ function Remove-CodeInsidersOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-CodeInsidersQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-CodeInsidersTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + ($Value.Replace('`', '``').Replace('"', '`"')) + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-CodeInsidersQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Test-CodeInsidersPathLikeInput {
@@ -397,7 +423,7 @@ function Test-CodeInsidersPathLikeInput {
         return $false
     }
 
-    $cleanValue = Remove-CodeInsidersOuterQuotes -Value $Value
+    $cleanValue = ConvertFrom-CodeInsidersTypedWord -Value $Value
     $cleanValue -match '^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:|\\\\)'
 }
 
@@ -413,6 +439,24 @@ function Get-CodeInsidersTokenText {
     }
 
     $Element.Extent.Text
+}
+
+function Get-CodeInsidersCurrentToken {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The raw typed word, quotes included: $wordToComplete drops or re-closes typed quotes.
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
+    }
+
+    ''
 }
 
 function Get-CodeInsidersArgumentTokens {
@@ -554,12 +598,11 @@ function Get-CodeInsidersProfileResults {
 
 function Get-CodeInsidersCommandState {
     param(
-        [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
-    $currentToken = if ($CursorPosition -gt $CommandAst.Extent.EndOffset) { '' } else { $WordToComplete }
+    $currentToken = Get-CodeInsidersCurrentToken -CommandAst $CommandAst -CursorPosition $CursorPosition
     $tokens = Get-CodeInsidersArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition
 
     $pathTokens = New-Object System.Collections.Generic.List[string]
@@ -648,15 +691,18 @@ function Get-CodeInsidersPathCompletions {
         [switch]$FilesOnly
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    $cleanInput = ConvertFrom-CodeInsidersTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
+    # The directory part of a relative word is kept exactly as typed (.\, ./, ..\, sub/).
+    $typedDir = ''
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
         $leaf = ''
-    } elseif ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
-        $parent = $cleanInput
-        $leaf = ''
+    } elseif ($cleanInput -match '^(?<dir>.*[\\/])(?<leaf>[^\\/]*)$') {
+        $typedDir = $matches['dir']
+        $parent = $typedDir
+        $leaf = $matches['leaf']
     } else {
         $parent = Split-Path -Path $cleanInput -Parent
         if ([string]::IsNullOrWhiteSpace($parent)) {
@@ -665,31 +711,35 @@ function Get-CodeInsidersPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $filter = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $filter })
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     } elseif ($FilesOnly) {
         $items = @($items | Where-Object { -not $_.PSIsContainer })
     }
 
+    $separator = if ($typedDir.EndsWith('/') -and -not [System.IO.Path]::IsPathRooted($cleanInput)) { '/' } else { [string][System.IO.Path]::DirectorySeparatorChar }
+
     foreach ($item in $items) {
         $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
+            $typedDir + $item.Name
         } else {
             $item.FullName
         }
 
-        if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionText += [System.IO.Path]::DirectorySeparatorChar
+        # PowerShell parses a bare word starting with a dash as a parameter: lead it with .\ as
+        # PowerShell's own file completion does.
+        if (-not $Prefix -and $completionText -match '^[-\u2013-\u2015]') {
+            $completionText = '.' + $separator + $completionText
         }
 
-        $completionText = ConvertTo-CodeInsidersQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
-        $completionText = $Prefix + $completionText
+        if ($item.PSIsContainer -and -not $completionText.EndsWith($separator)) {
+            $completionText += $separator
+        }
+
+        # An attached --option= prefix goes inside the quotes so the whole word stays one argument.
+        $completionText = ConvertTo-CodeInsidersQuotedValue -Value ($Prefix + $completionText) -QuoteChar $quoteChar
 
         New-CodeInsidersCompletionResult -CompletionText $completionText -ToolTip $item.FullName -ListItemText $item.Name
     }
@@ -996,17 +1046,22 @@ function Write-CodeInsidersOperandResults {
 
 function Complete-CodeInsidersNative {
     param(
-        [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
-    $state = Get-CodeInsidersCommandState -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
+    $state = Get-CodeInsidersCommandState -CommandAst $CommandAst -CursorPosition $CursorPosition
 
-    if ($state.CurrentToken -match '^(?<option>--[A-Za-z0-9-]+)=(?<value>.*)$') {
-        $inlineOption = Find-CodeInsidersOptionSpec -PathKey $state.PathKey -Token $matches['option']
+    # A quote may open only the value (--file='a b) or the whole word ('--file=a b).
+    if ((ConvertFrom-CodeInsidersTypedWord -Value $state.CurrentToken) -match '^(?<option>--[A-Za-z0-9-]+)=(?<value>.*)$') {
+        $inlineOptionToken = $matches['option']
+        $inlineValue = $matches['value']
+        $inlineOption = Find-CodeInsidersOptionSpec -PathKey $state.PathKey -Token $inlineOptionToken
         if ($inlineOption -and $inlineOption.ValueKinds.Count -eq 1) {
-            return Get-CodeInsidersValueResults -ValueKind $inlineOption.ValueKinds[0] -CurrentValue $matches['value'] -State $state -Prefix ($matches['option'] + '=')
+            if ($state.CurrentToken -match '^[''"\u2018-\u201E]') {
+                $inlineValue = ConvertTo-CodeInsidersQuotedValue -Value $inlineValue -QuoteChar $state.CurrentToken.Substring(0, 1)
+            }
+            return Get-CodeInsidersValueResults -ValueKind $inlineOption.ValueKinds[0] -CurrentValue $inlineValue -State $state -Prefix ($inlineOptionToken + '=')
         }
     }
 
@@ -1041,5 +1096,5 @@ function Complete-CodeInsidersNative {
 Register-ArgumentCompleter -Native -CommandName @('code-insiders', 'code-insiders.cmd') -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    Complete-CodeInsidersNative -WordToComplete $wordToComplete -CommandAst $commandAst -CursorPosition $cursorPosition
+    Complete-CodeInsidersNative -CommandAst $commandAst -CursorPosition $cursorPosition
 }
