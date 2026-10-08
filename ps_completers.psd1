@@ -1451,7 +1451,7 @@
         @{
             Path    = 'wecutil_completer/wecutil_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:90C319AC0E29B142798B10B3BFDA4BF506FE23769AD507BF3D4BC0D41F98A5E1'
+            Hash    = 'SHA256:1A8480EA45837BB69C4FA4DEB180372C2ACB9A2D91370BE19EB17E06B959BCAA'
             Targets = @(
                 @{ CommandName = 'wecutil'; Native = $true }
                 @{ CommandName = 'wecutil.exe'; Native = $true }

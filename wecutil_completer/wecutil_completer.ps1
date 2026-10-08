@@ -89,7 +89,7 @@ function ConvertTo-WecutilQuotedValue {
     # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
     # otherwise in the typed quote style (single by default). Whitespace and argument-mode
     # metacharacters (including the typographic quotes) end or split a bare word, and a
-    # leading '@' or '#' would start a splat or a comment.
+    # leading '@' or '#' would start a splat or a comment, and a leading dash a parameter.
     param(
         [string]$Value,
         [string]$Quote
@@ -100,7 +100,7 @@ function ConvertTo-WecutilQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
             return $Value
         }
 
@@ -559,30 +559,12 @@ function Get-WecutilPathCompletions {
     $quote = Get-WecutilTypedQuote -Value $typedValue
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($cleanValue)) {
-        if ($cleanValue.EndsWith('\') -or $cleanValue.EndsWith('/')) {
-            $parentPath = $cleanValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $cleanValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
-
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $cleanValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $cleanValue -Leaf
-                } catch {
-                    $leaf = $cleanValue
-                }
-            }
-        }
-    }
+    # The typed folder part (through the last separator, or a drive's colon) is kept
+    # verbatim, so a typed '.\' or './' and its separator style survive.
+    $separatorIndex = $cleanValue.LastIndexOfAny([char[]]@('\', '/', ':'))
+    $typedFolder = $cleanValue.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanValue.Substring($separatorIndex + 1)
+    $parentPath = if ($typedFolder) { $typedFolder } else { '.' }
 
     # A missing or protected folder is an expected miss, not an error record.
     $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
@@ -604,7 +586,11 @@ function Get-WecutilPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
+        $candidate = $typedFolder + $item.Name
+        if (-not $typedFolder -and $candidate -match '^[-\u2013-\u2015]') {
+            # A bare leading dash would be read as a parameter; anchor it like PowerShell does.
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
+        }
         if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
             $candidate += '\'
         }
