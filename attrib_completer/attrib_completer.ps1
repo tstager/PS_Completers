@@ -124,7 +124,7 @@ function Get-AttribTokenState {
         [void]$builder.Append($character)
     }
 
-    $hasTrailingSpace = $prefix -match '\s$'
+    $hasTrailingSpace = ($quoteChar -eq [char]0) -and ($prefix -match '\s$')
     if ($builder.Length -gt 0) {
         $tokens.Add($builder.ToString())
     }

@@ -40,7 +40,7 @@
         @{
             Path    = 'attrib_completer/attrib_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:15B5AF38FDD9BBB31E7B3732E9E6C83B61548826290FAA83DF4AC9EE5BF2FE68'
+            Hash    = 'SHA256:22E8A269A56D615EE701AD14A61B8083185F34A49C4C4919490B8D526FF44860'
             Targets = @(
                 @{ CommandName = 'attrib'; Native = $true }
                 @{ CommandName = 'attrib.exe'; Native = $true }
