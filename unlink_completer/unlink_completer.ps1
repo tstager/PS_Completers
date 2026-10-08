@@ -84,59 +84,48 @@ function New-UnlinkCompletionResult {
     )
 }
 
-function Remove-UnlinkOuterQuotes {
+function ConvertFrom-UnlinkTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes,
+    # even when the word is an unterminated quote running to the cursor.
     param([string]$Value)
 
-    if ([string]::IsNullOrEmpty($Value)) {
-        return ''
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    # The word may be an unterminated quote running to the cursor, so the closing
-    # quote is optional. Undo the quoting PowerShell applies inside each form so a
-    # previously accepted quoted completion matches its file again.
-    if ($Value.StartsWith("'")) {
-        $inner = $Value.Substring(1)
-        if ($inner -match "('+)$" -and $Matches[1].Length % 2 -eq 1) {
-            $inner = $inner.Substring(0, $inner.Length - 1)
-        }
-
-        return $inner.Replace("''", "'")
-    }
-
-    if ($Value.StartsWith('"')) {
-        $inner = $Value.Substring(1)
-        if ($inner -match '^(?:[^`]|`.)*"$') {
-            $inner = $inner.Substring(0, $inner.Length - 1)
-        }
-
-        return ($inner -replace '`(.)', '$1')
-    }
-
-    $Value
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-UnlinkQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    # Whitespace and argument-mode metacharacters would end, split or expand a
-    # bare word, so such names are quoted in the user's quote style (single
-    # quotes when the user typed none, matching the engine's own path quoting).
-    if ($QuoteChar -eq '"') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
     }
 
-    $Value
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-UnlinkCurrentToken {
@@ -163,12 +152,8 @@ function Get-UnlinkCurrentToken {
 function Get-UnlinkPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-UnlinkOuterQuotes -Value $InputPath
-    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath[0] -eq [char]34 -or $InputPath[0] -eq [char]39)) {
-        [string]$InputPath[0]
-    } else {
-        ''
-    }
+    $cleanInput = ConvertFrom-UnlinkTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -185,20 +170,26 @@ function Get-UnlinkPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # The directory part is kept exactly as typed (including a leading .\ or ./). A bare
+    # name starting with a dash would parse as a parameter, so it gets a .\ prefix, the
+    # way PowerShell's own file completion does.
+    $typedDirectory = if ([string]::IsNullOrWhiteSpace($cleanInput) -or -not $cleanInput.EndsWith($leaf, [System.StringComparison]::Ordinal)) {
+        ''
+    } else {
+        $cleanInput.Substring(0, $cleanInput.Length - $leaf.Length)
+    }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        if (-not $typedDirectory -and $item.Name -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
