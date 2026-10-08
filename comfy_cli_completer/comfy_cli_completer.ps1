@@ -180,62 +180,103 @@ function Get-ComfyCliTree {
     return $tree
 }
 
+function ConvertFrom-ComfyCliTypedWord {
+    # The value and opening quote of a typed word. A word opened with a quote (ASCII or typographic)
+    # is read by the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Text)
+
+    if ($Text -notmatch '^[''"\u2018-\u201E]') { return [pscustomobject]@{ Value = $Text; Quote = '' } }
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    [pscustomobject]@{ Value = [string]$tokens[0].Value; Quote = $Text.Substring(0, 1) }
+}
+
+function ConvertTo-ComfyCliQuotedValue {
+    # One PowerShell argument: bare when safe and no quote was typed, otherwise in the typed quote
+    # (single by default). PowerShell reads ' and U+2018-U+201B as single quotes, " and U+201C-U+201E as double.
+    param([string]$Value, [string]$Quote = '')
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+        $Quote = "'"
+    }
+    if ($Quote -match '^[''\u2018-\u201B]$') { return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote }
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
+}
+
 function New-ComfyCliCompletion {
-    param([string]$Text, [string]$Description, [string]$Type = 'ParameterValue', [string]$ListText = '')
+    param([string]$Text, [string]$Description, [string]$Type = 'ParameterValue', [string]$ListText = '', [string]$Quote = '')
 
     if (-not $Text) { return }
     if (-not $ListText) { $ListText = $Text }
     if (-not $Description) { $Description = $ListText }
-    $insert = $Text
+    # An attached '--opt=value' keeps the option bare and quotes only the value: --opt='a b' is one constant argument.
     $attached = [regex]::Match($Text, '^(?<option>--?[A-Za-z][A-Za-z0-9-]*=)(?<value>.*)$')
-    if ($attached.Success -and $attached.Groups['value'].Value -match '[\s''"`$;|&(){}<>#@]') {
-        $insert = $attached.Groups['option'].Value + "'" + $attached.Groups['value'].Value.Replace("'", "''") + "'"
-    } elseif ($Text -match '[\s''"`$;|&(){}<>#@]') {
-        $insert = "'" + $Text.Replace("'", "''") + "'"
+    $insert = if ($attached.Success) {
+        $attached.Groups['option'].Value + (ConvertTo-ComfyCliQuotedValue $attached.Groups['value'].Value $Quote)
+    } else {
+        ConvertTo-ComfyCliQuotedValue $Text $Quote
     }
     [System.Management.Automation.CompletionResult]::new($insert, $ListText, $Type, $Description)
 }
 
 function Get-ComfyCliPathCompletion {
-    param([string]$Word, [string]$Prefix = '', [bool]$DirectoryOnly = $false)
+    param([string]$Word, [string]$Prefix = '', [bool]$DirectoryOnly = $false, [string]$Quote = '')
 
-    $word = $Word.Trim("'", '"')
+    $word = $Word
     if ($word -match '^(?:\\\\|//)' -or $word -match '^[^:]+::') {
-        New-ComfyCliCompletion ($Prefix + $(if ($word) { $word } else { '<path>' })) 'Enter a local path; remote paths are not enumerated'
+        New-ComfyCliCompletion ($Prefix + $(if ($word) { $word } else { '<path>' })) 'Enter a local path; remote paths are not enumerated' -Quote $Quote
         return
     }
     $parent = '.'
     $leaf = $word
-    if ($word -match '[/\\]$') { $parent = $word; $leaf = '' }
-    elseif ($word -match '[/\\]') { $parent = Split-Path -Path $word -Parent; $leaf = Split-Path -Path $word -Leaf }
+    # Candidates keep the typed directory text (.\, ./, ..\) exactly as typed.
+    $directory = ''
+    if ($word -match '[/\\]$') { $parent = $word; $leaf = ''; $directory = $word }
+    elseif ($word -match '[/\\]') {
+        $parent = Split-Path -Path $word -Parent
+        $leaf = Split-Path -Path $word -Leaf
+        $directory = $word.Substring(0, $word.Length - $leaf.Length)
+    }
     $found = $false
     if (Test-Path -LiteralPath $parent -PathType Container) {
         foreach ($item in (Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)) {
             if ($DirectoryOnly -and -not $item.PSIsContainer) { continue }
             if (-not $item.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-            $candidate = if ($parent -eq '.') { $item.Name } else { Join-Path $parent $item.Name }
+            $candidate = $directory + $item.Name
+            # A bare word starting with a dash parses as a parameter; anchor it to the current directory.
+            if (-not $directory -and $candidate -match '^[-\u2013-\u2015]') {
+                $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
+            }
             if ($item.PSIsContainer) { $candidate += [System.IO.Path]::DirectorySeparatorChar }
-            New-ComfyCliCompletion ($Prefix + $candidate) $item.FullName
+            New-ComfyCliCompletion ($Prefix + $candidate) $item.FullName -Quote $Quote
             $found = $true
         }
     }
     if (-not $found) {
-        New-ComfyCliCompletion ($Prefix + $(if ($word) { $word } else { '<path>' })) 'Enter a local path'
+        New-ComfyCliCompletion ($Prefix + $(if ($word) { $word } else { '<path>' })) 'Enter a local path' -Quote $Quote
     }
 }
 
 function Get-ComfyCliValueCompletion {
-    param([string]$Slot, [object]$Entry, [string]$Word, [string]$Prefix = '')
+    param([string]$Slot, [object]$Entry, [string]$Word, [string]$Prefix = '', [string]$Quote = '')
 
-    $value = $Word.Trim("'", '"')
+    # $Word is the typed value text, opening quote included; $Quote is a quote typed before an attached option ('--opt=a).
+    $value = $Word
+    if (-not $Quote) {
+        $typed = ConvertFrom-ComfyCliTypedWord $Word
+        $value = $typed.Value
+        $Quote = $typed.Quote
+    }
     switch ($Entry.Kind) {
-        'Directory' { Get-ComfyCliPathCompletion -Word $value -Prefix $Prefix -DirectoryOnly $true; return }
-        'Path' { Get-ComfyCliPathCompletion $value $Prefix; return }
+        'Directory' { Get-ComfyCliPathCompletion -Word $value -Prefix $Prefix -DirectoryOnly $true -Quote $Quote; return }
+        'Path' { Get-ComfyCliPathCompletion $value $Prefix -Quote $Quote; return }
         'Choice' {
             $found = $false
             foreach ($choice in $Entry.Choices) {
                 if ($choice.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    New-ComfyCliCompletion ($Prefix + $choice) $Entry.Description
+                    New-ComfyCliCompletion ($Prefix + $choice) $Entry.Description -Quote $Quote
                     $found = $true
                 }
             }
@@ -244,7 +285,7 @@ function Get-ComfyCliValueCompletion {
         }
     }
     $hint = '<' + $Entry.Name + '>'
-    New-ComfyCliCompletion ($Prefix + $(if ($value) { $value } else { $hint })) "Enter $hint for $Slot. $($Entry.Description)"
+    New-ComfyCliCompletion ($Prefix + $(if ($value) { $value } else { $hint })) "Enter $hint for $Slot. $($Entry.Description)" -Quote $Quote
 }
 
 function Get-ComfyCliOperandCompletion {
@@ -264,6 +305,16 @@ function Complete-ComfyCli {
 
     $tree = Get-ComfyCliTree
     if ($null -eq $tree) { return }
+
+    # PowerShell hands a quoted word over re-quoted ('a and a typographic 'a both arrive as 'a') and drops the
+    # quote in --opt='a, while it replaces the word as typed; so values are read from the element under the cursor.
+    $typedWord = $Word
+    $cursorElement = $Ast.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $Cursor -and $_.Extent.EndOffset -ge $Cursor } | Select-Object -First 1
+    if ($cursorElement -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $cursorElement -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+        $typedWord = $cursorElement.Extent.Text.Substring(0, $Cursor - $cursorElement.Extent.StartOffset)
+    }
 
     $tokens = @()
     foreach ($element in @($Ast.CommandElements | Select-Object -Skip 1)) {
@@ -298,14 +349,16 @@ function Complete-ComfyCli {
     }
 
     if ($null -ne $pending) {
-        Get-ComfyCliValueCompletion -Slot $pending -Entry $node.Options[$pending] -Word $Word
+        Get-ComfyCliValueCompletion -Slot $pending -Entry $node.Options[$pending] -Word $typedWord
         return
     }
-    if (-not $endOptions -and $Word -match '^(?<option>--?[A-Za-z][A-Za-z0-9-]*)=(?<value>.*)$') {
+    # A quote may open before the option ('--opt=a) or before its value (--opt='a).
+    $typed = ConvertFrom-ComfyCliTypedWord $typedWord
+    if (-not $endOptions -and $typed.Value -match '^(?<option>--?[A-Za-z][A-Za-z0-9-]*)=(?<value>.*)$') {
         $option = $Matches.option
         $value = $Matches.value
         if ($node.Options.ContainsKey($option) -and $node.Options[$option].TakesValue) {
-            Get-ComfyCliValueCompletion -Slot $option -Entry $node.Options[$option] -Word $value -Prefix ($option + '=')
+            Get-ComfyCliValueCompletion -Slot $option -Entry $node.Options[$option] -Word $value -Prefix ($option + '=') -Quote $typed.Quote
             return
         }
     }
@@ -331,7 +384,7 @@ function Complete-ComfyCli {
     }
     if ($found -and ($Word.StartsWith('-') -or $node.Commands.Count -gt 0)) { return }
     if ($Word.StartsWith('-') -and -not $endOptions) { return }
-    Get-ComfyCliOperandCompletion -Node $node -Index $operands.Count -Word $Word
+    Get-ComfyCliOperandCompletion -Node $node -Index $operands.Count -Word $typedWord
 }
 
 Register-ArgumentCompleter -Native -CommandName @('comfy-cli', 'comfy-cli.exe') -ScriptBlock {

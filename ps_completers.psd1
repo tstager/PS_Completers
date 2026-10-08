@@ -167,7 +167,7 @@
         @{
             Path    = 'comfy_cli_completer/comfy_cli_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:20783DD5791CF7A9AC32C34889245DFF2DC44A009BF4D13688E09C479635E60D'
+            Hash    = 'SHA256:D6632102298A94134A9FBE0394B18F534E66C5B9D63279DFACE683EF6CC7A18A'
             Targets = @(
                 @{ CommandName = 'comfy-cli'; Native = $true }
                 @{ CommandName = 'comfy-cli.exe'; Native = $true }
