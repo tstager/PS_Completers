@@ -685,7 +685,7 @@
         @{
             Path    = 'opencode_completer/opencode_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:D4862987810ADACA1D7579EBBB6973EEDC28A91DCBBCA8DA67AE1EE418B7C707'
+            Hash    = 'SHA256:317A27DBB622A7C05C25C10449DDF98C365323F02CAFD1D91259335733F4C62F'
             Targets = @(
                 @{ CommandName = 'opencode'; Native = $true }
                 @{ CommandName = 'opencode.exe'; Native = $true }

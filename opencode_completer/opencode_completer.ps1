@@ -480,18 +480,40 @@ function Get-OpencodeConfigSource {
     }
 }
 
+function ConvertFrom-OpencodeTypedWord {
+    # The value of a typed word and the quote it opens with ('' when bare). A word opened with a quote (ASCII or
+    # typographic) is read by the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Word)
+
+    if ($Word -notmatch '^[''"\u2018-\u201E]') {
+        return [pscustomobject]@{ Value = $Word; Quote = '' }
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Word, [ref]$tokens, [ref]$parseErrors)
+    [pscustomobject]@{ Value = $tokens[0].Value; Quote = $Word.Substring(0, 1) }
+}
+
 function ConvertTo-OpencodeQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed, otherwise in the quote the
+    # user typed (single by default). PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E
+    # as double quotes.
     param([string]$Value, [string]$QuoteCharacter)
 
-    if ($QuoteCharacter -eq '"') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    if (-not $QuoteCharacter) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if ($QuoteCharacter -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    $Value
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-OpencodeAgentValue {
@@ -843,16 +865,10 @@ function Get-OpencodeDynamicCompletion {
         default { return }
     }
 
-    # Match without the user's opening quote and keep that quote character when emitting.
-    $quote = ''
-    $prefix = $CurrentWord
-    if ($prefix.Length -gt 0 -and ($prefix[0] -eq "'" -or $prefix[0] -eq '"')) {
-        $quote = $prefix.Substring(0, 1)
-        $prefix = $prefix.Substring(1)
-        if ($prefix.EndsWith($quote)) {
-            $prefix = $prefix.Substring(0, $prefix.Length - 1)
-        }
-    }
+    # Match on the typed word's value and keep the user's opening quote character when emitting.
+    $typed = ConvertFrom-OpencodeTypedWord -Word $CurrentWord
+    $quote = $typed.Quote
+    $prefix = $typed.Value
 
     foreach ($value in @($values)) {
         if ($value.Value.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -985,13 +1001,28 @@ function Get-OpencodeContext {
 function Get-OpencodePathCompletions {
     param([string]$CurrentWord, [bool]$DirectoryOnly, [string]$InlinePrefix = '')
 
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters (tick````x.txt inside single
+    # quotes). opencode takes literal paths, so each result is unwrapped by the parser and unescaped, then quoted once
+    # in the style the user typed.
+    $quote = (ConvertFrom-OpencodeTypedWord -Word $CurrentWord).Quote
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord)) {
         if ($DirectoryOnly -and $item.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
             continue
         }
 
-        [void]$results.Add((New-OpencodeCompletionResult -CompletionText ($InlinePrefix + $item.CompletionText) -ListItemText $item.ListItemText -ResultType $item.ResultType.ToString() -ToolTip $item.ToolTip))
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        $completionText = $InlinePrefix + (ConvertTo-OpencodeQuotedValue -Value $path -QuoteCharacter $quote)
+        [void]$results.Add((New-OpencodeCompletionResult -CompletionText $completionText -ListItemText $item.ListItemText -ResultType $item.ResultType.ToString() -ToolTip $item.ToolTip))
     }
 
     @($results.ToArray())
