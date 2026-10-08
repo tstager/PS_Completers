@@ -582,7 +582,7 @@
         @{
             Path    = 'md5sum_completer/md5sum_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:4FB8C82DDB0FB8ACDB9CCDA4AC7226099C42F035D7B8B0B7CA6AF13220E397AE'
+            Hash    = 'SHA256:2BDC9B2ED5C48659D16CA2DFCB856C072E2D83C1F07BB944CF54C3B450D0AFBA'
             Targets = @(
                 @{ CommandName = 'md5sum'; Native = $true }
                 @{ CommandName = 'md5sum.exe'; Native = $true }

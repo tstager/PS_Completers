@@ -84,37 +84,47 @@ function New-Md5sumCompletionResult {
     )
 }
 
-function Remove-Md5sumOuterQuotes {
+function ConvertFrom-Md5sumTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-Md5sumQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false,
-        [string]$QuoteChar = ''
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if ($QuoteChar -eq "'") {
-        return "'" + $Value.Replace("'", "''") + "'"
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-Md5sumQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-Md5sumCurrentToken {
@@ -137,12 +147,8 @@ function Get-Md5sumCurrentToken {
 function Get-Md5sumPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-Md5sumOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-    $quoteChar = if ($alwaysQuote) { $InputPath.Substring(0, 1) } else { '' }
-    if ($quoteChar -eq "'") {
-        $cleanInput = $cleanInput.Replace("''", "'")
-    }
+    $cleanInput = ConvertFrom-Md5sumTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -159,11 +165,11 @@ function Get-Md5sumPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -177,7 +183,7 @@ function Get-Md5sumPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-Md5sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote -QuoteChar $quoteChar
+        $quotedPath = ConvertTo-Md5sumQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-Md5sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
