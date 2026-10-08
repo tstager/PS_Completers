@@ -1170,7 +1170,7 @@
         @{
             Path    = 'shellrunas_completer/shellrunas_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6F4575F3236534AEFDAED11FED0508A505B5584DF3D67FC497918C89A89F6CB7'
+            Hash    = 'SHA256:713AC0B21AAE196C3B492A10F403022102AD86FD07AA23B46682142E4420262A'
             Targets = @(
                 @{ CommandName = 'shellrunas'; Native = $true }
                 @{ CommandName = 'shellrunas.exe'; Native = $true }

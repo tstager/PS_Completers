@@ -32,12 +32,14 @@ shellrunas [/netonly] <program> [arguments]
 - `<program>`:
   - local executable/path-aware completion
   - a word ending in `\` or `/` lists that directory's contents instead of re-suggesting the directory itself
-  - an unterminated opening quote is kept whole, so `shellrunas "C:\Program Files\Com<TAB>` completes the real path
+  - the word under the cursor is the span PowerShell replaces, taken from the parser: an unterminated single or double quote is one word (`shellrunas 'C:\Program Files\Com<TAB>` and `shellrunas "C:\Program Files\Com<TAB>` both complete the real path), and a quoted segment glued to a following `\` or `/` segment is one word too, so `shellrunas 'C:\Program Files'\Com<TAB>` completes `'C:\Program Files\Common Files\'` instead of dropping the quoted directory
+  - the whole word is matched, including any text after the cursor inside it, so a completion never deletes typed text; when nothing matches, the word is returned unchanged
+  - completions keep the quote the user typed (a typographic quote counts as its ASCII kind); inside `'` every single-quote character (`'` and U+2018-U+201B) is doubled, inside `"` the characters `` ` ``, `"`, `$` and U+201C-U+201E are backtick-escaped; an unquoted value is single-quoted only when it contains whitespace, one of `{ } ( ) ; , | & < > ' " $ @ #`, a backtick, or a typographic quote
   - sample application names when the slot is blank
 - later `[arguments]`:
   - conservative placeholder/echo completion only, to suppress filesystem fallback without pretending to understand the target program's own syntax
 
-Parser state is built only from command elements that end at or before the cursor, and the cursor offset is rebased onto the command's own start offset, so completing in the middle of a line does not fold tokens to the right of the cursor into the state.
+Parser state is built only from command elements that end before the current word starts, so completing in the middle of a line does not fold tokens to the right of the cursor into the state.
 
 ## Registration
 
