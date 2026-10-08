@@ -76,7 +76,7 @@
         @{
             Path    = 'basename_completer/basename_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:DD2C1373954BD20C06058485C4CE7063C416CA8377580EE3CBEC6711CB8BFF3E'
+            Hash    = 'SHA256:9BA0806368B988065F1799ED4A7392499CBEA2941987C054BE0EE31A11C3621F'
             Targets = @(
                 @{ CommandName = 'basename'; Native = $true }
                 @{ CommandName = 'basename.exe'; Native = $true }
