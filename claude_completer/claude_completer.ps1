@@ -299,7 +299,8 @@ function Initialize-ClaudeCompleterData {
       '--allow-tools', '--case', '--concurrency', '--eval-dir', '--judge-model',
       '--max-cost-usd', '--output-dir', '--report', '--runs', '--tag',
       '--threshold', '--author', '--author-email', '--description', '--with',
-      '--accept-command', '--marketplace', '--registry', '--sparse') |
+      '--accept-command', '--marketplace', '--registry', '--sparse',
+      '--env', '--header') |
         ForEach-Object { $null = $script:ClaudeContextValueFlagSet.Add($_) }
 
     # Context-specific numeric flags.
@@ -327,6 +328,18 @@ function Initialize-ClaudeCompleterData {
         'plugin.uninstall' = @{ '-s' = '--scope'; '-y' = '--yes' }
         'plugin.update'   = @{ '-s' = '--scope'; '-y' = '--yes' }
         'purge'           = @{ '-i' = '--interactive'; '-y' = '--yes' }
+    }
+
+    # Short flags are case-distinct ('mcp add -H' is --header, '-h' is --help), so the
+    # context alias maps compare keys ordinally.
+    foreach ($ctxKey in @($script:ClaudeContextShortAliases.Keys)) {
+        $ordinal = [System.Collections.Generic.Dictionary[string, string]]::new(
+            [System.StringComparer]::Ordinal
+        )
+        foreach ($alias in $script:ClaudeContextShortAliases[$ctxKey].GetEnumerator()) {
+            $ordinal[$alias.Key] = $alias.Value
+        }
+        $script:ClaudeContextShortAliases[$ctxKey] = $ordinal
     }
 
     # Positional path completion for specific subcommand paths (first positional).
