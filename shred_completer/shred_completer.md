@@ -66,8 +66,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the command element under the cursor, taken from the parser and cut at the cursor, so completion works when the command is not the first statement on the line. An unclosed quoted word (`shred "with s`) is one element running to the cursor, so a path with a space is matched whole and emitted quoted.
+- PowerShell replaces an unclosed quoted word up to the end of the line, so when the cursor is inside one (`shred "with s| out.bin`) every candidate carries the words typed after the cursor, from the first whitespace on: accepting gives `shred "with space\" out.bin` instead of deleting `out.bin`. The rest of the current word after the cursor (`shred "it's|.txt`) is replaced, as for any other word.
+- The typed word is unquoted by the PowerShell parser (`'it''s` matches `it's.txt`, `` with` s `` matches `with space`); a bare word that does not parse, such as `it's`, is taken as typed, so it matches `it's.txt` too. A candidate keeps the kind of quote the user typed; a bare word that needs quoting (whitespace, `{ } ( ) ; , | & < > ' " `` ` `` $ @ #` or a typographic quote) is single-quoted. Single-quote characters (`'` and U+2018-U+201B) are doubled inside single quotes; `` ` ``, `"`, `$` and U+201C-U+201E are backtick-escaped inside double quotes.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe, the tool lookup and the folder listing use `-ErrorAction Ignore` so a missing tool or folder adds nothing to `$Error`.
 
 ## Option values
 

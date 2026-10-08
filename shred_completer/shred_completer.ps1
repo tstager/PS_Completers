@@ -12,7 +12,7 @@ function Get-ShredCompletionOptions {
     $fallbackOptions = @('-f', '--force', '-n', '--iterations', '-s', '--size', '-u', '--remove', '-v', '--verbose', '-x', '--exact', '-r', '-z', '--zero', '--random-source', '-h', '--help', '-V', '--version', '-b')
     $commandCandidates = @('shred.exe', 'shred')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -86,63 +86,100 @@ function New-ShredCompletionResult {
 }
 
 function Remove-ShredOuterQuotes {
+    # The parser resolves the typed quotes and escapes ('it''s, with` s) and reads an
+    # unterminated quote to its end. A bare word that does not parse (it's) is a name typed
+    # as is: the parser would drop its apostrophe.
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-ShredQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$tokens, [ref]$parseErrors)
+    $quotes = "'" + '"' + [char]0x2018 + [char]0x2019 + [char]0x201A + [char]0x201B + [char]0x201C + [char]0x201D + [char]0x201E
+    if (@($parseErrors).Count -gt 0 -and -not $quotes.Contains($Value[0])) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    $element = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    if ($null -ne $element -and $element.CommandElements.Count -eq 2) {
+        $argument = $element.CommandElements[1]
+        if ($argument -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $argument -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+            return $argument.Value
+        }
     }
 
     $Value
 }
 
-function Get-ShredCurrentToken {
+function ConvertTo-ShredQuotedValue {
+    # Quote is the quote character the user typed ('' when none): its kind is kept, and a
+    # value that needs quoting without one is single-quoted.
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [string]$Value,
+        [string]$Quote = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
+    $singleQuotes = "'" + [char]0x2018 + [char]0x2019 + [char]0x201A + [char]0x201B
+    $doubleQuotes = '"' + [char]0x201C + [char]0x201D + [char]0x201E
+    if ([string]::IsNullOrEmpty($Quote) -and $Value -notmatch ('[\s{}();,|&<>`$@#' + $singleQuotes + $doubleQuotes + ']')) {
+        return $Value
     }
 
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
+    if (-not [string]::IsNullOrEmpty($Quote) -and $doubleQuotes.Contains($Quote)) {
+        return '"' + [regex]::Replace($Value, '[`$' + $doubleQuotes + ']', '`$0') + '"'
     }
 
-    $Fallback
+    "'" + [regex]::Replace($Value, '[' + $singleQuotes + ']', '$0$0') + "'"
+}
+
+function Get-ShredCurrentToken {
+    # The word under the cursor comes from the parser: an unterminated quote is one element
+    # that runs to the cursor, so a quoted path with a space stays whole. PowerShell replaces
+    # such an element up to the end of the line, so the words typed after the cursor (from
+    # the first whitespace on) are returned as Tail for every candidate to carry; the rest of
+    # the current word is replaced, as it is for any other word.
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $element.Extent.EndOffset -ge $CursorPosition) {
+            $cut = $CursorPosition - $element.Extent.StartOffset
+            $tail = ''
+            $rest = $element.Extent.Text.Substring($cut)
+            $space = [regex]::Match($rest, '\s')
+            if ($space.Success) {
+                $tokens = $null
+                $parseErrors = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput($element.Extent.Text, [ref]$tokens, [ref]$parseErrors)
+                if (@($parseErrors | Where-Object { $_.ErrorId -eq 'TerminatorExpectedAtEndOfString' }).Count -gt 0) {
+                    $tail = $rest.Substring($space.Index)
+                }
+            }
+
+            return [pscustomobject]@{ Word = $element.Extent.Text.Substring(0, $cut); Tail = $tail }
+        }
+    }
+
+    [pscustomobject]@{ Word = ''; Tail = '' }
 }
 
 function Get-ShredPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-ShredOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $typedQuote = ''
+    if ($InputPath -match ('^[''"' + [char]0x2018 + [char]0x2019 + [char]0x201A + [char]0x201B + [char]0x201C + [char]0x201D + [char]0x201E + ']')) {
+        $typedQuote = $Matches[0]
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -163,7 +200,7 @@ function Get-ShredPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -179,7 +216,7 @@ function Get-ShredPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-ShredQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-ShredQuotedValue -Value $pathText -Quote $typedQuote
         if ($item.PSIsContainer) {
             New-ShredCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -274,38 +311,42 @@ function Get-ShredOptionDescription {
 }
 
 function Complete-Shred {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-ShredCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $token = Get-ShredCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
+    $currentWord = $token.Word
 
-    $optionValues = @(Get-ShredOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
-    if ($optionValues.Count -gt 0) {
-        return $optionValues
-    }
+    $results = @(Get-ShredOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
+    if ($results.Count -eq 0) {
+        if ([string]::IsNullOrEmpty($currentWord)) {
+            return @()
+        }
 
-    if ([string]::IsNullOrEmpty($currentWord)) {
-        return @()
-    }
-
-    if ($currentWord.StartsWith('-')) {
-        return @(
-            foreach ($option in Get-ShredCompletionOptions) {
-                if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
-                    New-ShredCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-ShredOptionDescription -Option $option)
+        $results = if ($currentWord.StartsWith('-')) {
+            @(
+                foreach ($option in Get-ShredCompletionOptions) {
+                    if ($option.StartsWith($currentWord, [System.StringComparison]::Ordinal)) {
+                        New-ShredCompletionResult -CompletionText $option -ListItemText $option -ResultType 'ParameterName' -ToolTip (Get-ShredOptionDescription -Option $option)
+                    }
                 }
-            }
-        )
+            )
+        } else {
+            @(Get-ShredPathCompletions -InputPath $currentWord)
+        }
     }
 
-    Get-ShredPathCompletions -InputPath $currentWord
+    if ([string]::IsNullOrEmpty($token.Tail)) {
+        return $results
+    }
+
+    foreach ($result in $results) {
+        [System.Management.Automation.CompletionResult]::new($result.CompletionText + $token.Tail, $result.ListItemText, $result.ResultType, $result.ToolTip)
+    }
 }
 
 Register-ArgumentCompleter -Native -CommandName 'shred', 'shred.exe' -ScriptBlock {
