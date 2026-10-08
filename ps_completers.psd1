@@ -546,7 +546,7 @@
         @{
             Path    = 'link_completer/link_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6EC9A5EE3F964168875028500F9328F8397BE00E304A5CE48D42D6953ADD5B5B'
+            Hash    = 'SHA256:D193ABB3398F1501820641401927C09CE14572713FAA6A84B58800D514742E3F'
             Targets = @(
                 @{ CommandName = 'link'; Native = $true }
                 @{ CommandName = 'link.exe'; Native = $true }
