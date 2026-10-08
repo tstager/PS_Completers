@@ -114,7 +114,7 @@ scoop shim add myshim .\
 ## Limitations / notes
 
 - The completer does not call `scoop search` during completion, so remote or very broad app discovery is not attempted on every keypress.
-- Local bucket manifest names are only offered after the user has started typing a prefix, to avoid dumping a very large list on empty input; on an empty word `install` and `download` offer the `<app-or-manifest>` placeholder plus the installed apps.
+- The full set of local bucket manifest names is only offered after the user has started typing a prefix, to avoid dumping a very large list on empty input; on an empty word `install` and `download` offer the `<app-or-manifest>` placeholder plus the first 200 local manifest names (not the installed apps, which `scoop install` skips as already installed).
 - `app@version` completes the versions found under `<root>\apps\<app>\` (excluding `current`) plus the manifest's `version`; `bucket/app` scopes the manifest scan to that bucket.
 - `--option=value` is deliberately not completed because scoop's `getopt` rejects that form (`Option --arch=64bit not recognized`); only the space-separated `--arch <value>` form is offered.
 - Every subcommand offers `-h`/`--help`/`/?`, and the root offers `-v`/`--version` too, mirroring `bin\scoop.ps1`'s dispatch.

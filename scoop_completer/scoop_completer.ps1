@@ -593,7 +593,7 @@ function Get-ScoopManifestAppNames {
 
     $rootPath = Get-ScoopRootPath
     $bucketPattern = Join-Path -Path $rootPath -ChildPath 'buckets\*\bucket\*.json'
-    $names = Get-ChildItem -Path $bucketPattern -ErrorAction SilentlyContinue |
+    $names = Get-ChildItem -Path $bucketPattern -ErrorAction Ignore |
         ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) }
 
     $cache.ManifestAppNames = Get-ScoopUniqueStrings -Items $names
@@ -981,9 +981,9 @@ function Get-ScoopInstallTargetResults {
     param([string]$CurrentValue)
 
     $value = Remove-ScoopOuterQuotes -Value $CurrentValue
-    # Empty word: the placeholder plus the (small) installed list, like the ManifestApp slot.
+    # Empty word: the placeholder plus the first 200 local manifests (install skips installed apps); all of them once typed.
     if ([string]::IsNullOrWhiteSpace($value)) {
-        return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Scoop app name, local manifest path, or manifest URL.' -SuggestWhenEmpty
+        return Get-ScoopStringValueResults -Values @(Get-ScoopManifestAppNames | Select-Object -First 200) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Scoop app name, local manifest path, or manifest URL.' -SuggestWhenEmpty
     }
 
     if ($value -match '^[A-Za-z][A-Za-z0-9+.-]*://') {

@@ -1088,7 +1088,7 @@
         @{
             Path    = 'scoop_completer/scoop_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:2D6C50F2BBC54A80225187AF956A78673C891551279DDD37CC1C6233A32C63F1'
+            Hash    = 'SHA256:B3E90F418E76C4AF740F0CB297CAA8B95E58895DE988FD03A6E2D5A50A317A38'
             Targets = @(
                 @{ CommandName = 'scoop'; Native = $true }
                 @{ CommandName = 'scoop.ps1'; Native = $true }
