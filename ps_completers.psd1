@@ -336,7 +336,7 @@
         @{
             Path    = 'env_completer/env_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:2545FA5E0B21900946244159D6381465ADC29FE29ED89CEBBA77E39DA6A6B22D'
+            Hash    = 'SHA256:559429089D63F2418BA253E9AC0AADD15456CE611CC0C22A970D807822738D6F'
             Targets = @(
                 @{ CommandName = 'env'; Native = $true }
                 @{ CommandName = 'env.exe'; Native = $true }
