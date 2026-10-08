@@ -91,22 +91,53 @@ function Remove-AccessChkOuterQuotes {
     $Value.TrimStart('"')
 }
 
-function ConvertTo-AccessChkQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-AccessChkTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    # A quote closed mid-word ('sp ace'\s) is more than one string; keep the raw text so it
+    # matches nothing rather than completing from the first part and dropping the rest.
+    if ($tokens[0].Extent.EndOffset -lt $Value.Length) {
+        return $Value
     }
 
-    $Value
+    $tokens[0].Value
+}
+
+function ConvertTo-AccessChkQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-AccessChkTokenState {
@@ -126,10 +157,12 @@ function Get-AccessChkTokenState {
     $quoteChar = [char]0
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
+        # PowerShell reads ' and U+2018-U+201B as single quotes, " and U+201C-U+201E as double quotes.
+        $quoteKind = if ($character -match '[''\u2018-\u201B]') { [char]39 } elseif ($character -match '["\u201C-\u201E]') { [char]34 } else { [char]0 }
+        if ($quoteKind -ne [char]0) {
             if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
+                $quoteChar = $quoteKind
+            } elseif ($quoteChar -eq $quoteKind) {
                 $quoteChar = [char]0
             }
 
@@ -244,32 +277,18 @@ function Get-AccessChkPathCompletions {
         [string]$Placeholder = '<path>'
     )
 
-    $typedValue = Remove-AccessChkOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $typedValue = ConvertFrom-AccessChkTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            $candidateParent = Split-Path -Path $typedValue -Parent
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $parentPath = '.'
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                $leaf = Split-Path -Path $typedValue -Leaf
-            }
-        }
-    }
+    # Split the typed text at its last separator and keep the directory part exactly as typed
+    # (.\, ./, ..\, C:/...), so accepting a candidate never deletes typed text.
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/'))
+    $typedDirectory = $typedValue.Substring(0, $separatorIndex + 1)
+    $leaf = $typedValue.Substring($separatorIndex + 1)
+    $parentPath = if ($typedDirectory) { $typedDirectory } else { '.' }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-    } catch {
-        $items = @()
-    }
+    $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
 
     foreach ($item in $items) {
         if (-not [string]::IsNullOrWhiteSpace($leaf) -and
@@ -277,19 +296,20 @@ function Get-AccessChkPathCompletions {
             continue
         }
 
-        $candidatePath = if ($parentPath -eq '.') {
-            $item.Name
-        } else {
-            Join-Path -Path $parentPath -ChildPath $item.Name
+        $candidatePath = $typedDirectory + $item.Name
+        # A bare relative name starting with a dash would be read as a parameter; anchor it
+        # to the current directory the way PowerShell's own file completion does.
+        if (-not $typedDirectory -and $item.Name -match '^[-\u2013-\u2015]') {
+            $candidatePath = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidatePath
         }
 
         if ($item.PSIsContainer) {
             $candidatePath += '\'
         }
 
-        $completionText = ConvertTo-AccessChkQuotedValue -Value $candidatePath -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-AccessChkQuotedValue -Value $candidatePath -QuoteChar $quoteChar
         $itemToolTip = if ($item.PSIsContainer) { 'Directory path.' } else { 'File path.' }
-        [void]$results.Add((New-AccessChkCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $itemToolTip))
+        [void]$results.Add((New-AccessChkCompletionResult -CompletionText $completionText -ListItemText $candidatePath -ResultType 'ParameterValue' -ToolTip $itemToolTip))
     }
 
     if ($results.Count -eq 0) {
@@ -347,13 +367,14 @@ function Update-AccessChkServiceCache {
 function Get-AccessChkRegistryCompletions {
     param([string]$CurrentWord)
 
-    $typedValue = Remove-AccessChkOuterQuotes -Value $CurrentWord
+    $typedValue = ConvertFrom-AccessChkTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($root in $script:AccessChkCompletionCatalog.RegistryRoots) {
         if ([string]::IsNullOrWhiteSpace($typedValue) -or
             $root.Token.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$results.Add((New-AccessChkCompletionResult -CompletionText $root.Token -ListItemText $root.Token -ResultType 'ParameterValue' -ToolTip $root.Description))
+            [void]$results.Add((New-AccessChkCompletionResult -CompletionText (ConvertTo-AccessChkQuotedValue -Value $root.Token -QuoteChar $quoteChar) -ListItemText $root.Token -ResultType 'ParameterValue' -ToolTip $root.Description))
         }
     }
 
@@ -411,7 +432,7 @@ function Get-AccessChkRegistryCompletions {
             }
 
             $candidate = $baseToken + $child.PSChildName
-            [void]$results.Add((New-AccessChkCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip 'Registry key path.'))
+            [void]$results.Add((New-AccessChkCompletionResult -CompletionText (ConvertTo-AccessChkQuotedValue -Value $candidate -QuoteChar $quoteChar) -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip 'Registry key path.'))
         }
     }
 

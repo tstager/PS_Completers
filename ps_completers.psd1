@@ -13,7 +13,7 @@
         @{
             Path    = 'accesschk_completer/accesschk_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5B6ADED42A58B52B89582F89CD4282EFD0C53EFA704CB793A0257E67B4FFBD97'
+            Hash    = 'SHA256:46D9632C94A77A0307FC9A13AB2959747717BDE75CEFB2EC75A4B2D18646D988'
             Targets = @(
                 @{ CommandName = 'accesschk'; Native = $true }
                 @{ CommandName = 'accesschk.exe'; Native = $true }
