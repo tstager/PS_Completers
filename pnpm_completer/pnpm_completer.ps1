@@ -371,6 +371,25 @@ function Get-PnpmArgumentToken {
     @($tokens.ToArray())
 }
 
+function Get-PnpmCurrentWord {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The word as typed, quotes included: $wordToComplete drops the quote inside an
+    # attached --opt='value. The parser keeps an unterminated quoted word as one
+    # element running to the cursor.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
+    }
+
+    ''
+}
+
 function Resolve-PnpmCommandPath {
     param([string[]]$Tokens)
 
@@ -448,7 +467,7 @@ function Get-PnpmWorkingDirectory {
         }
     }
 
-    $directory = $directory.Trim([char[]]@([char]34, [char]39))
+    $directory = ConvertFrom-PnpmTypedWord -Value $directory
     if ([string]::IsNullOrWhiteSpace($directory)) {
         return $location.ProviderPath
     }
@@ -604,21 +623,49 @@ function Get-PnpmConfigKey {
     @($keys.ToArray())
 }
 
+function ConvertFrom-PnpmTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function Get-PnpmTypedQuote {
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') { $Value.Substring(0, 1) } else { '' }
+}
+
 function ConvertTo-PnpmQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$Quote
     )
 
-    if ([string]::IsNullOrEmpty($Quote) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
-        return $Value
+    if ([string]::IsNullOrEmpty($Quote)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    if ($Quote -eq '"') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-PnpmOperandCompletion {
@@ -627,17 +674,9 @@ function Get-PnpmOperandCompletion {
         [string]$WordToComplete
     )
 
-    # An opening quote the user typed is kept on the inserted text; a closing one
-    # is dropped before matching.
-    $word = $WordToComplete
-    $quote = ''
-    if ($word.Length -gt 0 -and ($word[0] -eq [char]39 -or $word[0] -eq [char]34)) {
-        $quote = [string]$word[0]
-        $word = $word.Substring(1)
-        if ($word.EndsWith($quote, [System.StringComparison]::Ordinal)) {
-            $word = $word.Substring(0, $word.Length - 1)
-        }
-    }
+    # An opening quote the user typed is kept on the inserted text.
+    $quote = Get-PnpmTypedQuote -Value $WordToComplete
+    $word = ConvertFrom-PnpmTypedWord -Value $WordToComplete
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($candidate in @($Candidates)) {
@@ -650,11 +689,49 @@ function Get-PnpmOperandCompletion {
     @($results.ToArray())
 }
 
-function Get-PnpmDirectoryCompletion {
-    param([string]$WordToComplete)
+function Get-PnpmPathCompletion {
+    param(
+        [string]$WordToComplete,
+        [string]$Prefix,
+        [switch]$Directory
+    )
 
-    @([System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)) |
-        Where-Object { $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer }
+    $quote = Get-PnpmTypedQuote -Value $WordToComplete
+    $container = [System.Management.Automation.CompletionResultType]::ProviderContainer
+
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (tick``x.txt). pnpm takes literal paths, so each result is unwrapped by the parser
+    # and unescaped, then quoted once in the style the user typed.
+    $items = foreach ($item in @([System.Management.Automation.CompletionCompleters]::CompleteFilename((ConvertFrom-PnpmTypedWord -Value $WordToComplete)))) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($item.ResultType -eq $container -and -not $path.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $path += [System.IO.Path]::DirectorySeparatorChar
+        }
+
+        [pscustomobject]@{ Path = $path; ListItemText = $item.ListItemText; ResultType = $item.ResultType; ToolTip = $item.ToolTip }
+    }
+
+    # A <DIR> slot offers directories. When none match, the files are offered as the
+    # engine's own fallback would, but quoted for a literal path.
+    if ($Directory) {
+        $directories = @($items | Where-Object { $_.ResultType -eq $container })
+        if ($directories.Count -gt 0) {
+            $items = $directories
+        }
+    }
+
+    foreach ($item in @($items)) {
+        New-PnpmCompletionResult -CompletionText ($Prefix + (ConvertTo-PnpmQuotedValue -Value $item.Path -Quote $quote)) -ListItemText $item.ListItemText -ResultType $item.ResultType -ToolTip $item.ToolTip
+    }
 }
 
 function Get-PnpmOptionValueCompletion {
@@ -672,22 +749,24 @@ function Get-PnpmOptionValueCompletion {
     # .ToArray() is deliberate: @() over a List[object] throws on PowerShell 7.6.
     $values = @($Option.ValueList.ToArray())
     if ($values.Count -gt 0) {
+        $quote = Get-PnpmTypedQuote -Value $WordToComplete
+        $typedValue = ConvertFrom-PnpmTypedWord -Value $WordToComplete
         foreach ($value in $values) {
-            if ($value.Name.StartsWith($WordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($value.Name.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
                 $toolTip = if ([string]::IsNullOrWhiteSpace($value.Description)) { "$($Option.Names[-1]) $($value.Name)" } else { $value.Description }
-                [void]$results.Add((New-PnpmCompletionResult -CompletionText ($Prefix + $value.Name) -ListItemText $value.Name -ResultType ParameterValue -ToolTip $toolTip))
+                [void]$results.Add((New-PnpmCompletionResult -CompletionText ($Prefix + (ConvertTo-PnpmQuotedValue -Value $value.Name -Quote $quote)) -ListItemText $value.Name -ResultType ParameterValue -ToolTip $toolTip))
             }
         }
 
         return @($results.ToArray())
     }
 
-    if ($Option.ValueKind -eq 'Directory' -and [string]::IsNullOrEmpty($Prefix)) {
-        return @(Get-PnpmDirectoryCompletion -WordToComplete $WordToComplete)
+    if ($Option.ValueKind -eq 'Directory') {
+        return @(Get-PnpmPathCompletion -WordToComplete $WordToComplete -Prefix $Prefix -Directory)
     }
 
-    if ($Option.ValueKind -eq 'File' -and [string]::IsNullOrEmpty($Prefix)) {
-        return @([System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete))
+    if ($Option.ValueKind -eq 'File') {
+        return @(Get-PnpmPathCompletion -WordToComplete $WordToComplete -Prefix $Prefix)
     }
 
     if ([string]::IsNullOrEmpty($WordToComplete)) {
@@ -753,7 +832,7 @@ function Invoke-PnpmCompletion {
         [int]$CursorPosition
     )
 
-    $word = if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
+    $word = Get-PnpmCurrentWord -CommandAst $CommandAst -CursorPosition $CursorPosition
     $tokens = @(Get-PnpmArgumentToken -CommandAst $CommandAst -CursorPosition $CursorPosition)
     $resolved = Resolve-PnpmCommandPath -Tokens $tokens
     $catalog = $resolved.Catalog

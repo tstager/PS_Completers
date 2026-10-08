@@ -60,7 +60,8 @@ Option values come from the help page:
 - `[possible values: a, b, c]` and clap's `Possible values:` blocks become enum
   completions with their per-value descriptions as tooltips
   (`pnpm --loglevel <TAB>` -> `silent error warn info debug`)
-- a `<DIR>` value name becomes directory completion (`pnpm --dir <TAB>`)
+- a `<DIR>` value name becomes directory completion (`pnpm --dir <TAB>`); when
+  no directory matches, files are offered as the engine's own fallback would
 - a `<...FILE>` or `<...PATH>` value name becomes file completion
 - anything else becomes a `<VALUE_NAME>` placeholder, so the engine's filename
   fallback does not take over a non-path slot
@@ -68,6 +69,11 @@ Option values come from the help page:
 Both value forms work. The separate form (`pnpm --reporter <TAB>`) offers bare
 values; the attached form (`pnpm --reporter=de<TAB>`) keeps the `--reporter=`
 prefix on the inserted text.
+
+Paths are unwrapped from `CompleteFilename` (which wildcard-escapes and doubles
+backticks inside single quotes) and quoted once as literal paths: bare when
+safe, otherwise in the quote the user typed (ASCII or typographic), single by
+default. The attached form quotes only the value (`--dir='.\sub dir&x\'`).
 
 ## Operand slots
 
@@ -94,7 +100,7 @@ slots have a live value source:
 - `test`, `start`, `stop` and `restart` take arguments passed verbatim to the
   script, not script names, so they get no values.
 - Names are quoted when they contain whitespace or an argument-mode
-  metacharacter, or start with `@` or `#` (`'@types/node'`, `'@jsr:registry'`).
+  metacharacter, `@`, `#` or a typographic quote (`'@types/node'`, `'@jsr:registry'`).
   A quote the user typed is kept: `pnpm remove "@t` -> `"@types/node"`. A bare
   `@t` is a splatted-variable token to PowerShell, which completes variables
   there without calling the completer.

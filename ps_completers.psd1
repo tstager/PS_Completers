@@ -743,7 +743,7 @@
         @{
             Path    = 'pnpm_completer/pnpm_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:27A234A160267C4C4A9E3E1E54FD39336952473489758C757FE5A402FCF71215'
+            Hash    = 'SHA256:C1F871B53B81E25B155D627027EEA72AB2CC9B51698190B664569DE7BFB2EDDC'
             Targets = @(
                 @{ CommandName = 'pnpm'; Native = $true }
                 @{ CommandName = 'pnpm.cmd'; Native = $true }
