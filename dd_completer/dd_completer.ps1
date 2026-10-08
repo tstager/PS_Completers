@@ -84,64 +84,88 @@ function New-DdCompletionResult {
     )
 }
 
-function Remove-DdOuterQuotes {
+function ConvertFrom-DdTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic) is read by the
+    # PowerShell tokenizer as one command argument, which drops the quotes and undoes that quote
+    # style's escapes (if='sp'a reads as if=spa). $null when the word is not a single argument
+    # token ('sp a'.tx), so nothing is offered rather than replacing text the value lost.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-DdQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens.Count -ne 3 -or $tokens[1] -isnot [System.Management.Automation.Language.StringToken]) {
+        return $null
     }
 
-    $Value
+    $tokens[1].Value
+}
+
+function ConvertTo-DdQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-DdCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word (if='sp a) as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-DdPathCompletions {
-    param([string]$InputPath)
+    # $InputPath is the whole typed word; $Attached is an option head it starts with (if=), which
+    # the caller puts back in front of each candidate.
+    param(
+        [string]$InputPath,
+        [string]$Attached = ''
+    )
 
-    $cleanInput = Remove-DdOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-DdTypedWord -Value $InputPath
+    if ($null -eq $cleanInput -or -not $cleanInput.StartsWith($Attached, [System.StringComparison]::Ordinal)) {
+        return @()
+    }
+
+    $cleanInput = $cleanInput.Substring($Attached.Length)
+    $typedValue = $InputPath.Substring($Attached.Length)
+    $quoteChar = if ($typedValue -match '^[''"\u2018-\u201E]') { $typedValue.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -158,18 +182,33 @@ function Get-DdPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Keep the directory part exactly as typed (.\, ./, ..\, C:\x\) in front of each name.
+    $typedDir = if ([string]::IsNullOrWhiteSpace($cleanInput)) {
+        ''
+    } elseif ($cleanInput.EndsWith($leaf, [System.StringComparison]::Ordinal)) {
+        $cleanInput.Substring(0, $cleanInput.Length - $leaf.Length)
+    } else {
+        $null
+    }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $pathText = if ($null -ne $typedDir) {
+            # A bare word starting with a dash parses as a parameter, so a whole-word relative
+            # name like -dash.txt gets the current-directory prefix, as PowerShell's own does.
+            if (-not $typedDir -and -not $Attached -and $item.Name -match '^[-\u2013-\u2015]') {
+                '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+            } else {
+                $typedDir + $item.Name
+            }
+        } elseif ($parent -eq '.') {
             $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
         } else {
             Join-Path -Path $parent -ChildPath $item.Name
         }
@@ -178,7 +217,7 @@ function Get-DdPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-DdQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-DdQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-DdCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -334,7 +373,7 @@ function Get-DdOptionValueCompletions {
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
-            foreach ($result in Get-DdPathCompletions -InputPath $prefix) {
+            foreach ($result in Get-DdPathCompletions -InputPath $CurrentWord -Attached $attached) {
                 New-DdCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
@@ -386,11 +425,7 @@ function Complete-Dd {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-DdCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-DdCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-DdOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -WordToComplete $wordToComplete)
     if ($optionValues.Count -gt 0) {
