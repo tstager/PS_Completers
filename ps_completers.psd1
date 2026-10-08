@@ -844,7 +844,7 @@
         @{
             Path    = 'psloglist_completer/psloglist_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:CF3445820C318278F39FBE0AA22A7D23F083F4A8A22044532E5497A5C503B779'
+            Hash    = 'SHA256:5A96848CC34359DC048D2D710508058F54311810E0732AE5B16681AA8A60A131'
             Targets = @(
                 @{ CommandName = 'psloglist'; Native = $true }
                 @{ CommandName = 'psloglist.exe'; Native = $true }

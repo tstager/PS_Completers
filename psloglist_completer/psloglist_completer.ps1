@@ -67,8 +67,8 @@ function Remove-PsLogListOuterQuotes {
 function ConvertTo-PsLogListQuotedValue {
     param([string]$Value, [bool]$AlwaysQuote = $false)
     if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
+    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
     $Value
 }
@@ -201,7 +201,7 @@ function Get-PsLogListPathCompletions {
     $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
     $allowedExtensions = @($Extensions | ForEach-Object { $_.ToLowerInvariant() })
 
-    $results = foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like $pattern } | Sort-Object -Property Name)) {
+    $results = foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $pattern } | Sort-Object -Property Name)) {
         if (-not $item.PSIsContainer -and $allowedExtensions.Count -gt 0 -and ($item.Extension.ToLowerInvariant() -notin $allowedExtensions)) { continue }
         $completionPath = $parentText + $item.Name
         if ($item.PSIsContainer) { $completionPath += [System.IO.Path]::DirectorySeparatorChar }
@@ -227,13 +227,43 @@ function Get-PsLogListAtFileCompletions {
 
 function Get-PsLogListCsvValueCompletions {
     param([string]$CurrentWord, [string[]]$Values, [string]$ToolTip)
-    $typed = Remove-PsLogListOuterQuotes -Value $CurrentWord
-    $commaIndex = $typed.LastIndexOf(',')
+    # After a top-level comma PowerShell parses an array literal: it replaces only the last segment, and it hands a
+    # native command the literal's raw text, so a,b arrives as one argument but any quote in it arrives literally. Such a
+    # segment is completed bare, and names that would need quoting there are withheld (quote the whole list instead).
+    # Otherwise the whole word is replaced: the user's opening quote is kept, and unquoted text that PowerShell would
+    # split or interpret gets single quotes.
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput("x $CurrentWord", [ref]$tokens, [ref]$parseErrors)
+    $comma = @($tokens | Where-Object { $_.Kind -eq 'Comma' }) | Select-Object -Last 1
+    $inList = $null -ne $comma
+    $word = if ($inList) { $CurrentWord.Substring($comma.Extent.EndOffset - 2) } else { $CurrentWord }
+    $quote = if ($word -match '^[''"\u2018-\u201E]') { $word.Substring(0, 1) } else { '' }
+    $typed = $word
+    if ($quote) {
+        [void][System.Management.Automation.Language.Parser]::ParseInput("x $word", [ref]$tokens, [ref]$parseErrors)
+        $typed = if ($tokens.Count -gt 1 -and $tokens[1] -is [System.Management.Automation.Language.StringToken]) { $tokens[1].Value } else { $word.Substring(1) }
+    }
+    $commaIndex = if ($inList) { -1 } else { $typed.LastIndexOf(',') }
     $prefix = if ($commaIndex -ge 0) { $typed.Substring(0, $commaIndex + 1) } else { '' }
     $currentSegment = if ($commaIndex -ge 0) { $typed.Substring($commaIndex + 1) } else { $typed }
     $results = foreach ($value in @($Values)) {
         if (-not [string]::IsNullOrWhiteSpace($currentSegment) -and -not $value.StartsWith($currentSegment, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-        New-PsLogListCompletionResult -CompletionText ($prefix + $value) -ListItemText $value -ResultType 'ParameterValue' -ToolTip $ToolTip
+        $text = $prefix + $value
+        # Placeholders such as <source>* stay bare unless the user opened a quote.
+        $needsQuote = -not $value.StartsWith('<') -and $value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]'
+        if ($inList -and $needsQuote) { continue }
+        $completionText = if ($inList) {
+            $value
+        } elseif ($quote -match '["\u201C-\u201E]') {
+            $quote + ($text -replace '([`"$\u201C-\u201E])', '`$1') + $quote
+        } elseif ($quote -or $needsQuote) {
+            $open = if ($quote) { $quote } else { "'" }
+            $open + ($text -replace '([''\u2018-\u201B])', '$1$1') + $open
+        } else {
+            $text
+        }
+        New-PsLogListCompletionResult -CompletionText $completionText -ListItemText $value -ResultType 'ParameterValue' -ToolTip $ToolTip
     }
     @($results)
 }
@@ -309,7 +339,7 @@ function Complete-PsLogList {
             return Get-PsLogListPathCompletions -CurrentWord $currentWord -Extensions @('.evt', '.evtx') -ToolTip 'Saved event log file path.'
         }
         'Delimiter' {
-            return @(Select-PsLogListPrefixMatch -Values $script:PsLogListCompletionCatalog.DelimiterHints -CurrentWord $currentWord | ForEach-Object { New-PsLogListCompletionResult -CompletionText $_ -ResultType 'ParameterValue' -ToolTip 'Delimiter used with -s.' })
+            return @(Select-PsLogListPrefixMatch -Values $script:PsLogListCompletionCatalog.DelimiterHints -CurrentWord $currentWord | ForEach-Object { New-PsLogListCompletionResult -CompletionText $(if ($_ -match '[,;|]') { "'$_'" } else { $_ }) -ListItemText $_ -ResultType 'ParameterValue' -ToolTip 'Delimiter used with -s.' })
         }
         'Sources' {
             $sourceValues = if ($remoteMode) {

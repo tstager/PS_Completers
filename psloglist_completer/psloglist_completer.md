@@ -28,8 +28,8 @@ The implementation is hybrid:
 - `-f` returns filter-letter samples such as `we`
 - `-i` and `-e` return comma-separated event ID hints; the last comma-separated segment is what gets filtered, and once one of the pair is on the line the other is no longer offered
 - `-t` returns delimiter hints and is only suggested after `-s`
-- `-l` and `-g` use local path completion for saved/exported event log files (`.evt`/`.evtx` plus directories); an empty slot lists the current directory
-- `-o` and `-q` complete comma-separated source names and always offer a `<source>*` hint for the documented substring form
+- `-l` and `-g` use local path completion for saved/exported event log files (`.evt`/`.evtx` plus directories); an empty slot lists the current directory, and a name containing whitespace or a PowerShell-special character is double-quoted with `` ` ``, `"` and `$` escaped
+- `-o` and `-q` complete comma-separated source names and always offer a `<source>*` hint for the documented substring form; a list containing a spaced name such as `Service Control Manager` is single-quoted, and a typed opening `'` or `"` is kept. After an unquoted comma (`-o 3ware,Serv`) PowerShell replaces only the last segment and passes the list's raw text to the tool, so that segment completes bare and names that need quoting are not offered there; quote the whole list instead (`-o '3ware,Serv`)
 
 Tokens to the right of the cursor are ignored, so editing an earlier value mid-line completes that slot, and a quoted multi-word log name such as `"Windows Pow` completes to `"Windows PowerShell"`.
 
