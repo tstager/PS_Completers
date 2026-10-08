@@ -135,12 +135,12 @@ function ConvertTo-DircolorsQuotedValue {
 
     # Keep the quote the user opened; otherwise single-quote any value that would
     # split or expand as a bare argument (whitespace, metacharacters, quotes, a
-    # leading @ or #), as PowerShell's own path completion does.
+    # leading @, # or dash), as PowerShell's own path completion does.
     if ($QuoteChar -eq '"') {
         return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
 
-    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]') {
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#\-\u2013-\u2015]') {
         return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
     }
 
@@ -191,19 +191,17 @@ function Get-DircolorsPathCompletions {
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
+    # Keep the typed directory part (.\, ./, ..\, C:\...) verbatim and complete
+    # only the leaf after the last separator, so no typed text is dropped.
+    $separatorAt = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorAt -ge 0) {
+        $prefix = $cleanInput.Substring(0, $separatorAt + 1)
+        $parent = $prefix
+        $leaf = $cleanInput.Substring($separatorAt + 1)
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $prefix = ''
+        $parent = '.'
+        $leaf = $cleanInput
     }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
@@ -214,12 +212,12 @@ function Get-DircolorsPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        # A bare name starting with a dash would parse as a parameter: anchor it
+        # to the current directory, as PowerShell's own file completion does.
+        $pathText = if ($prefix -eq '' -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $prefix + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
