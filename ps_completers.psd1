@@ -417,7 +417,7 @@
         @{
             Path    = 'gawk_completer/gawk_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7E366ADC180A02F79FA508EDC78709D29CF3279186AD3CFD0253E3821E7FA950'
+            Hash    = 'SHA256:F685BB6EE84EEBAB6D83ADDC7B42FB2C9D2FA4DF4BB733DD455AA55BC6D884F7'
             Targets = @(
                 @{ CommandName = 'gawk'; Native = $true }
                 @{ CommandName = 'gawk.exe'; Native = $true }

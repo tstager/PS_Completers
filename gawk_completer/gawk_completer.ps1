@@ -923,11 +923,12 @@ function Get-GawkPathCompletions {
     )
 
     $text = if ($null -eq $InputText) { '' } else { $InputText }
-    $trimmedInput = $text.Trim('"')
+    $trimmedInput = ConvertFrom-GawkTypedWord -Text $text
+    $quoteCharacter = if ($text -match '^[''"\u2018-\u201E]') { $text.Substring(0, 1) } else { '' }
 
     # $prefixText is the part of the typed word that precedes the leaf, kept
-    # exactly as typed so completions extend the user's own text ('.\',
-    # 'sub\', '..\', 'C:\') instead of pasting absolute paths.
+    # as typed so completions extend the user's own text ('.\', 'sub\',
+    # '..\', 'C:\') instead of pasting absolute paths.
     if ([string]::IsNullOrWhiteSpace($trimmedInput)) {
         $parent = '.'
         $leaf = ''
@@ -946,10 +947,8 @@ function Get-GawkPathCompletions {
         $prefixText = $trimmedInput.Substring(0, $trimmedInput.Length - $leaf.Length)
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $quoteResult = $text.StartsWith('"')
-
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $filter = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $filter })
     $preferredMap = @{}
     foreach ($extension in @($PreferredExtensions)) {
         if ([string]::IsNullOrWhiteSpace($extension)) {
@@ -976,15 +975,19 @@ function Get-GawkPathCompletions {
     )
 
     foreach ($item in $sortedItems) {
-        $completionText = $prefixText + $item.Name
+        $pathText = $prefixText + $item.Name
 
-        if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionText += [System.IO.Path]::DirectorySeparatorChar
+        # A whole-word name starting with a dash would parse as a parameter: lead with '.\'
+        # as PowerShell's own file completion does.
+        if (-not $AttachedPrefix -and -not $prefixText -and $item.Name -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
-        if (($quoteResult -or $completionText -match '\s') -and -not ($completionText.StartsWith('"') -and $completionText.EndsWith('"'))) {
-            $completionText = '"' + $completionText + '"'
+        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
+
+        $completionText = ConvertTo-GawkArgumentText -Text $pathText -QuoteCharacter $quoteCharacter
 
         $tooltip = if ($item.PSIsContainer) {
             'Directory: {0}' -f $item.FullName
@@ -992,7 +995,7 @@ function Get-GawkPathCompletions {
             $item.FullName
         }
 
-        New-GawkCompletionResult -CompletionText ($AttachedPrefix + $completionText) -ResultType 'ParameterValue' -ToolTip $tooltip
+        New-GawkCompletionResult -CompletionText ($AttachedPrefix + $completionText) -ListItemText ($AttachedPrefix + $pathText) -ResultType 'ParameterValue' -ToolTip $tooltip
     }
 }
 
@@ -1066,21 +1069,43 @@ function Get-GawkSimpleValueCompletions {
     }
 }
 
+function ConvertFrom-GawkTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Text)
+
+    if ($Text -notmatch '^[''"\u2018-\u201E]') {
+        return $Text
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
 function ConvertTo-GawkArgumentText {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Text,
         [string]$QuoteCharacter = ''
     )
 
-    if ($QuoteCharacter -eq '"') {
-        return '"' + ($Text -replace '([`"$])', '`$1') + '"'
+    if (-not $QuoteCharacter) {
+        if ($Text -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Text
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if ($QuoteCharacter -eq "'" -or $Text -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return "'" + $Text.Replace("'", "''") + "'"
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Text -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    $Text
+    $QuoteCharacter + ($Text -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-GawkLoadExtensionCompletion {
@@ -1090,11 +1115,8 @@ function Get-GawkLoadExtensionCompletion {
     )
 
     $word = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
-    $quoteCharacter = ''
-    if ($word.StartsWith("'") -or $word.StartsWith('"')) {
-        $quoteCharacter = $word.Substring(0, 1)
-        $word = $word.Substring(1)
-    }
+    $quoteCharacter = if ($word -match '^[''"\u2018-\u201E]') { $word.Substring(0, 1) } else { '' }
+    $word = ConvertFrom-GawkTypedWord -Text $word
 
     foreach ($extension in @(Get-GawkLoadExtensionCatalog)) {
         # A path-form value also matches on its extension name, so 'fil' finds '<dir>\filefuncs'.
@@ -1249,7 +1271,7 @@ function Complete-GawkNative {
     $commandText = $CommandAst.Extent.Text
     $relativeCursor = [Math]::Max(0, [Math]::Min($CursorPosition - $CommandAst.Extent.StartOffset, $commandText.Length))
     $prefixText = $commandText.Substring(0, $relativeCursor)
-    [object[]]$rawTokens = @([regex]::Matches($prefixText, '(?:"[^"]*"?|''[^'']*''?|[^\s"'']+)+') | ForEach-Object { $_.Value })
+    [object[]]$rawTokens = @([regex]::Matches($prefixText, '(?:["\u201C-\u201E][^"\u201C-\u201E]*["\u201C-\u201E]?|[''\u2018-\u201B][^''\u2018-\u201B]*[''\u2018-\u201B]?|[^\s"''\u2018-\u201E]+)+') | ForEach-Object { $_.Value })
     if ($rawTokens.Count -eq 0) {
         return
     }
