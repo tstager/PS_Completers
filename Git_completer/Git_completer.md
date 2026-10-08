@@ -28,7 +28,8 @@ Internal helper scriptblocks handle distinct parts of the workflow:
 - `$newResult` creates `CompletionResult` instances.
 - `$completeList` emits sorted unique matches using the current `$wordToComplete` prefix.
 - `$completeOrderedList` preserves preferred ordering while still deduplicating.
-- `$completeFileSystemPaths` delegates to PowerShell filename completion and can restrict results to directories.
+- `$completeFileSystemPaths` delegates to PowerShell filename completion and can restrict results to directories. Each result is unwrapped to its plain path and quoted once by `$quoteArgumentValue`, in the quote style the user typed (single quotes by default), with any attached `--option=` prefix kept outside the quotes (`--file='.\a b.txt'`).
+- `$completePathList` emits the repository paths from `$getFiles` and `$getWorktreePaths` the same way, matched on the unquoted value of the typed word (`$readTypedWord`). A typed `.\` or `./` prefix is kept, and a name starting with a dash gets a `.\` prefix so neither PowerShell nor Git reads it as an option.
 - `$getRefs`, `$getRemotes`, `$getFiles`, and `$getWorktreePaths` call Git for dynamic data.
 
 ### Metadata discovery and caching
@@ -167,7 +168,7 @@ It shells out to Git for completion data, including:
 - `git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags`
 - `git rev-parse --short HEAD`
 - `git remote`
-- `git ls-files`
+- `git ls-files` (C-quoted names are decoded by `$readGitPath`)
 - `git ls-files --others --exclude-standard`
 - `git worktree list --porcelain`
 - `git symbolic-ref --short HEAD`

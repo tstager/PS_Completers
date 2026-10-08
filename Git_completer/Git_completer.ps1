@@ -6,7 +6,7 @@
 function Complete-GitNative {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command git -ErrorAction Ignore)) {
         return
     }
 
@@ -19,17 +19,22 @@ function Complete-GitNative {
     $isPastCommandEnd = $relativeCursor -gt $line.Length
     $boundedCursor = [Math]::Min([Math]::Max($relativeCursor, 0), $line.Length)
 
-    $tokens = @(
-        [regex]::Matches($line, '\S+') |
-            Where-Object { $_.Index -lt $boundedCursor } |
-            ForEach-Object { $_.Value }
+    # A quoted run is part of its word, so "-C 'my repo'" stays one token. PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    $tokenMatches = @(
+        [regex]::Matches($line, '(?:[''\u2018-\u201B][^''\u2018-\u201B]*(?:[''\u2018-\u201B]|$)|["\u201C-\u201E][^"\u201C-\u201E]*(?:["\u201C-\u201E]|$)|[^\s''"\u2018-\u201E])+') |
+            Where-Object { $_.Index -lt $boundedCursor }
     )
+    $tokens = @($tokenMatches | ForEach-Object { $_.Value })
 
     if ($tokens.Count -eq 0) {
         return
     }
 
-    $hasTrailingSpace = $isPastCommandEnd -or ($line.Substring(0, $boundedCursor) -match '\s$')
+    # The cursor starts a new word when the last token ends before it; a space typed inside an
+    # open quote belongs to the word under the cursor.
+    $lastToken = $tokenMatches[-1]
+    $hasTrailingSpace = $isPastCommandEnd -or ($lastToken.Index + $lastToken.Length -lt $boundedCursor)
     if ($hasTrailingSpace) {
         $argIndex = $tokens.Count - 1
     }
@@ -82,6 +87,59 @@ function Complete-GitNative {
         }
     }
 
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    $readTypedWord = {
+        param([string]$value)
+
+        if ($value -notmatch '^[''"\u2018-\u201E]') {
+            return $value
+        }
+
+        $wordTokens = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($value, [ref]$wordTokens, [ref]$null)
+        $wordTokens[0].Value
+    }
+
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes, and a bare word
+    # starting with a dash (- or U+2013-U+2015) as a parameter.
+    $quoteArgumentValue = {
+        param([string]$value, [string]$quoteChar = '')
+
+        if ([string]::IsNullOrEmpty($value)) {
+            return $value
+        }
+
+        if (-not $quoteChar) {
+            if ($value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $value -notmatch '^[-\u2013-\u2015]') {
+                return $value
+            }
+
+            $quoteChar = "'"
+        }
+
+        if ($quoteChar -match '^[''\u2018-\u201B]$') {
+            return $quoteChar + ($value -replace '([''\u2018-\u201B])', '$1$1') + $quoteChar
+        }
+
+        $quoteChar + ($value -replace '([`"$\u201C-\u201E])', '`$1') + $quoteChar
+    }
+
+    # The word under the cursor as typed. For "--file='ti" the engine hands a native completer
+    # '--file=ti', so a quote typed after an attached option's '=' is only seen here.
+    $currentWordText = ''
+    foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $extent.EndOffset) {
+            $currentWordText = $extent.Text.Substring(0, $cursorPosition - $extent.StartOffset)
+        }
+    }
+
+    # The typed text after an attached option's '=', opening quote included.
+    $attachedValueText = $currentWordText.Substring($currentWordText.IndexOf('=') + 1)
+
     $completeFileSystemPaths = {
         param(
             [string]$pathPrefix,
@@ -89,33 +147,69 @@ function Complete-GitNative {
             [switch]$DirectoriesOnly
         )
 
-        [System.Management.Automation.CompletionCompleters]::CompleteFilename($pathPrefix) |
+        $quoteChar = if ($pathPrefix -match '^[''"\u2018-\u201E]') { $pathPrefix.Substring(0, 1) } else { '' }
+        $typedPath = & $readTypedWord $pathPrefix
+
+        [System.Management.Automation.CompletionCompleters]::CompleteFilename($typedPath) |
             ForEach-Object {
-                # CompleteFilename quotes a path that needs it; the quotes have to come off before
-                # the option prefix is attached, or they land in the middle of the token and git
-                # receives a literal quote inside the path.
-                $rawPath = $_.CompletionText.Trim([char[]]@([char]39, [char]34))
+                # CompleteFilename quotes a path that needs it and wildcard-escapes it inside the
+                # quotes ('.\tick``x.txt'); the parser unwraps the quotes and Unescape undoes the
+                # escaping, so the plain path is quoted once, after any '--option=' prefix.
+                $rawPath = $_.CompletionText
+                if ($rawPath -match '^[''"\u2018-\u201E]') {
+                    $pathAst = [System.Management.Automation.Language.Parser]::ParseInput($rawPath, [ref]$null, [ref]$null)
+                    $rawPath = $pathAst.Find({ $args[0] -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true).Value
+                }
+
+                $rawPath = [System.Management.Automation.WildcardPattern]::Unescape($rawPath)
+
+                # CompleteFilename turns a typed './' into '.\' on Windows; keep the user's separator.
+                if ($typedPath -match '^\.{1,2}/' -and [System.IO.Path]::DirectorySeparatorChar -eq '\') {
+                    $rawPath = $rawPath.Replace('\', '/')
+                }
 
                 if ($DirectoriesOnly -and -not (Test-Path -LiteralPath $rawPath -PathType Container)) {
                     return
                 }
 
-                if ([string]::IsNullOrEmpty($completionPrefix)) {
-                    $_
-                    return
-                }
-
-                $completionText = "$completionPrefix$rawPath"
-                if ($completionText -match '\s') {
-                    $completionText = "'" + $completionText.Replace("'", "''") + "'"
-                }
-
                 [System.Management.Automation.CompletionResult]::new(
-                    $completionText,
-                    $completionText,
-                    'ParameterValue',
-                    $completionText
+                    $completionPrefix + (& $quoteArgumentValue $rawPath $quoteChar),
+                    $_.ListItemText,
+                    $_.ResultType,
+                    $_.ToolTip
                 )
+            }
+    }
+
+    # Repository paths (git ls-files, worktrees) offered for the word under the cursor, matched
+    # on its unquoted value and quoted in the style the user typed. git lists paths without a
+    # leading '.\' or './', so a typed one is matched past and kept; a name starting with a dash
+    # gets one, as PowerShell's own file completion does, so neither PowerShell nor git reads it
+    # as an option.
+    $completePathList = {
+        param([string[]]$paths)
+
+        $quoteChar = if ($currentWordText -match '^[''"\u2018-\u201E]') { $currentWordText.Substring(0, 1) } else { '' }
+        $typedPath = & $readTypedWord $currentWordText
+        $dotPrefix = if ($typedPath -match '^\.[\\/]') { $typedPath.Substring(0, 2) } else { '' }
+        $pattern = [System.Management.Automation.WildcardPattern]::Escape($typedPath.Substring($dotPrefix.Length)) + '*'
+
+        $paths |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique -CaseSensitive |
+            Where-Object { $_ -like $pattern } |
+            ForEach-Object {
+                $path = if ($dotPrefix) {
+                    $dotPrefix + $_
+                }
+                elseif ($_ -match '^[-\u2013-\u2015]') {
+                    '.' + [System.IO.Path]::DirectorySeparatorChar + $_
+                }
+                else {
+                    $_
+                }
+
+                [System.Management.Automation.CompletionResult]::new((& $quoteArgumentValue $path $quoteChar), $_, 'ParameterValue', $_)
             }
     }
 
@@ -157,11 +251,32 @@ function Complete-GitNative {
         @(git @gitRepoArgs remote 2>$null)
     }
 
+    # git C-quotes a path that holds non-ASCII or control bytes ("it\342\200\231s.txt"). Decoding
+    # that ASCII form here keeps the names independent of the console's output encoding, which
+    # PowerShell would otherwise use to read raw UTF-8 names.
+    $readGitPath = {
+        param([string]$path)
+
+        if ($path -notmatch '^"(?<body>.*)"$') {
+            return $path
+        }
+
+        $escapes = @{ 'a' = 7; 'b' = 8; 't' = 9; 'n' = 10; 'v' = 11; 'f' = 12; 'r' = 13 }
+        $bytes = foreach ($part in [regex]::Matches($matches['body'], '\\[0-7]{3}|\\.|.')) {
+            $text = $part.Value
+            if ($text.Length -eq 1) { [byte][char]$text }
+            elseif ($text.Length -eq 4) { [Convert]::ToByte($text.Substring(1), 8) }
+            elseif ($escapes.ContainsKey([string]$text[1])) { [byte]$escapes[[string]$text[1]] }
+            else { [byte]$text[1] }
+        }
+        [System.Text.Encoding]::UTF8.GetString([byte[]]@($bytes))
+    }
+
     $getFiles = {
         @(
             git @gitRepoArgs ls-files 2>$null
             git @gitRepoArgs ls-files --others --exclude-standard 2>$null
-        ) | Where-Object { $_ }
+        ) | Where-Object { $_ } | ForEach-Object { & $readGitPath $_ }
     }
 
     $getWorktreePaths = {
@@ -302,7 +417,7 @@ function Complete-GitNative {
         }
         $metadataCache['<completion-script>'] = $data
 
-        $gitCommand = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
+        $gitCommand = Get-Command git -ErrorAction Ignore | Select-Object -First 1
         if (-not $gitCommand -or [string]::IsNullOrWhiteSpace($gitCommand.Source)) {
             return $data
         }
@@ -801,7 +916,7 @@ function Complete-GitNative {
             if ($pendingGlobalValueOption) {
                 if ($globalGitDirectoryFlags -ccontains $pendingGlobalValueOption) {
                     $gitRepoArgs.Add($pendingGlobalValueOption)
-                    $gitRepoArgs.Add($argument.Trim([char[]]@([char]39, [char]34)))
+                    $gitRepoArgs.Add((& $readTypedWord $argument))
                 }
 
                 $pendingGlobalValueOption = $null
@@ -813,7 +928,7 @@ function Complete-GitNative {
                     $pendingGlobalValueOption = $argument
                 }
                 elseif ($commandPath.Count -eq 0 -and $argument -match '^(?<option>--git-dir|--work-tree)=(?<value>.+)$') {
-                    $gitRepoArgs.Add("$($matches['option'])=$($matches['value'].Trim([char[]]@([char]39, [char]34)))")
+                    $gitRepoArgs.Add("$($matches['option'])=$(& $readTypedWord $matches['value'])")
                 }
 
                 continue
@@ -1016,7 +1131,7 @@ function Complete-GitNative {
         $hooksPath = git @gitRepoArgs rev-parse --path-format=absolute --git-path hooks 2>$null
         if (-not [string]::IsNullOrWhiteSpace($hooksPath)) {
             $repoHookNames = @(
-                Get-ChildItem -Path $hooksPath -File -ErrorAction SilentlyContinue |
+                Get-ChildItem -LiteralPath $hooksPath -File -ErrorAction Ignore |
                     Where-Object { $_.Name -notlike '*.sample' } |
                     ForEach-Object { $_.BaseName }
             )
@@ -1297,7 +1412,7 @@ function Complete-GitNative {
 
     if ($commandContext.PendingGlobalValueOption) {
         if ($globalGitDirectoryFlags -contains $commandContext.PendingGlobalValueOption) {
-            & $completeFileSystemPaths $wordToComplete '' -DirectoriesOnly
+            & $completeFileSystemPaths $currentWordText '' -DirectoriesOnly
         }
 
         return
@@ -1320,14 +1435,14 @@ function Complete-GitNative {
             '^(?<option>--template|--separate-git-dir|--object-format|--ref-format|--initial-branch|--shared)=(?<value>.*)$'
         )
         if ($attachedInitValueMatch.Success) {
-            & $completeInitOptionValues $attachedInitValueMatch.Groups['option'].Value $attachedInitValueMatch.Groups['value'].Value -Attached
+            & $completeInitOptionValues $attachedInitValueMatch.Groups['option'].Value $attachedValueText -Attached
             return
         }
 
         if ($argsAfterPath.Count -gt 0) {
             $previousInitArgument = $argsAfterPath[-1]
             if ($previousInitArgument -in @('--template', '--separate-git-dir', '--object-format', '--ref-format', '-b', '--initial-branch', '--shared')) {
-                & $completeInitOptionValues $previousInitArgument $wordToComplete
+                & $completeInitOptionValues $previousInitArgument $currentWordText
                 return
             }
         }
@@ -1339,7 +1454,7 @@ function Complete-GitNative {
             '^(?<option>--file)=(?<value>.*)$'
         )
         if ($attachedConfigFileMatch.Success) {
-            & $completeFileSystemPaths $attachedConfigFileMatch.Groups['value'].Value '--file='
+            & $completeFileSystemPaths $attachedValueText '--file='
             return
         }
     }
@@ -1350,7 +1465,6 @@ function Complete-GitNative {
     )
     if ($attachedOptionValueMatch.Success) {
         $attachedOption = $attachedOptionValueMatch.Groups['option'].Value
-        $attachedValue = $attachedOptionValueMatch.Groups['value'].Value
 
         if ($completionScriptFunctions.ContainsKey($commandText) -and
             $completionScriptValueVariables.ContainsKey($attachedOption)) {
@@ -1367,7 +1481,7 @@ function Complete-GitNative {
         }
 
         if ($optionSpecs.ContainsKey($attachedOption)) {
-            & $completeOptionSpecValue $optionSpecs[$attachedOption] $attachedValue "$attachedOption=" $attachedOption
+            & $completeOptionSpecValue $optionSpecs[$attachedOption] $attachedValueText "$attachedOption=" $attachedOption
             return
         }
     }
@@ -1401,7 +1515,7 @@ function Complete-GitNative {
         }
 
         if ($previousOption.StartsWith('-') -and $optionSpecs.ContainsKey($previousOption)) {
-            & $completeOptionSpecValue $optionSpecs[$previousOption] $wordToComplete '' $previousOption
+            & $completeOptionSpecValue $optionSpecs[$previousOption] $currentWordText '' $previousOption
             return
         }
     }
@@ -1410,10 +1524,10 @@ function Complete-GitNative {
     # untracked files for the index-editing commands, the filesystem for everything else.
     if ($argsAfterPath -contains '--') {
         if ($subcommand -in @('add', 'restore', 'rm', 'mv')) {
-            & $completeList (& $getFiles)
+            & $completePathList (& $getFiles)
         }
         else {
-            & $completeFileSystemPaths $wordToComplete
+            & $completeFileSystemPaths $currentWordText
         }
 
         return
@@ -1428,7 +1542,7 @@ function Complete-GitNative {
         $configAnalysis = & $analyzeArguments $argsAfterPath @('-f', '--file', '--blob', '--type', '--default', '--comment')
 
         if ($configAnalysis.PendingValueOption -in @('-f', '--file')) {
-            & $completeFileSystemPaths $wordToComplete
+            & $completeFileSystemPaths $currentWordText
             return
         }
 
@@ -1513,7 +1627,7 @@ function Complete-GitNative {
             return
         }
         { $_ -in @('worktree lock', 'worktree move', 'worktree remove', 'worktree repair', 'worktree unlock') } {
-            & $completeList (& $getWorktreePaths)
+            & $completePathList (& $getWorktreePaths)
             return
         }
         'worktree list' {
@@ -1619,7 +1733,7 @@ function Complete-GitNative {
             return
         }
         { $_ -in @('add', 'restore', 'rm', 'mv') } {
-            & $completeList (& $getFiles)
+            & $completePathList (& $getFiles)
             return
         }
         'branch' {
