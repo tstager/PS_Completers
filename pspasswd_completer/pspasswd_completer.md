@@ -45,6 +45,6 @@ Register-ArgumentCompleter -Native -CommandName @('pspasswd', 'pspasswd.exe') -S
 
 ## Notes
 
-- `@file` completion is local-only and path-aware.
-- Domain-account syntax is represented as placeholders only; no directory lookups are attempted.
+- `@file` completion is local-only and path-aware. A name with spaces or PowerShell metacharacters is quoted as one argument (`'@sp ace.txt'`), keeping the quote style already typed, including typographic quotes. After a bare `@` that the parser split from its path (`@.\`), candidates are `('@.\path')` so the `@` stays valid.
+- Domain-account syntax is represented as placeholders only; no directory lookups are attempted. A placeholder offered after a typed opening quote stays inside that quote (`'Administrator'`).
 

@@ -862,7 +862,7 @@
         @{
             Path    = 'pspasswd_completer/pspasswd_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:BA9D708D8B04A318530ABF4DB4FC061B5CC248AC31D72B8E16CC9D7247A27F68'
+            Hash    = 'SHA256:EBE067B49477553F06AF5B65AF37BDA47A99574B53FF97B2AFEB695FD01654DF'
             Targets = @(
                 @{ CommandName = 'pspasswd'; Native = $true }
                 @{ CommandName = 'pspasswd.exe'; Native = $true }
