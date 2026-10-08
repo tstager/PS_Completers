@@ -372,7 +372,7 @@
         @{
             Path    = 'fd_completer/fd_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:183ED4F82C6850F3F11C441A895185AF781C84CAA32E51846615DDFC7A9BADE4'
+            Hash    = 'SHA256:B8A3867E00D83C5ED977D4D3F005924FE34E99EB929070C428F8A613E88266A0'
             Targets = @(
                 @{ CommandName = 'fd'; Native = $true }
                 @{ CommandName = 'fd.exe'; Native = $true }

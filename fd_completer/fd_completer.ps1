@@ -382,32 +382,49 @@ function Initialize-FdCompletionCatalog {
     $catalog.Initialized = $true
 }
 
-function Remove-FdOuterQuotes {
+function ConvertFrom-FdTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic, at the start or
+    # inside, as in .\'sp) is read by the PowerShell tokenizer, which drops the quotes and
+    # undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-FdQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-FdQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        # A bare word led by a dash is read as a parameter (-a.txt splits into -a and .txt).
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Test-FdPathLikeInput {
@@ -417,7 +434,7 @@ function Test-FdPathLikeInput {
         return $false
     }
 
-    (Remove-FdOuterQuotes -Value $Value) -match '^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:|\\\\)'
+    (ConvertFrom-FdTypedWord -Value $Value) -match '^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:|\\\\)'
 }
 
 function Get-FdCurrentToken {
@@ -551,34 +568,39 @@ function Get-FdPathCompletions {
         [switch]$DirectoriesOnly
     )
 
-    $typedValue = Remove-FdOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $typedValue = ConvertFrom-FdTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '[''"\u2018-\u201E]') { $Matches[0] } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($typedValue)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-        $parent = $typedValue
-        $leaf = ''
+    # The typed directory part (.\, ./, ..\, C:, dir/) is kept exactly as typed.
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/'))
+    $prefix = if ($separatorIndex -ge 0) {
+        $typedValue.Substring(0, $separatorIndex + 1)
+    } elseif ($typedValue -match '^[A-Za-z]:') {
+        $typedValue.Substring(0, 2)
     } else {
-        $candidateParent = Split-Path -Path $typedValue -Parent
-        if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-            $parent = '.'
-            $leaf = $typedValue
-        } else {
-            $parent = $candidateParent
-            $leaf = Split-Path -Path $typedValue -Leaf
-        }
+        ''
+    }
+    $leaf = $typedValue.Substring($prefix.Length)
+    $parent = if ($prefix) { $prefix } else { '.' }
+    $directorySuffix = if ($prefix.EndsWith('/')) { '/' } else { '\' }
+
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
+        return @()
     }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') -and (-not $DirectoriesOnly -or $_.PSIsContainer) } | Sort-Object -Property Name)) {
-        $pathText = if ($parent -eq '.') { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
-        if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
-            $pathText += '\'
+    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') -and (-not $DirectoriesOnly -or $_.PSIsContainer) } | Sort-Object -Property Name)) {
+        $pathText = $prefix + $item.Name
+        if (-not $prefix -and $item.Name -match '^[-\u2013-\u2015]') {
+            # Like PowerShell's own file completion: .\-a.txt, never a bare parameter-like word.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
-        [void]$results.Add((New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote) -ToolTip $item.FullName))
+        if ($item.PSIsContainer) {
+            $pathText += $directorySuffix
+        }
+
+        [void]$results.Add((New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $pathText -QuoteChar $quoteChar) -ListItemText $pathText -ToolTip $item.FullName))
     }
 
     @($results.ToArray())
@@ -587,10 +609,13 @@ function Get-FdPathCompletions {
 function Get-FdPlaceholderCompletions {
     param([string]$CurrentWord)
 
+    # A bare brace token is a script block to PowerShell, so the placeholders are quoted.
+    $typedValue = ConvertFrom-FdTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     @(
         foreach ($placeholder in Get-FdPlaceholderValues) {
-            if ($placeholder.Text -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
-                New-FdCompletionResult -CompletionText $placeholder.Text -ToolTip $placeholder.Tip
+            if ($placeholder.Text -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
+                New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $placeholder.Text -QuoteChar $quoteChar) -ListItemText $placeholder.Text -ToolTip $placeholder.Tip
             }
         }
     )
@@ -608,7 +633,7 @@ function Get-FdValueCompletions {
         $results = @(Get-FdPathCompletions -InputPath $CurrentWord -DirectoriesOnly:($kind -eq 'Directory'))
         if ($results.Count -eq 0) {
             $placeholder = if ($kind -eq 'Directory') { '<dir>' } else { '<path>' }
-            return @(New-FdCompletionResult -CompletionText $placeholder -ToolTip 'Filesystem path value.')
+            return @(New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $placeholder) -ListItemText $placeholder -ToolTip 'Filesystem path value.')
         }
 
         return $results
@@ -638,10 +663,12 @@ function Get-FdValueCompletions {
         return @()
     }
 
+    $typedValue = ConvertFrom-FdTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     @(
         foreach ($value in $values.Values) {
-            if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($CurrentWord) + '*')) {
-                New-FdCompletionResult -CompletionText $value -ToolTip $values.Tip
+            if ($value -like ([System.Management.Automation.WildcardPattern]::Escape($typedValue) + '*')) {
+                New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $value -QuoteChar $quoteChar) -ListItemText $value -ToolTip $values.Tip
             }
         }
     )
@@ -696,32 +723,77 @@ function Get-FdPositionalCount {
     $count
 }
 
-function Complete-Fd {
+function Get-FdArgumentValue {
+    # The value a native command receives for $Text written as one argument: a string's value,
+    # or an unquoted comma list joined with commas. Anything else yields $null.
+    param([string]$Text)
+
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput("fd $Text", [ref]$null, [ref]$null)
+    $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    $elements = @($command.CommandElements | Select-Object -Skip 1)
+    if ($elements.Count -ne 1) {
+        return $null
+    }
+
+    $element = $elements[0]
+    if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        return $element.Value
+    }
+
+    if ($element -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+        $parts = @($element.Elements)
+        if (@($parts | Where-Object { $_ -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $_.StringConstantType -ne 'BareWord' }).Count -eq 0) {
+            return (($parts | ForEach-Object Value) -join ',')
+        }
+    }
+
+    $null
+}
+
+function Select-FdSegmentCompletion {
+    # Inside an unquoted comma list PowerShell replaces only the segment after the last comma
+    # and hands fd the list joined with commas. A candidate is kept when its value extends the
+    # typed list and the rest stays bare, so the accepted line still carries that value.
     param(
-        [string]$WordToComplete,
-        [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
+        [object[]]$Results,
+        [string]$SegmentPrefix
+    )
+
+    foreach ($item in $Results) {
+        $value = Get-FdArgumentValue -Text $item.CompletionText
+        if ($null -eq $value -or -not $value.StartsWith($SegmentPrefix, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+
+        $rest = $value.Substring($SegmentPrefix.Length)
+        $unsafe = @($rest.Split(',') | Where-Object { -not $_ -or (ConvertTo-FdQuotedValue -Value $_) -cne $_ })
+        if ($unsafe.Count -gt 0) {
+            continue
+        }
+
+        New-FdCompletionResult -CompletionText $rest -ListItemText $item.ListItemText -ResultType $item.ResultType -ToolTip $item.ToolTip
+    }
+}
+
+function Get-FdWordCompletion {
+    param(
+        [string]$CurrentWord,
+        [string[]]$TokensBeforeCurrent
     )
 
     Initialize-FdCompletionCatalog
     $catalog = Get-FdCompletionCatalog
 
-    $currentWord = if ($null -eq $WordToComplete) {
-        Get-FdCurrentToken -Line $CommandAst.ToString() -CursorPosition $CursorPosition -Fallback $WordToComplete
-    } else {
-        $WordToComplete
-    }
-
-    $tokensBeforeCurrent = @(Get-FdArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
-
     # -x/-X: the next token is a program name, the rest of the line its arguments.
     $execContext = Get-FdExecContext -TokensBeforeCurrent $tokensBeforeCurrent
     if ($execContext -eq 'Command') {
+        $typedValue = ConvertFrom-FdTypedWord -Value $currentWord
+        $quoteChar = if ($currentWord -match '^[''"\u2018-\u201E]') { $currentWord.Substring(0, 1) } else { '' }
         return @(
             Get-FdPlaceholderCompletions -CurrentWord $currentWord
             foreach ($name in Get-FdCommandNames) {
-                if ($name.StartsWith($currentWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    New-FdCompletionResult -CompletionText $name -ResultType 'Command' -ToolTip 'Command to execute for each search result.'
+                if ($name.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value $name -QuoteChar $quoteChar) -ListItemText $name -ResultType 'Command' -ToolTip 'Command to execute for each search result.'
                 }
             }
         )
@@ -769,7 +841,7 @@ function Complete-Fd {
     if ($positionalCount -eq 0) {
         $results = New-Object System.Collections.Generic.List[object]
         if ([string]::IsNullOrWhiteSpace($currentWord)) {
-            [void]$results.Add((New-FdCompletionResult -CompletionText '<pattern>' -ToolTip 'Search pattern (regex by default, glob with --glob).'))
+            [void]$results.Add((New-FdCompletionResult -CompletionText (ConvertTo-FdQuotedValue -Value '<pattern>') -ListItemText '<pattern>' -ToolTip 'Search pattern (regex by default, glob with --glob).'))
         }
 
         foreach ($item in @(Get-FdOptionCompletions -CurrentWord $currentWord)) {
@@ -784,6 +856,57 @@ function Complete-Fd {
     }
 
     @()
+}
+
+function Complete-Fd {
+    param(
+        [string]$WordToComplete,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    $currentWord = if ($null -eq $WordToComplete) {
+        Get-FdCurrentToken -Line $CommandAst.ToString() -CursorPosition $CursorPosition -Fallback $WordToComplete
+    } else {
+        $WordToComplete
+    }
+
+    # PowerShell hands a quoted word over re-quoted ("'it" arrives as "'it'") and drops the
+    # quote inside an attached "--opt='it", while it replaces the whole word as typed; so the
+    # word is read from the element under the cursor. An unquoted comma list ('a,b', or 'a,'
+    # which parses as an error expression) is the exception: PowerShell replaces only the
+    # segment after the last comma, so the whole element is completed and the candidates are
+    # cut back to that segment.
+    $segmentPrefix = ''
+    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+        Select-Object -First 1
+    if ($cursorElement) {
+        $elementText = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
+        $isList = $cursorElement -is [System.Management.Automation.Language.ArrayLiteralAst] -or
+            $cursorElement -is [System.Management.Automation.Language.ErrorExpressionAst]
+        if (-not $isList) {
+            $currentWord = $elementText
+        } elseif ($elementText.EndsWith(',' + $WordToComplete, [System.StringComparison]::Ordinal)) {
+            $currentWord = $elementText
+            $segmentPrefix = $elementText.Substring(0, $elementText.Length - $WordToComplete.Length)
+        }
+    }
+
+    $tokensBeforeCurrent = @(Get-FdArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
+    $results = @(Get-FdWordCompletion -CurrentWord $currentWord -TokensBeforeCurrent $tokensBeforeCurrent)
+    if (-not $segmentPrefix) {
+        return $results
+    }
+
+    $segmentResults = @(Select-FdSegmentCompletion -Results $results -SegmentPrefix $segmentPrefix)
+    if ($segmentResults.Count -eq 0 -and $WordToComplete) {
+        # Echo the typed segment so PowerShell's filename fallback adds no candidate that would
+        # break the list; an empty segment cannot be echoed (PowerShell rejects an empty text).
+        return @(New-FdCompletionResult -CompletionText $WordToComplete -ToolTip 'Nothing continues this comma list; quote the whole value to complete a name that contains a comma.')
+    }
+
+    $segmentResults
 }
 }
 

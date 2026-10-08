@@ -33,6 +33,7 @@ Register-ArgumentCompleter -Native -CommandName @('fd', 'fd.exe') -ScriptBlock {
 - `-x`/`--exec` and `-X`/`--exec-batch`: the next word is a program name (application names on `PATH`, cached per `PATH` value, plus the placeholders); every later word up to a `\;` terminator is the command's tail and offers the placeholders plus path completion instead of fd's options.
 - `--extension`, `--size`, `--changed-within`, and `--changed-before` offer conservative example values and placeholders.
 - After the first positional pattern has been supplied, subsequent positional arguments complete as search paths.
+- Path candidates stay bare only when safe; a name with whitespace or a PowerShell metacharacter (`$`, `&`, `;`, `,`, `(`, `{`, a backtick, any quote) is quoted, in the quote the user typed (ASCII or typographic, single by default), so the accepted word is one literal argument. A name led by a dash is offered as `.\-name` so PowerShell does not read it as a parameter, and a typed `.\`, `./`, or `..\` prefix is kept as typed. The attached form keeps the option outside the quotes (`--ignore-file='a b.txt'`). Placeholders (`'{}'`, `'<pattern>'`) and program names with spaces are quoted the same way. Inside an unquoted comma list only names that keep the rest of the list bare are offered.
 
 ## Dependencies or external command expectations
 
