@@ -731,6 +731,75 @@ function New-QwenCompletion {
     )
 }
 
+# The typed word under the cursor. PowerShell hands a quoted word over re-quoted
+# ('ti arrives as 'ti') and drops the quote inside an attached --flag='ti, so the
+# word is read from the element the cursor is in: all of it, because PowerShell
+# replaces the whole element, including any text after the cursor.
+function Get-QwenCursorWord {
+    param($CommandAst, [int]$CursorPosition)
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text
+        }
+    }
+    ''
+}
+
+# The value of a typed word. A word opened with a quote (ASCII or typographic) is
+# read by the PowerShell tokenizer, which drops the quotes and undoes that quote
+# style's escapes.
+function ConvertFrom-QwenTypedWord {
+    param([string]$Value)
+    if ($Value -notmatch '^[''"\u2018-\u201E]') { return $Value }
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+# Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+# otherwise in the quote the user typed (single by default). PowerShell reads ' and
+# U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+function ConvertTo-QwenQuotedValue {
+    param([string]$Value, [string]$QuoteChar = '')
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+        $QuoteChar = "'"
+    }
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+# File-system candidates for a typed word, quoted once in the style the user typed.
+# CompleteFilename quotes and wildcard-escapes its results (tick``x.txt), so each is
+# unwrapped by the parser and unescaped first. CompleteFilename strips a leading quote
+# from its input, so a value that starts with one is handed over single-quoted. A
+# typed ./ or ../ keeps its separator. $Prefix is an attached '--flag=' part.
+function Get-QwenPathCompletions {
+    param([string]$TypedWord, [string]$Prefix = '')
+    $quoteChar = if ($TypedWord -match '^[''"\u2018-\u201E]') { $TypedWord.Substring(0, 1) } else { '' }
+    $value = ConvertFrom-QwenTypedWord -Value $TypedWord
+    $search = if ($value -match '^[''"\u2018-\u201E]') { "'" + ($value -replace '([''\u2018-\u201B])', '$1$1') } else { $value }
+    foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($search)) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) { $path = $constant.Value }
+        }
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($value -match '^\.{1,2}/') { $path = $path -replace '^(\.{1,2})\\', '$1/' }
+        New-QwenCompletion ($Prefix + (ConvertTo-QwenQuotedValue -Value $path -QuoteChar $quoteChar)) `
+            -ListItemText $item.ListItemText `
+            -ResultType   $item.ResultType `
+            -Tooltip      $item.ToolTip
+    }
+}
+
 # Context keys for the current command path, deepest first ('board.ask', 'board');
 # empty at the root.
 function Get-QwenContextChain {
@@ -1004,13 +1073,8 @@ function Complete-QwenNative {
         # Path / dir flags with inline syntax (global flags only).
         if (-not (Get-QwenContextFlagKind -FlagName $resolved -ContextKeys $ctxKeys) -and
             ($script:QwenPathFlags -contains $resolved -or $script:QwenDirFlags -contains $resolved)) {
-            [System.Management.Automation.CompletionCompleters]::CompleteFilename($valPfx) |
-                ForEach-Object {
-                    New-QwenCompletion "$flagPart=$($_.CompletionText)" `
-                        -ListItemText $_.ListItemText `
-                        -ResultType   $_.ResultType `
-                        -Tooltip      $_.ToolTip
-                }
+            $typedWord = Get-QwenCursorWord -CommandAst $CommandAst -CursorPosition $CursorPosition
+            Get-QwenPathCompletions -TypedWord $typedWord.Substring($typedWord.IndexOf('=') + 1) -Prefix "$flagPart="
         }
         return
     }
@@ -1033,7 +1097,7 @@ function Complete-QwenNative {
         # Path / dir completion.
         if ($isGlobal -and ($script:QwenPathFlags -contains $currentFlag -or
                             $script:QwenDirFlags  -contains $currentFlag)) {
-            [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)
+            Get-QwenPathCompletions -TypedWord (Get-QwenCursorWord -CommandAst $CommandAst -CursorPosition $CursorPosition)
             return
         }
 
@@ -1106,7 +1170,7 @@ function Complete-QwenNative {
             }
         }
         if ($script:QwenPathPositionalL2.Contains($l3k) -and $positionalCount -eq 0) {
-            [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)
+            Get-QwenPathCompletions -TypedWord (Get-QwenCursorWord -CommandAst $CommandAst -CursorPosition $CursorPosition)
         }
 
         $placeholder = Get-QwenPositionalPlaceholder -ContextKey $l3k -PositionIndex $positionalCount
