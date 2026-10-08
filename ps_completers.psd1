@@ -1260,7 +1260,7 @@
         @{
             Path    = 'tac_completer/tac_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:50A1E2F2C823665042D07B48FD0341EC37A31E72AA6B6206F778E4B125B8C2AE'
+            Hash    = 'SHA256:589B170DBDCEA75C2D3BA05383A85B65A5648D7930590A8F6E1F6E56A393EC30'
             Targets = @(
                 @{ CommandName = 'tac'; Native = $true }
                 @{ CommandName = 'tac.exe'; Native = $true }

@@ -113,7 +113,7 @@ function ConvertTo-TacQuotedValue {
         return '"' + ($Value -replace '([`$"\u201C-\u201E])', '`$1') + '"'
     }
 
-    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#]') {
+    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$\u2018-\u201E]' -or $Value -match '^[@#\-\u2013-\u2015]') {
         return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
     }
 
@@ -186,11 +186,19 @@ function Get-TacPathCompletions {
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Keep the directory part exactly as typed (.\, ./, ..\ and the separator style).
+    $typedDir = if ($cleanInput -match '^(?<dir>.*[\\/])') { $Matches['dir'] } else { '' }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = if ($typedDir) {
+            $typedDir + $item.Name
+        } elseif ($parent -eq '.') {
+            # A bare leading dash would be parsed as a parameter; anchor it like PowerShell does.
+            if ($item.Name -match '^[-\u2013-\u2015]') {
+                '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+            } else {
+                $item.Name
+            }
         } else {
             Join-Path -Path $parent -ChildPath $item.Name
         }
