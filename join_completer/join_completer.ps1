@@ -12,7 +12,7 @@ function Get-JoinCompletionOptions {
     $fallbackOptions = @('-a', '-e', '-i', '--ignore-case', '-j', '-o', '-t', '-v', '-1', '-2', '--check-order', '--nocheck-order', '--header', '-z', '--zero-terminated', '-h', '--help', '-V', '--version')
     $commandCandidates = @('join.exe', 'join')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -91,32 +91,47 @@ function New-JoinCompletionResult {
     )
 }
 
-function Remove-JoinOuterQuotes {
+function ConvertFrom-JoinTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-JoinQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-JoinQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-JoinCurrentToken {
@@ -136,8 +151,9 @@ function Get-JoinCurrentToken {
         return ''
     }
 
-    # An unterminated quote ('"my file') is one token, matching what PowerShell hands over.
-    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
+    # An unterminated quote ('"my file') is one token, matching what PowerShell hands over;
+    # doubled quotes, backtick escapes and the typographic quotes stay inside it.
+    $parts = @([regex]::Matches($prefix, '["\u201C-\u201E](?:[^"\u201C-\u201E`]|`[\s\S]?|["\u201C-\u201E]{2})*["\u201C-\u201E]?|[''\u2018-\u201B](?:[^''\u2018-\u201B]|[''\u2018-\u201B]{2})*[''\u2018-\u201B]?|\S+') | ForEach-Object { $_.Value })
     if ($parts.Count -gt 0) {
         return $parts[-1]
     }
@@ -148,45 +164,33 @@ function Get-JoinCurrentToken {
 function Get-JoinPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-JoinOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-JoinTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The directory part is kept exactly as typed ('.\', '../', 'C:'), so no typed text is lost.
+    $directoryText = if ($cleanInput -match '^(?<dir>.*[\\/]|[A-Za-z]:)') { $Matches['dir'] } else { '' }
+    $leaf = $cleanInput.Substring($directoryText.Length)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+        if (-not $directoryText -and -not $quoteChar -and $pathText -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash is read by PowerShell as a parameter name.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-JoinQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-JoinQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-JoinCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -262,14 +266,8 @@ function Get-JoinOptionValueCompletions {
     }
 
     # A quoted or half-quoted value is matched on its bare text and re-quoted the same way.
-    $quote = ''
-    if ($prefix.Length -gt 0 -and ($prefix[0] -eq '"' -or $prefix[0] -eq "'")) {
-        $quote = [string]$prefix[0]
-        $prefix = $prefix.Substring(1)
-        if ($prefix.EndsWith($quote)) {
-            $prefix = $prefix.Substring(0, $prefix.Length - 1)
-        }
-    }
+    $quote = if ($prefix -match '^[''"\u2018-\u201E]') { $prefix.Substring(0, 1) } else { '' }
+    $prefix = ConvertFrom-JoinTypedWord -Value $prefix
 
     @(
         foreach ($entry in $table[$option]) {
@@ -286,10 +284,11 @@ function Get-JoinOptionValueCompletions {
             $display = if ($entry.ContainsKey('Display')) { $entry.Display } else { $entry.Text }
             $completion = if ($entry.ContainsKey('Quoted')) {
                 $entry.Quoted
-            } elseif ($quote) {
+            } elseif ($entry.Text -match '^<.*>$') {
                 $quote + $entry.Text + $quote
             } else {
-                $entry.Text
+                # Separators such as ';', ',' and '|' end or split the argument when left bare.
+                ConvertTo-JoinQuotedValue -Value $entry.Text -QuoteChar $quote
             }
 
             New-JoinCompletionResult -CompletionText ($attached + $completion) -ListItemText $display -ResultType 'ParameterValue' -ToolTip $entry.Tip

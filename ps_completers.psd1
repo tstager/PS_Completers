@@ -519,7 +519,7 @@
         @{
             Path    = 'join_completer/join_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:92AEE03CBAE51985EF55602D4D67F2C6D9D70AEA6B0DFEF1A2963FE6B925409D'
+            Hash    = 'SHA256:D46AD05527FAC9D59CD607F40B036A41B5CF7CF13CEBCE0C9FB92BB3A2EBB3B9'
             Targets = @(
                 @{ CommandName = 'join'; Native = $true }
                 @{ CommandName = 'join.exe'; Native = $true }
