@@ -662,59 +662,114 @@ function Get-RtkCurrentWord {
         [int]$CursorPosition
     )
 
+    # The raw text typed so far, opening quote included; the parser keeps an unterminated
+    # quoted word as one element running to the cursor.
     foreach ($element in $CommandAst.CommandElements) {
         $extent = $element.Extent
-        if ($extent.StartOffset -lt $CursorPosition -and $extent.EndOffset -gt $CursorPosition) {
-            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset).TrimStart([char[]]@([char]34, [char]39))
+        if ($extent.StartOffset -lt $CursorPosition -and $extent.EndOffset -ge $CursorPosition) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
         }
     }
 
     $WordToComplete
 }
 
+function Get-RtkQuoteChar {
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') { $Value.Substring(0, 1) } else { '' }
+}
+
+function ConvertFrom-RtkTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if (-not (Get-RtkQuoteChar $Value)) {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-RtkQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function Get-RtkPathCompletions {
+    # $WordToComplete is the unquoted path typed so far. The candidate is quoted in $QuoteChar;
+    # an attached '--opt=' $Prefix goes inside the quotes when the quote opened the whole word.
     param(
         [string]$WordToComplete,
+        [string]$QuoteChar = '',
+        [string]$Prefix = '',
+        [switch]$PrefixInQuotes,
         [switch]$DirectoryOnly
     )
 
+    $paths = @()
     if ([string]::IsNullOrEmpty($WordToComplete)) {
-        $items = @(Get-ChildItem -LiteralPath '.' -Force -ErrorAction SilentlyContinue |
+        $items = @(Get-ChildItem -LiteralPath '.' -Force -ErrorAction Ignore |
             Sort-Object -Property @{ Expression = { -not $_.PSIsContainer } }, Name |
             Select-Object -First 200)
 
         foreach ($item in $items) {
-            if ($DirectoryOnly -and -not $item.PSIsContainer) {
-                continue
-            }
-
-            $text = '.\' + $item.Name
-            if ($text -match '[\s''"`$\[\]{}(),;&|]') {
-                $text = "'" + $text.Replace("'", "''") + "'"
-            }
-
             $type = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
-            New-RtkCompletionResult -CompletionText $text -ToolTip $item.FullName -ResultType $type -ListItemText $item.Name
+            $paths += [pscustomobject]@{ Path = '.\' + $item.Name; ListItemText = $item.Name; ToolTip = $item.FullName; ResultType = $type }
         }
+    } else {
+        # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+        # (tick``x.txt), so each result is unwrapped by the parser and unescaped before it
+        # is quoted once in the style the user typed.
+        foreach ($match in [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete)) {
+            $path = $match.CompletionText
+            if (Get-RtkQuoteChar $path) {
+                $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+                $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+                if ($constant) {
+                    $path = $constant.Value
+                }
+            }
 
-        return
+            $paths += [pscustomobject]@{ Path = [System.Management.Automation.WildcardPattern]::Unescape($path); ListItemText = $match.ListItemText; ToolTip = $match.ToolTip; ResultType = [string]$match.ResultType }
+        }
     }
 
-    $escaped = $WordToComplete.Replace("'", "''")
-    $script = "'$escaped'"
-
-    try {
-        $result = [System.Management.Automation.CommandCompletion]::CompleteInput($script, $script.Length, $null)
-    } catch {
-        return @()
-    }
-
-    foreach ($match in $result.CompletionMatches) {
-        if ($DirectoryOnly -and $match.ResultType -ne 'ProviderContainer') {
+    foreach ($entry in $paths) {
+        if ($DirectoryOnly -and $entry.ResultType -ne 'ProviderContainer') {
             continue
         }
 
-        New-RtkCompletionResult -CompletionText $match.CompletionText -ToolTip $match.ToolTip -ResultType 'ParameterValue' -ListItemText $match.ListItemText
+        $text = if ($PrefixInQuotes) {
+            ConvertTo-RtkQuotedValue -Value ($Prefix + $entry.Path) -QuoteChar $QuoteChar
+        } else {
+            $Prefix + (ConvertTo-RtkQuotedValue -Value $entry.Path -QuoteChar $QuoteChar)
+        }
+
+        New-RtkCompletionResult -CompletionText $text -ToolTip $entry.ToolTip -ResultType $entry.ResultType -ListItemText $entry.ListItemText
     }
 }
 
@@ -738,30 +793,18 @@ function Get-RtkValueCompletions {
         [string]$Metavar,
         [string]$WordToComplete,
         [string]$Prefix = '',
-        [string]$ToolTipPrefix = ''
+        [string]$ToolTipPrefix = '',
+        [string]$QuoteChar = '',
+        [switch]$PrefixInQuotes
     )
 
     $candidates = @()
     switch ($ValueKind) {
         'Path' {
-            foreach ($result in @(Get-RtkPathCompletions -WordToComplete $WordToComplete)) {
-                if ($Prefix) {
-                    New-RtkCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ToolTip $result.ToolTip -ResultType 'ParameterValue' -ListItemText $result.ListItemText
-                } else {
-                    $result
-                }
-            }
-            return
+            return Get-RtkPathCompletions -WordToComplete $WordToComplete -QuoteChar $QuoteChar -Prefix $Prefix -PrefixInQuotes:$PrefixInQuotes
         }
         'Directory' {
-            foreach ($result in @(Get-RtkPathCompletions -WordToComplete $WordToComplete -DirectoryOnly)) {
-                if ($Prefix) {
-                    New-RtkCompletionResult -CompletionText ($Prefix + $result.CompletionText) -ToolTip $result.ToolTip -ResultType 'ParameterValue' -ListItemText $result.ListItemText
-                } else {
-                    $result
-                }
-            }
-            return
+            return Get-RtkPathCompletions -WordToComplete $WordToComplete -QuoteChar $QuoteChar -Prefix $Prefix -PrefixInQuotes:$PrefixInQuotes -DirectoryOnly
         }
         'Enum' {
             $candidates = @($Values)
@@ -790,10 +833,12 @@ function Complete-RtkOptionValue {
     param(
         [object]$Option,
         [string]$WordToComplete,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [string]$QuoteChar = '',
+        [switch]$PrefixInQuotes
     )
 
-    Get-RtkValueCompletions -ValueKind $Option.ValueKind -Values $Option.Values -Metavar $Option.Metavar -WordToComplete $WordToComplete -Prefix $Prefix -ToolTipPrefix "rtk $($Option.Names[-1])"
+    Get-RtkValueCompletions -ValueKind $Option.ValueKind -Values $Option.Values -Metavar $Option.Metavar -WordToComplete $WordToComplete -Prefix $Prefix -ToolTipPrefix "rtk $($Option.Names[-1])" -QuoteChar $QuoteChar -PrefixInQuotes:$PrefixInQuotes
 }
 
 function Get-RtkOptionCompletions {
@@ -915,12 +960,14 @@ function Complete-Rtk {
     )
 
     $tokens = @(Get-RtkArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)
-    $word = Get-RtkCurrentWord -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
+    $typedWord = Get-RtkCurrentWord -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
+    $quoteChar = Get-RtkQuoteChar $typedWord
+    $word = ConvertFrom-RtkTypedWord -Value $typedWord
     $context = Get-RtkCommandContext -Tokens $tokens
     $node = $context.Node
 
     if ($null -ne $context.PendingOption) {
-        return Complete-RtkOptionValue -Option $context.PendingOption -WordToComplete $word
+        return Complete-RtkOptionValue -Option $context.PendingOption -WordToComplete $word -QuoteChar $quoteChar
     }
 
     if (-not $context.OptionsEnded -and $word -match '^(--?[^=\s]+)=(.*)$') {
@@ -928,7 +975,12 @@ function Complete-Rtk {
         $valueWord = $Matches[2]
         $map = Get-RtkOptionMap $node.Options
         if ($map.ContainsKey($name) -and $map[$name].ValueKind -ne 'None') {
-            return Complete-RtkOptionValue -Option $map[$name] -WordToComplete $valueWord -Prefix ($name + '=')
+            # '--opt=a b' quotes the whole word; --opt='a b' quotes only the value.
+            if ($quoteChar) {
+                return Complete-RtkOptionValue -Option $map[$name] -WordToComplete $valueWord -Prefix ($name + '=') -QuoteChar $quoteChar -PrefixInQuotes
+            }
+
+            return Complete-RtkOptionValue -Option $map[$name] -WordToComplete (ConvertFrom-RtkTypedWord -Value $valueWord) -Prefix ($name + '=') -QuoteChar (Get-RtkQuoteChar $valueWord)
         }
 
         return @()
@@ -964,7 +1016,7 @@ function Complete-Rtk {
             $kind = 'Path'
         }
 
-        return Get-RtkValueCompletions -ValueKind $kind -Values $argument.Values -Metavar $argument.Metavar -WordToComplete $word -ToolTipPrefix $argument.Description
+        return Get-RtkValueCompletions -ValueKind $kind -Values $argument.Values -Metavar $argument.Metavar -WordToComplete $word -ToolTipPrefix $argument.Description -QuoteChar $quoteChar
     }
 
     if ([string]::IsNullOrEmpty($word) -and -not $context.OptionsEnded) {

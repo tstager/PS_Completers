@@ -1016,7 +1016,7 @@
         @{
             Path    = 'rtk_completer/rtk_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:0139C1D2DC17C328E5A1FB21C7BCDF26792923D04C31B6844035AA60AA7C32A2'
+            Hash    = 'SHA256:A1ED371768516B85AEBE29D6103A0EEB505D011836E7D7F251EC9F4348CD0A41'
             Targets = @(
                 @{ CommandName = 'rtk'; Native = $true }
                 @{ CommandName = 'rtk.exe'; Native = $true }
