@@ -129,6 +129,8 @@ The completer covers the locally confirmed switches:
 
 `@file` completion is local-only and uses `Get-ChildItem` to suggest matching files and directories from the current path context. Directory candidates end in a separator, and a word that ends in a separator (`@docs\`, `"@C:\Program Files\`) lists that directory's contents, so repeated Tab descends the tree. This is purely path completion; it does not inspect the file contents.
 
+Each candidate is inserted as one quoted argument (`'@sp ace.txt'`), because a bare `@name` is splatting syntax. The directory part you typed (`.\`, `../`, `C:`) is kept exactly as typed, and in a comma list only the item after the last comma is completed. The quote you typed is kept (`'`, `"`, or a typographic quote), single quotes are the default, and the characters that quote style treats specially are escaped. When a bare `@` is followed by a path that does not start a variable name (`@.\`), PowerShell leaves the `@` as a separate, unparseable token; the candidate is then `('@.\hosts.txt')`, which turns the line into `@('@.\hosts.txt')` and passes `@.\hosts.txt` as one argument.
+
 ### Freeform value suppression
 
 PsShutdown accepts freeform text for values like passwords and shutdown messages. Without a native completer, PowerShell tends to fall back to filesystem completion in these slots. This script suppresses that behavior by returning placeholder or echo completions for the active value context.

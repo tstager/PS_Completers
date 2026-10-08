@@ -889,7 +889,7 @@
         @{
             Path    = 'psshutdown_completer/psshutdown_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:D4D8891D93B25359715FF699AAA88F9D8B482D89A1B00768186E396A7F9896B4'
+            Hash    = 'SHA256:F3E6F6F77490A08EF09170C50A6035DA16CE87F65E0D2F0C3C6FB513E6C1E54B'
             Targets = @(
                 @{ CommandName = 'psshutdown'; Native = $true }
                 @{ CommandName = 'psshutdown.exe'; Native = $true }

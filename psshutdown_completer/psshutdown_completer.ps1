@@ -41,31 +41,6 @@ function Remove-PsShutdownOuterQuotes {
     $Value.TrimStart('"')
 }
 
-function Get-PsShutdownCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrEmpty($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
-}
-
 function Get-PsShutdownActionSpecs {
     @(
         [pscustomobject]@{ Token = '-s'; Description = 'Shutdown without poweroff.' }
@@ -251,68 +226,92 @@ function Get-PsShutdownSampleValueResults {
     @($results.ToArray())
 }
 
-function ConvertTo-PsShutdownQuotedTarget {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-PsShutdownTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    [string]$tokens[0].Value
+}
+
+function ConvertTo-PsShutdownQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-PsShutdownAtFileCompletions {
-    param([string]$CurrentWord)
+    param(
+        [string]$CurrentWord,
+        [string]$SpanText,
+        [bool]$StrandedAt = $false
+    )
 
     $rawValue = if ([string]::IsNullOrEmpty($CurrentWord)) { '@' } else { $CurrentWord }
-    $startedQuoted = $rawValue.StartsWith('"')
-    $trimmedValue = Remove-PsShutdownOuterQuotes -Value $rawValue
+    $quoteChar = if ($rawValue -match '^[''"\u2018-\u201E]') { $rawValue.Substring(0, 1) } else { '' }
+    $trimmedValue = ConvertFrom-PsShutdownTypedWord -Value $rawValue
     if (-not $trimmedValue.StartsWith('@')) {
         return @()
     }
 
     $inputPath = $trimmedValue.Substring(1)
-    $cleanInput = $inputPath
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The typed directory part ('.\', '../', 'docs\', 'C:') is kept exactly as typed, so a
+    # candidate never deletes typed text; only the leaf after it is matched.
+    $directoryPart = if ($inputPath -match '^.*[\\/]') { $Matches[0] } elseif ($inputPath -match '^[A-Za-z]:') { $Matches[0] } else { '' }
+    $leaf = $inputPath.Substring($directoryPart.Length)
+    $parent = if ($directoryPart) { $directoryPart } else { '.' }
+    $separator = if ($directoryPart.EndsWith('/')) { '/' } else { [string][System.IO.Path]::DirectorySeparatorChar }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    $items = @()
+    if (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore) {
+        $namePattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
+        $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $namePattern })
     }
-
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.') {
-            $item.Name
-        } elseif (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryPart + $item.Name
+        if ($item.PSIsContainer) {
+            $pathText += $separator
+        }
+
+        # '@' is never safe bare (it opens a splat), so the value is always quoted. A stranded
+        # bare '@' stays in the line, and only '@(' keeps it valid: it passes the quoted
+        # '@path' to psshutdown as one argument.
+        $completionText = if ($StrandedAt) {
+            '(' + (ConvertTo-PsShutdownQuotedValue -Value ('@' + $pathText)) + ')'
         } else {
-            $item.FullName
+            ConvertTo-PsShutdownQuotedValue -Value ('@' + $pathText) -QuoteChar $quoteChar
         }
-
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
-        }
-
-        $completionText = ConvertTo-PsShutdownQuotedTarget -Value ('@' + $pathText) -AlwaysQuote $startedQuoted
         [void]$results.Add((
             New-PsShutdownCompletionResult `
                 -CompletionText $completionText `
@@ -322,8 +321,8 @@ function Get-PsShutdownAtFileCompletions {
         ))
     }
 
-    if ([string]::IsNullOrWhiteSpace($inputPath) -or
-        '@file'.StartsWith($trimmedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $StrandedAt -and ([string]::IsNullOrWhiteSpace($inputPath) -or
+            '@file'.StartsWith($trimmedValue, [System.StringComparison]::OrdinalIgnoreCase))) {
         [void]$results.Add((
             New-PsShutdownCompletionResult `
                 -CompletionText '@file' `
@@ -333,11 +332,12 @@ function Get-PsShutdownAtFileCompletions {
         ))
     }
 
-    if ($results.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($CurrentWord)) {
+    # The echo is the text PowerShell's replacement span covers, so accepting it changes nothing.
+    if ($results.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($SpanText)) {
         [void]$results.Add((
             New-PsShutdownCompletionResult `
-                -CompletionText $CurrentWord `
-                -ListItemText $CurrentWord `
+                -CompletionText $SpanText `
+                -ListItemText $SpanText `
                 -ResultType 'ParameterValue' `
                 -ToolTip 'Remote target file in @file form.'
         ))
@@ -347,12 +347,17 @@ function Get-PsShutdownAtFileCompletions {
 }
 
 function Get-PsShutdownRemoteTargetCompletions {
-    param([string]$CurrentWord)
+    param(
+        [string]$CurrentWord,
+        [string]$SpanText,
+        [bool]$StrandedAt = $false
+    )
+
+    if ((ConvertFrom-PsShutdownTypedWord -Value $CurrentWord).StartsWith('@')) {
+        return @(Get-PsShutdownAtFileCompletions -CurrentWord $CurrentWord -SpanText $SpanText -StrandedAt $StrandedAt)
+    }
 
     $typedValue = if ($null -eq $CurrentWord) { '' } else { Remove-PsShutdownOuterQuotes -Value $CurrentWord }
-    if ($typedValue.StartsWith('@') -or ($CurrentWord -and $CurrentWord.StartsWith('"@'))) {
-        return @(Get-PsShutdownAtFileCompletions -CurrentWord $CurrentWord)
-    }
 
     $results = New-Object System.Collections.Generic.List[object]
 
@@ -581,23 +586,62 @@ function Complete-PsShutdown {
 
     Initialize-PsShutdownCompletionCatalog
 
-    $line = $commandAst.ToString()
-    $currentWord = if ($null -eq $wordToComplete) {
-        Get-PsShutdownCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback ''
-    } elseif ($wordToComplete.Length -eq 0) {
-        ''
-    } elseif ([string]::IsNullOrWhiteSpace($wordToComplete)) {
-        Get-PsShutdownCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    } else {
-        $wordToComplete
+    # The typed word is read from the parser, not from $wordToComplete (a registered
+    # completer receives it with '$name' expanded): the element that contains the cursor,
+    # cut at the cursor. An unterminated quote is one element. SpanText is the whole
+    # element, which is what PowerShell's replacement span covers.
+    $elements = @($commandAst.CommandElements | Select-Object -Skip 1)
+    $typedWord = ''
+    $spanText = ''
+    $strandedAt = $false
+    $currentStart = $cursorPosition
+    for ($i = 0; $i -lt $elements.Count; $i++) {
+        $extent = $elements[$i].Extent
+        if ($extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $extent.EndOffset) {
+            $currentStart = $extent.StartOffset
+
+            # In a comma list PowerShell completes only the item after the last comma: the
+            # list item that holds the cursor, or a fresh empty word right after a comma.
+            $wordExtent = $extent
+            if ($elements[$i] -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+                $wordExtent = @($elements[$i].Elements | Where-Object { $_.Extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $_.Extent.EndOffset } | ForEach-Object { $_.Extent }) | Select-Object -First 1
+            } elseif ($elements[$i] -is [System.Management.Automation.Language.ErrorExpressionAst] -and
+                $extent.Text.Substring(0, $cursorPosition - $extent.StartOffset).EndsWith(',')) {
+                $wordExtent = $null
+            }
+
+            if (-not $wordExtent) {
+                break
+            }
+
+            $typedWord = $wordExtent.Text.Substring(0, $cursorPosition - $wordExtent.StartOffset)
+            $spanText = $wordExtent.Text
+
+            # A bare '@' is an unrecognized token, so the parser splits '@.\hosts.txt' into
+            # '@' and '.\hosts.txt'. Tab right after such an '@' keeps the line as it is;
+            # Tab in the path after it completes the glued word, and the span is the path.
+            $next = if ($i + 1 -lt $elements.Count) { $elements[$i + 1].Extent } else { $null }
+            if ($spanText -eq '@' -and $next -and $next.StartOffset -eq $extent.EndOffset) {
+                return @(New-PsShutdownCompletionResult -CompletionText '@' -ResultType 'ParameterValue' -ToolTip 'Path to a file containing remote computer names.')
+            }
+
+            $previous = if ($i -gt 0) { $elements[$i - 1].Extent } else { $null }
+            if ($previous -and $previous.Text -eq '@' -and $previous.EndOffset -eq $extent.StartOffset) {
+                $typedWord = '@' + $typedWord
+                $strandedAt = $true
+                $currentStart = $previous.StartOffset
+            }
+            break
+        }
     }
 
-    # Only elements that end before the cursor are consumed, so completing inside
+    $currentWord = if ([string]::IsNullOrWhiteSpace($wordToComplete)) { $typedWord } else { $wordToComplete }
+
+    # Only elements that end before the current word are consumed, so completing inside
     # or at the end of an earlier token sees the same context as typing it fresh.
     $tokensBeforeCurrent = @(
-        $commandAst.CommandElements |
-            Select-Object -Skip 1 |
-            Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |
+        $elements |
+            Where-Object { $_.Extent.EndOffset -le $currentStart } |
             ForEach-Object { $_.Extent.Text }
     )
 
@@ -608,11 +652,16 @@ function Complete-PsShutdown {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentWord)) {
-        if ($currentWord.StartsWith('-')) {
+        # '@-d' is split into '@' and '-d' by the parser, but it is an @file word, not a switch.
+        if ($currentWord.StartsWith('-') -and -not $strandedAt) {
             return @(Get-PsShutdownOptionCompletions -CurrentWord $currentWord -State $state)
         }
 
-        if ($currentWord.StartsWith('\') -or $currentWord.StartsWith('@') -or $currentWord.StartsWith('"@')) {
+        if ($typedWord -match '^[''"\u2018-\u201E]?@') {
+            return @(Get-PsShutdownRemoteTargetCompletions -CurrentWord $typedWord -SpanText $spanText -StrandedAt $strandedAt)
+        }
+
+        if ($currentWord.StartsWith('\')) {
             return @(Get-PsShutdownRemoteTargetCompletions -CurrentWord $currentWord)
         }
 
