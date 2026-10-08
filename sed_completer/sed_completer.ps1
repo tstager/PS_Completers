@@ -116,70 +116,54 @@ function Get-SedQuoteCharacter {
         return $null
     }
 
-    if ($InputText.StartsWith("'", [System.StringComparison]::Ordinal)) {
-        return "'"
-    }
-
-    if ($InputText.StartsWith('"', [System.StringComparison]::Ordinal)) {
-        return '"'
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    if ($InputText -match '^[''"\u2018-\u201E]') {
+        return $InputText.Substring(0, 1)
     }
 
     $null
 }
 
-function Remove-SedOuterQuotes {
+function ConvertFrom-SedTypedWord {
+    # The value of a typed word. A word opened with a quote is read by the PowerShell tokenizer,
+    # which drops the quotes and undoes that quote style's escapes.
     param([string]$InputText)
 
-    $quoteCharacter = Get-SedQuoteCharacter -InputText $InputText
-    if ($null -eq $quoteCharacter) {
+    if ($null -eq (Get-SedQuoteCharacter -InputText $InputText)) {
         return $InputText
     }
 
-    $unquoted = $InputText.Substring(1)
-    if ($unquoted.EndsWith($quoteCharacter, [System.StringComparison]::Ordinal)) {
-        $unquoted = $unquoted.Substring(0, $unquoted.Length - 1)
-    }
-
-    if ($quoteCharacter -eq "'") {
-        return $unquoted.Replace("''", "'")
-    }
-
-    if ($quoteCharacter -eq '"') {
-        return $unquoted.Replace('`"', '"')
-    }
-
-    $unquoted
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($InputText, [ref]$tokens, [ref]$parseErrors)
+    [string]$tokens[0].Value
 }
 
 function ConvertTo-SedQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default).
     param(
         [string]$Value,
         [string]$QuoteCharacter
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    $effectiveQuote = $QuoteCharacter
-    if ([string]::IsNullOrEmpty($effectiveQuote)) {
-        $effectiveQuote = '"'
+    if ([string]::IsNullOrEmpty($QuoteCharacter)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if (($effectiveQuote -eq "'") -and $Value.Contains("'")) {
-        $effectiveQuote = '"'
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    if ($effectiveQuote -eq '"') {
-        $escapedValue = $Value.Replace('`', '``').Replace('$', '`$').Replace('"', '`"')
-        return '"' + $escapedValue + '"'
-    }
-
-    if ($effectiveQuote -eq "'") {
-        return "'" + $Value.Replace("'", "''") + "'"
-    }
-
-    '"' + $Value + '"'
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-SedExecutablePath {
@@ -796,25 +780,26 @@ function Get-SedPathCompletions {
 
     $text = if ($null -eq $InputText) { '' } else { $InputText }
     $quoteCharacter = Get-SedQuoteCharacter -InputText $text
-    $trimmedInput = Remove-SedOuterQuotes -InputText $text
+    $trimmedInput = ConvertFrom-SedTypedWord -InputText $text
+
+    # Candidates keep the typed directory text (including a .\ or ./ prefix and its separator style).
+    $separatorIndex = $trimmedInput.LastIndexOfAny([char[]]@('\', '/'))
+    $separator = if (($separatorIndex -ge 0) -and ($trimmedInput[$separatorIndex] -eq '/')) { '/' } else { [string][System.IO.Path]::DirectorySeparatorChar }
 
     if ([string]::IsNullOrWhiteSpace($trimmedInput)) {
-        $parent = '.'
+        $directoryText = ''
         $leaf = ''
     } elseif (Test-Path -LiteralPath $trimmedInput -PathType Container) {
-        $parent = $trimmedInput
+        $directoryText = if ($separatorIndex -eq ($trimmedInput.Length - 1)) { $trimmedInput } else { $trimmedInput + $separator }
         $leaf = ''
     } else {
-        $parent = Split-Path -Path $trimmedInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $trimmedInput -Leaf
+        $directoryText = $trimmedInput.Substring(0, $separatorIndex + 1)
+        $leaf = $trimmedInput.Substring($separatorIndex + 1)
     }
 
+    $parent = if ($directoryText) { $directoryText } else { '.' }
+
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $quoteResult = -not [string]::IsNullOrEmpty($quoteCharacter)
 
     $preferredMap = @{}
     foreach ($extension in @($PreferredExtensions)) {
@@ -825,7 +810,7 @@ function Get-SedPathCompletions {
         $preferredMap[$extension] = $true
     }
 
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)
     $sortedItems = @(
         $items | Sort-Object `
             @{ Expression = { -not $_.PSIsContainer } }, `
@@ -843,23 +828,18 @@ function Get-SedPathCompletions {
     )
 
     foreach ($item in $sortedItems) {
-        $completionText = if (-not [System.IO.Path]::IsPathRooted($trimmedInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
-            $item.FullName
+        $completionText = $directoryText + $item.Name
+
+        # A whole-word name starting with a dash would parse as a parameter: give it a .\ prefix.
+        if (-not $directoryText -and -not $AttachedPrefix -and ($item.Name -match '^[-\u2013-\u2015]')) {
+            $completionText = '.' + $separator + $completionText
         }
 
-        if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer) {
+            $completionText += $separator
         }
 
-        if ($quoteResult -or ($completionText -match '\s')) {
-            $completionText = ConvertTo-SedQuotedValue -Value $completionText -QuoteCharacter $quoteCharacter
-        }
+        $quotedText = ConvertTo-SedQuotedValue -Value $completionText -QuoteCharacter $quoteCharacter
 
         $toolTip = if ($item.PSIsContainer) {
             'Directory: {0}' -f $item.FullName
@@ -867,7 +847,7 @@ function Get-SedPathCompletions {
             $item.FullName
         }
 
-        New-SedCompletionResult -CompletionText ($AttachedPrefix + $completionText) -ResultType 'ParameterValue' -ToolTip $toolTip
+        New-SedCompletionResult -CompletionText ($AttachedPrefix + $quotedText) -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $toolTip
     }
 }
 
@@ -880,7 +860,7 @@ function Get-SedSimpleValueCompletions {
 
     $rawWord = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
     $quoteCharacter = Get-SedQuoteCharacter -InputText $rawWord
-    $word = Remove-SedOuterQuotes -InputText $rawWord
+    $word = ConvertFrom-SedTypedWord -InputText $rawWord
 
     foreach ($value in @($Values)) {
         $text = if ($value -is [string]) { $value } else { $value.Text }
