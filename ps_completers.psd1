@@ -1550,7 +1550,7 @@
         @{
             Path    = 'xargs_completer/xargs_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7097E2F3C98C08C844DE74C921FDB601B8C6F24239FDE400EF19A5C260F11AC7'
+            Hash    = 'SHA256:12F1CB00DDA2FDC68B798E1D19DA7EA7EF8213B758C655724E764F70BF59E396'
             Targets = @(
                 @{ CommandName = 'xargs'; Native = $true }
                 @{ CommandName = 'xargs.exe'; Native = $true }

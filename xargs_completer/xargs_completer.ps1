@@ -238,6 +238,73 @@ function Get-XargsOptionSuggestions {
     @($results.ToArray())
 }
 
+function ConvertFrom-XargsTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    # $null when the quoted part does not make up the whole word ('sp'ace).
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0].Extent.EndOffset -ne $Value.Length) {
+        return $null
+    }
+
+    $tokens[0].Value
+}
+
+function ConvertTo-XargsQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-XargsCurrentWord {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # PowerShell re-quotes a quoted word it hands over; the parser keeps an unterminated
+    # quoted word as one element, so the word is read from there. The whole element is
+    # read because PowerShell replaces the whole element, text after the cursor included.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text
+        }
+    }
+
+    ''
+}
+
 function Get-XargsPathCompletions {
     param(
         [string]$CurrentValue,
@@ -245,44 +312,41 @@ function Get-XargsPathCompletions {
     )
 
     $results = New-Object System.Collections.Generic.List[object]
-    $cleanValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue.Trim([char[]]@([char]34, [char]39)) }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentValue) -and $CurrentValue.StartsWith('"')
-
-    if ([string]::IsNullOrWhiteSpace($cleanValue)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanValue.EndsWith('\') -or $cleanValue.EndsWith('/')) {
-        $parent = $cleanValue
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanValue -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-        $leaf = Split-Path -Path $cleanValue -Leaf
+    $cleanValue = ConvertFrom-XargsTypedWord -Value $CurrentValue
+    if ($null -eq $cleanValue) {
+        return @()
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)) {
-        $completionText = if ($cleanValue -and -not [System.IO.Path]::IsPathRooted($cleanValue)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
-            $item.FullName
-        }
+    $quoteChar = if ($CurrentValue -match '^[''"\u2018-\u201E]') { $CurrentValue.Substring(0, 1) } else { '' }
+
+    # The typed directory part (.\, ./, ..\ included) is kept exactly as typed.
+    $directory = ''
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanValue) -and $cleanValue -match '(?s)^(?<dir>.*[\\/]|[A-Za-z]:)?(?<leaf>[^\\/]*)$') {
+        $directory = [string]$matches['dir']
+        $leaf = $matches['leaf']
+    }
+
+    $parent = if ($directory) { $directory } else { '.' }
+
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
+        return @()
+    }
+
+    $pattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
+    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $pattern })) {
+        $completionText = if ($cleanValue) { $directory + $item.Name } else { $item.FullName }
 
         if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        if ($alwaysQuote -and -not $completionText.StartsWith('"')) {
-            $completionText = '"' + $completionText + '"'
+        # A bare word starting with a dash parses as a parameter; prefix .\ as PowerShell does.
+        if (-not $directory -and -not $quoteChar -and -not $Prefix -and $completionText -match '^[-\u2013-\u2015]') {
+            $completionText = '.' + [System.IO.Path]::DirectorySeparatorChar + $completionText
         }
 
-        $completionText = $Prefix + $completionText
+        $completionText = $Prefix + (ConvertTo-XargsQuotedValue -Value $completionText -QuoteChar $quoteChar)
         [void]$results.Add((New-XargsCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $item.Name))
     }
 
@@ -444,7 +508,8 @@ Register-ArgumentCompleter -Native -CommandName 'xargs', 'xargs.exe' -ScriptBloc
         }
     }
 
-    $context = Get-XargsCompletionContext -CurrentToken $wordToComplete -TokensBeforeCurrent $tokensBeforeCurrent
+    $currentWord = Get-XargsCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition
+    $context = Get-XargsCompletionContext -CurrentToken $currentWord -TokensBeforeCurrent $tokensBeforeCurrent
     if ($context) {
         return Get-XargsValueSuggestions -OptionSpec $context.OptionSpec -CurrentValue $context.ValueText -Prefix $context.Prefix
     }
