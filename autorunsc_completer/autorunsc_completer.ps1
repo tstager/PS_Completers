@@ -96,22 +96,53 @@ function Remove-AutorunscOuterQuotes {
     $Value.TrimStart('"')
 }
 
-function ConvertTo-AutorunscQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-AutorunscTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    # Returns $null when text follows the closing quote: that word is not one plain value.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0].Extent.EndOffset -lt $Value.Length) {
+        return $null
     }
 
-    $Value
+    $tokens[0].Value
+}
+
+function ConvertTo-AutorunscQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        # A leading dash (ASCII or U+2013-U+2015) would make PowerShell read the word as a parameter.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-AutorunscTokenState {
@@ -128,21 +159,23 @@ function Get-AutorunscTokenState {
     $prefix = $Line.Substring(0, $safeCursor)
     $tokens = New-Object System.Collections.Generic.List[string]
     $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
+    $quoteChar = ''
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
+        # PowerShell reads U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
+        $quoteClass = if ([string]$character -match '[''\u2018-\u201B]') { "'" } elseif ([string]$character -match '["\u201C-\u201E]') { '"' } else { '' }
+        if ($quoteClass) {
+            if (-not $quoteChar) {
+                $quoteChar = $quoteClass
+            } elseif ($quoteChar -eq $quoteClass) {
+                $quoteChar = ''
             }
 
             [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
+        if ([char]::IsWhiteSpace($character) -and -not $quoteChar) {
             if ($builder.Length -gt 0) {
                 $tokens.Add($builder.ToString())
                 [void]$builder.Clear()
@@ -217,9 +250,13 @@ function Get-AutorunscPathCompletions {
         [switch]$DirectoriesOnly
     )
 
-    $typedValue = Remove-AutorunscOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $typedValue = ConvertFrom-AutorunscTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $typedValue) {
+        # Text follows the closing quote; PowerShell's own file completion handles that word.
+        return @()
+    }
 
     # The -z operands name an offline image, not something under the working
     # directory, so start them at the volume roots instead of the cwd listing.
@@ -230,7 +267,7 @@ function Get-AutorunscPathCompletions {
                     continue
                 }
 
-                [void]$results.Add((New-AutorunscCompletionResult -CompletionText $drive.Name -ListItemText $drive.Name -ResultType 'ParameterValue' -ToolTip $ToolTip))
+                [void]$results.Add((New-AutorunscCompletionResult -CompletionText (ConvertTo-AutorunscQuotedValue -Value $drive.Name -QuoteChar $quoteChar) -ListItemText $drive.Name -ResultType 'ParameterValue' -ToolTip $ToolTip))
             }
         } catch {
             [void]$results.Clear()
@@ -244,30 +281,23 @@ function Get-AutorunscPathCompletions {
         return @($results.ToArray())
     }
 
+    # Candidates keep the directory part exactly as typed (a typed .\ or ./ included).
     $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            $candidateParent = Split-Path -Path $typedValue -Parent
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                $leaf = Split-Path -Path $typedValue -Leaf
-            }
-        }
+    $directoryText = ''
+    $leaf = $typedValue
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/', ':'))
+    if ($separatorIndex -ge 0) {
+        $directoryText = $typedValue.Substring(0, $separatorIndex + 1)
+        $parentPath = $directoryText
+        $leaf = $typedValue.Substring($separatorIndex + 1)
     }
 
-    try {
-        $items = if ($DirectoriesOnly) {
-            @(Get-ChildItem -LiteralPath $parentPath -Directory -Force -ErrorAction Stop)
-        } else {
-            @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-        }
-    } catch {
-        $items = @()
+    $items = if (-not (Test-Path -LiteralPath $parentPath -PathType Container -ErrorAction Ignore)) {
+        @()
+    } elseif ($DirectoriesOnly) {
+        @(Get-ChildItem -LiteralPath $parentPath -Directory -Force -ErrorAction Ignore)
+    } else {
+        @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
     }
 
     foreach ($item in $items) {
@@ -276,13 +306,18 @@ function Get-AutorunscPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
+        $candidate = $directoryText + $item.Name
+        if (-not $directoryText -and $candidate -match '^[-\u2013-\u2015]') {
+            # Like PowerShell's own file completion: .\-name instead of a word read as a parameter.
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
+        }
+
         if ($item.PSIsContainer) {
             $candidate += '\'
         }
 
-        $completionText = ConvertTo-AutorunscQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        [void]$results.Add((New-AutorunscCompletionResult -CompletionText $completionText -ListItemText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip))
+        $completionText = ConvertTo-AutorunscQuotedValue -Value $candidate -QuoteChar $quoteChar
+        [void]$results.Add((New-AutorunscCompletionResult -CompletionText $completionText -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
     if ($results.Count -eq 0) {
@@ -500,14 +535,21 @@ function Complete-Autorunsc {
             }
         } else {
             Update-AutorunscUserProfiles
-            $typedValue = Remove-AutorunscOuterQuotes -Value $currentWord
+            $typedValue = ConvertFrom-AutorunscTypedWord -Value $currentWord
+            $quoteChar = if ($currentWord -match '^[''"\u2018-\u201E]') { $currentWord.Substring(0, 1) } else { '' }
             foreach ($userName in @('*', $env:USERNAME) + $script:AutorunscCompletionCatalog.UserProfiles + @('<user>')) {
+                if ($null -eq $typedValue) {
+                    break
+                }
+
                 if (-not [string]::IsNullOrWhiteSpace($typedValue) -and
                     -not $userName.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
                     continue
                 }
 
-                [void]$results.Add((New-AutorunscCompletionResult -CompletionText $userName -ListItemText $userName -ResultType 'ParameterValue' -ToolTip 'User account name or * for all profiles.'))
+                # Profile folder names may hold spaces or other PowerShell metacharacters.
+                $userText = if ($userName -eq '<user>') { $userName } else { ConvertTo-AutorunscQuotedValue -Value $userName -QuoteChar $quoteChar }
+                [void]$results.Add((New-AutorunscCompletionResult -CompletionText $userText -ListItemText $userName -ResultType 'ParameterValue' -ToolTip 'User account name or * for all profiles.'))
             }
         }
     }

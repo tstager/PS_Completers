@@ -49,7 +49,7 @@
         @{
             Path    = 'autorunsc_completer/autorunsc_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:DB2A720176A39266617519F8ED2DFF910D935ACB4F2995423AC47FECC71D3FAA'
+            Hash    = 'SHA256:B01424B6D24A061FD71DD2BBC92EC57AA827A6089A12E4BF72D5742425088774'
             Targets = @(
                 @{ CommandName = 'autorunsc'; Native = $true }
                 @{ CommandName = 'autorunsc.exe'; Native = $true }
