@@ -142,7 +142,7 @@ function Get-OllamaCompletionCatalog {
 
     $catalog = @{
         Initialized         = $false
-        ParsedCommands      = @{}
+        ParsedCommands      = [System.Collections.Generic.Dictionary[string, bool]]::new([System.StringComparer]::Ordinal)
         CommandPath         = $null
         Commands            = $commands
         CommandMap          = $commandMap
@@ -473,7 +473,14 @@ function Resolve-OllamaCommandHelp {
 
     # Subcommand help is parsed lazily, once per command, the first time completion needs that command.
     $catalog = Get-OllamaCompletionCatalog
-    if ([string]::IsNullOrWhiteSpace($CommandName) -or $catalog.ParsedCommands.ContainsKey($CommandName) -or -not $catalog.CommandMap.ContainsKey($CommandName)) {
+    if ([string]::IsNullOrWhiteSpace($CommandName) -or -not $catalog.CommandMap.ContainsKey($CommandName)) {
+        return
+    }
+
+    # Cobra command names are case-sensitive, so a wrong-case token ('RUN') must never be captured or cached; the
+    # spec's own name is the key and the --help argument.
+    $CommandName = $catalog.CommandMap[$CommandName].Name
+    if ($catalog.ParsedCommands.ContainsKey($CommandName)) {
         return
     }
 
