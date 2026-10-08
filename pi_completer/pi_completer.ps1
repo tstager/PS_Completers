@@ -455,7 +455,7 @@ function Invoke-PiCapture {
         $startInfo.Environment['NO_COLOR'] = '1'
 
         if ($executablePath.EndsWith('.ps1', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $startInfo.FileName = (Get-Command -Name pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+            $startInfo.FileName = (Get-Command -Name pwsh -CommandType Application -ErrorAction Ignore | Select-Object -First 1 -ExpandProperty Source)
             if ([string]::IsNullOrWhiteSpace($startInfo.FileName)) {
                 return @()
             }
@@ -1218,8 +1218,9 @@ function Get-PiCurrentWord {
         }
 
         # Comma lists parse as array literals (or error expressions); the raw
-        # extent text keeps the typed value intact.
-        return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset).TrimStart([char[]]@([char]34, [char]39))
+        # extent text keeps the typed value intact. A quoted expandable string
+        # ("a$b) is read by the tokenizer.
+        return ConvertFrom-PiTypedWord -Value $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
     }
 
     if ($CursorPosition -gt $CommandAst.Extent.EndOffset) {
@@ -1235,15 +1236,16 @@ function Get-PiQuoteCharacter {
         [int]$CursorPosition
     )
 
-    # The quote the user opened the word under the cursor with, if any.
+    # The quote the user opened the word (or its --option= value) under the
+    # cursor with, if any. PowerShell hands the completer --opt='a as --opt=a.
     foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
         $extent = $element.Extent
         if ($extent.StartOffset -ge $CursorPosition -or $extent.EndOffset -lt $CursorPosition) {
             continue
         }
 
-        if ($extent.Text.StartsWith("'") -or $extent.Text.StartsWith('"')) {
-            return $extent.Text.Substring(0, 1)
+        if ($extent.Text -match '^(?:-[^=''"\u2018-\u201E]*=)?([''"\u2018-\u201E])') {
+            return $Matches[1]
         }
 
         return ''
@@ -1252,21 +1254,43 @@ function Get-PiQuoteCharacter {
     ''
 }
 
+function ConvertFrom-PiTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
 function ConvertTo-PiQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteCharacter
     )
 
-    if ([string]::IsNullOrEmpty($QuoteCharacter) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
-        return $Value
+    if ([string]::IsNullOrEmpty($QuoteCharacter)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if ($QuoteCharacter -eq '"') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-PiCommandSpec {
@@ -1327,33 +1351,88 @@ function Get-PiPathCompletions {
     param(
         [string]$PathPrefix,
         [switch]$DirectoriesOnly,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteCharacter = '',
+        [switch]$QuotePrefix
     )
 
+    # CompleteFilename returns PowerShell-quoted, wildcard-escaped text (it doubles a
+    # backtick inside single quotes), so each path is unwrapped by the parser and
+    # unescaped, then quoted once in the style the user typed. -QuotePrefix keeps the
+    # prefix inside the quotes ('@a b.txt': @' would open a here-string).
     $items = [System.Management.Automation.CompletionCompleters]::CompleteFilename($PathPrefix)
     foreach ($item in @($items)) {
-        if ($DirectoriesOnly -and -not (Test-Path -LiteralPath $item.CompletionText -PathType Container)) {
+        $isContainer = $item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
+        if ($DirectoriesOnly -and -not $isContainer) {
             continue
         }
 
-        if ([string]::IsNullOrEmpty($CompletionPrefix)) {
-            $item
-            continue
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($isContainer -and -not $path.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $path += [System.IO.Path]::DirectorySeparatorChar
+        }
+
+        $completionText = if ($QuotePrefix) {
+            ConvertTo-PiQuotedValue -Value "$CompletionPrefix$path" -QuoteCharacter $QuoteCharacter
+        } else {
+            $CompletionPrefix + (ConvertTo-PiQuotedValue -Value $path -QuoteCharacter $QuoteCharacter)
         }
 
         New-PiCompletionResult `
-            -CompletionText "$CompletionPrefix$($item.CompletionText)" `
+            -CompletionText $completionText `
             -ListItemText $item.ListItemText `
             -ResultType $item.ResultType `
             -ToolTip $item.ToolTip
     }
 }
 
+function Test-PiStrandedAt {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # A bare '@' does not parse, so '@.\a b' arrives as '@' plus the path after
+    # it, and PowerShell replaces only the path.
+    $previous = $null
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $element.Extent.EndOffset -ge $CursorPosition) {
+            return ($previous -and $previous.Extent.Text -eq '@' -and $previous.Extent.EndOffset -eq $element.Extent.StartOffset)
+        }
+
+        $previous = $element
+    }
+
+    $false
+}
+
 function Get-PiAtFileCompletions {
-    param([string]$WordToComplete)
+    param(
+        [string]$WordToComplete,
+        [string]$QuoteCharacter,
+        [switch]$StrandedAt
+    )
 
     $pathPrefix = if ($WordToComplete.Length -gt 1) { $WordToComplete.Substring(1) } else { '' }
-    Get-PiPathCompletions -PathPrefix $pathPrefix -CompletionPrefix '@'
+    foreach ($item in @(Get-PiPathCompletions -PathPrefix $pathPrefix -CompletionPrefix '@' -QuoteCharacter $QuoteCharacter -QuotePrefix)) {
+        if (-not $StrandedAt) {
+            $item
+            continue
+        }
+
+        # The stranded '@' stays in the line, and only '@(' keeps it valid: it
+        # passes the quoted '@path' to pi as one argument.
+        New-PiCompletionResult -CompletionText "($($item.CompletionText))" -ListItemText $item.ListItemText -ResultType $item.ResultType -ToolTip $item.ToolTip
+    }
 }
 
 function Get-PiModelsJsonPaths {
@@ -1525,7 +1604,7 @@ function Get-PiSessionFileSuggestions {
         return $cache.SessionFiles
     }
 
-    $files = @(Get-ChildItem -LiteralPath $sessionRoot -File -Recurse -Filter '*.jsonl' -ErrorAction SilentlyContinue |
+    $files = @(Get-ChildItem -LiteralPath $sessionRoot -File -Recurse -Filter '*.jsonl' -ErrorAction Ignore |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 30 -ExpandProperty FullName)
 
@@ -1576,7 +1655,7 @@ function Get-PiKnownResourcePaths {
             continue
         }
 
-        foreach ($item in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $root -ErrorAction Ignore)) {
             [void]$paths.Add($item.FullName)
         }
     }
@@ -1589,28 +1668,30 @@ function Get-PiKnownResourcePaths {
 function Get-PiResourcePathCompletions {
     param(
         [string]$Kind,
-        [string]$WordToComplete
+        [string]$WordToComplete,
+        [string]$InlinePrefix,
+        [string]$QuoteCharacter
     )
 
     if (Test-PiPathLike -Value $WordToComplete) {
-        Get-PiPathCompletions -PathPrefix $WordToComplete
+        Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter
         return
     }
 
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($path in @(Get-PiKnownResourcePaths -Kind $Kind)) {
-        if ($path -notlike "$WordToComplete*") {
+        if ($path -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             continue
         }
 
         if ($seen.Add($path)) {
-            New-PiCompletionResult -CompletionText $path -ToolTip "$Kind path"
+            New-PiCompletionResult -CompletionText ($InlinePrefix + (ConvertTo-PiQuotedValue -Value $path -QuoteCharacter $QuoteCharacter)) -ListItemText $path -ToolTip "$Kind path"
         }
     }
 
     if ([string]::IsNullOrEmpty($WordToComplete)) {
         foreach ($hint in @('.\', '..\')) {
-            New-PiCompletionResult -CompletionText $hint -ToolTip "$Kind path"
+            New-PiCompletionResult -CompletionText "$InlinePrefix$hint" -ListItemText $hint -ToolTip "$Kind path"
         }
     }
 }
@@ -1715,7 +1796,7 @@ function Get-PiValueCompletions {
             return
         }
 
-        if ($completionText -notlike "$WordToComplete*") {
+        if ($completionText -notlike ([System.Management.Automation.WildcardPattern]::Escape($WordToComplete) + '*')) {
             return
         }
 
@@ -1790,7 +1871,8 @@ function Get-PiValueCompletions {
         }
         'ThemeName' {
             foreach ($themePath in @(Get-PiKnownResourcePaths -Kind 'theme')) {
-                & $addResult ([System.IO.Path]::GetFileNameWithoutExtension($themePath)) 'Theme name'
+                $themeName = [System.IO.Path]::GetFileNameWithoutExtension($themePath)
+                & $addResult $themeName 'Theme name' -emittedText (ConvertTo-PiQuotedValue -Value $themeName -QuoteCharacter $QuoteCharacter)
             }
 
             & $addResult '<name[/name]>' 'Theme name (dark/light pair allowed)'
@@ -1862,7 +1944,7 @@ function Get-PiValueCompletions {
         }
         'TextOrFile' {
             if (Test-PiPathLike -Value $WordToComplete) {
-                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                     [void]$results.Add($item)
                 }
             }
@@ -1873,7 +1955,7 @@ function Get-PiValueCompletions {
             & $addResult '<search>' 'Optional model search text'
         }
         'DirectoryPath' {
-            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -DirectoriesOnly -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -DirectoriesOnly -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
 
@@ -1883,7 +1965,7 @@ function Get-PiValueCompletions {
             }
         }
         'FilePath' {
-            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
 
@@ -1894,38 +1976,38 @@ function Get-PiValueCompletions {
             }
         }
         'ExtensionPath' {
-            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'extension' -WordToComplete $WordToComplete)) {
+            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'extension' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
         }
         'SkillPath' {
-            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'skill' -WordToComplete $WordToComplete)) {
+            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'skill' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
         }
         'PromptTemplatePath' {
-            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'prompt-template' -WordToComplete $WordToComplete)) {
+            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'prompt-template' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
         }
         'ThemePath' {
-            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'theme' -WordToComplete $WordToComplete)) {
+            foreach ($item in @(Get-PiResourcePathCompletions -Kind 'theme' -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
         }
         'ExportInputPath' {
-            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
 
             foreach ($sessionFile in @(Get-PiSessionFileSuggestions)) {
-                & $addResult $sessionFile 'Session file to export'
+                & $addResult $sessionFile 'Session file to export' -emittedText (ConvertTo-PiQuotedValue -Value $sessionFile -QuoteCharacter $QuoteCharacter)
             }
 
             & $addResult '<session.jsonl>' 'Session file to export'
         }
         'ExportOutputPath' {
-            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
 
@@ -1935,12 +2017,12 @@ function Get-PiValueCompletions {
         }
         'SessionPathOrId' {
             if (Test-PiPathLike -Value $WordToComplete) {
-                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                     [void]$results.Add($item)
                 }
             } else {
                 foreach ($sessionFile in @(Get-PiSessionFileSuggestions)) {
-                    & $addResult $sessionFile 'Session file'
+                    & $addResult $sessionFile 'Session file' -emittedText (ConvertTo-PiQuotedValue -Value $sessionFile -QuoteCharacter $QuoteCharacter)
                 }
 
                 & $addResult '<session-path-or-id>' 'Session path or partial UUID'
@@ -1953,7 +2035,7 @@ function Get-PiValueCompletions {
             }
 
             if (Test-PiPathLike -Value $WordToComplete) {
-                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                     [void]$results.Add($item)
                 }
             }
@@ -1970,7 +2052,7 @@ function Get-PiValueCompletions {
             }
 
             if (Test-PiPathLike -Value $WordToComplete) {
-                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                     [void]$results.Add($item)
                 }
             }
@@ -1991,7 +2073,7 @@ function Get-PiValueCompletions {
             }
 
             if (Test-PiPathLike -Value $WordToComplete) {
-                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+                foreach ($item in @(Get-PiPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix -QuoteCharacter $QuoteCharacter)) {
                     [void]$results.Add($item)
                 }
             }
@@ -1999,7 +2081,7 @@ function Get-PiValueCompletions {
             & $addResult '<source>' 'Installed package source or self target'
         }
         'MessageFile' {
-            foreach ($item in @(Get-PiAtFileCompletions -WordToComplete $WordToComplete)) {
+            foreach ($item in @(Get-PiAtFileCompletions -WordToComplete $WordToComplete -QuoteCharacter $QuoteCharacter)) {
                 [void]$results.Add($item)
             }
         }
@@ -2246,9 +2328,16 @@ function Complete-Pi {
         return
     }
 
+    $strandedAt = Test-PiStrandedAt -CommandAst $CommandAst -CursorPosition $CursorPosition
+
     if ($rootMessageMode) {
+        if ($strandedAt) {
+            Get-PiAtFileCompletions -WordToComplete "@$WordToComplete" -StrandedAt
+            return
+        }
+
         if ($WordToComplete.StartsWith('@')) {
-            Get-PiAtFileCompletions -WordToComplete $WordToComplete
+            Get-PiAtFileCompletions -WordToComplete $WordToComplete -QuoteCharacter $quoteCharacter
             return
         }
 
@@ -2260,12 +2349,17 @@ function Complete-Pi {
 
     if (-not $commandSpec) {
         if ($exportInputConsumed -and -not $exportOutputConsumed) {
-            Get-PiValueCompletions -ValueKind 'ExportOutputPath' -WordToComplete $WordToComplete -ContextToken '--export'
+            Get-PiValueCompletions -ValueKind 'ExportOutputPath' -WordToComplete $WordToComplete -ContextToken '--export' -QuoteCharacter $quoteCharacter
+            return
+        }
+
+        if ($strandedAt) {
+            Get-PiAtFileCompletions -WordToComplete "@$WordToComplete" -StrandedAt
             return
         }
 
         if ($WordToComplete.StartsWith('@')) {
-            Get-PiAtFileCompletions -WordToComplete $WordToComplete
+            Get-PiAtFileCompletions -WordToComplete $WordToComplete -QuoteCharacter $quoteCharacter
             return
         }
 
@@ -2284,7 +2378,8 @@ function Complete-Pi {
                 [void]$results.Add($option)
             }
 
-            [void]$results.Add((New-PiCompletionResult -CompletionText '@' -ToolTip 'Prefix a file path with @ to include it in the message'))
+            # A bare '@' does not parse, so the hint is a placeholder to type over.
+            [void]$results.Add((New-PiCompletionResult -CompletionText '@<file>' -ToolTip 'Prefix a file path with @ to include it in the message'))
         }
 
         $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

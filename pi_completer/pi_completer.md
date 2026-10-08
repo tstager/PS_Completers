@@ -108,7 +108,7 @@ The completer augments the static surface with safe local discovery:
 
 All of these files go through `Read-PiJsonFile`, which accepts comments and trailing commas, reads keys case-sensitively as pi does, and validates with `Test-Json` before `ConvertFrom-Json -AsHashtable`, so a malformed or empty file contributes nothing and adds no record to `$Error`.
 
-The agent directory honours `PI_CODING_AGENT_DIR`. Installed package sources and MCP server names that contain spaces or PowerShell metacharacters are quoted, keeping the quote the user typed.
+The agent directory honours `PI_CODING_AGENT_DIR`. Installed package sources, MCP server names, theme names, session files, and file paths that contain spaces or PowerShell metacharacters are quoted, keeping the quote the user typed (ASCII or typographic, also after `--flag=`); single quotes are the default.
 
 These discoveries are cached with short TTLs, keyed on the current directory where a project file takes part, so completion stays responsive.
 
@@ -161,7 +161,7 @@ Placeholder-only slots suppress noisy filesystem fallback for:
 
 - `pi config --help` did not print normal help in clean PowerShell and instead behaved like an interactive TUI path, so the completer treats `config` as a command with no deeper help-driven probing.
 - Root help may include extension-registered CLI flags. Those are parsed lazily from `pi --help`, but only when the local help output is available and parseable.
-- Root `@file` completion preserves the `@` prefix in the returned completions.
+- Root `@file` completion keeps the `@` inside the quotes (`'@.\a b.txt'`), since `@'` would open a here-string. A bare `@` does not parse, so `@.\a b` reaches the completer as a stranded `@` plus the path; those completions are `('@.\a b.txt')`, which turns the stranded `@` into `@(...)` and still passes one `@path` argument. The root hint is the placeholder `@<file>`.
 - Export output-path completion keeps working after both spaced and inline `--export` input forms, including `output.html` prefix matching.
 
 ## Validation expectations
