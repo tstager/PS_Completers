@@ -1034,7 +1034,7 @@
         @{
             Path    = 'rustc_completer/rustc_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:A6C5E691D514C334A62DE3851948BFF73DD3EACAB74EF938C1856FA8F515788F'
+            Hash    = 'SHA256:D2A31FDD69FE279DAE41DA8388F54D1BC80560B7879B093435E383328D9FE41B'
             Targets = @(
                 @{ CommandName = 'rustc'; Native = $true }
                 @{ CommandName = 'rustc.exe'; Native = $true }

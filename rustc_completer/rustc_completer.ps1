@@ -50,21 +50,22 @@ function Get-RustcTokenState {
     $prefix = $Line.Substring(0, $safeCursor)
     $tokens = New-Object System.Collections.Generic.List[string]
     $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
+    $openQuote = ''
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
+        $quoteKind = Get-RustcQuoteKind -Character $character
+        if ($quoteKind) {
+            if (-not $openQuote) {
+                $openQuote = $quoteKind
+            } elseif ($openQuote -eq $quoteKind) {
+                $openQuote = ''
             }
 
             [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
+        if ([char]::IsWhiteSpace($character) -and -not $openQuote) {
             if ($builder.Length -gt 0) {
                 [void]$tokens.Add($builder.ToString())
                 [void]$builder.Clear()
@@ -101,6 +102,22 @@ function Get-RustcTokenState {
     }
 }
 
+function Get-RustcQuoteKind {
+    # PowerShell treats ' and U+2018-U+201B as single quotes, and " and
+    # U+201C-U+201E as double quotes.
+    param([char]$Character)
+
+    if (($Character -eq [char]39) -or (($Character -ge [char]0x2018) -and ($Character -le [char]0x201B))) {
+        return 'Single'
+    }
+
+    if (($Character -eq [char]34) -or (($Character -ge [char]0x201C) -and ($Character -le [char]0x201E))) {
+        return 'Double'
+    }
+
+    ''
+}
+
 function Remove-RustcOuterQuotes {
     param([string]$Value)
 
@@ -108,17 +125,22 @@ function Remove-RustcOuterQuotes {
         return ''
     }
 
-    if ($Value.Length -ge 2) {
-        if ($Value.StartsWith('"') -and $Value.EndsWith('"')) {
-            return $Value.Substring(1, $Value.Length - 2).Replace('`"', '"')
-        }
-
-        if ($Value.StartsWith("'") -and $Value.EndsWith("'")) {
-            return $Value.Substring(1, $Value.Length - 2).Replace("''", "'")
-        }
+    $quoteKind = Get-RustcQuoteKind -Character $Value[0]
+    if (-not $quoteKind) {
+        return $Value
     }
 
-    $Value.TrimStart('"', "'")
+    # An unterminated quote (the word being typed) has no closing character.
+    $inner = $Value.Substring(1)
+    if (($inner.Length -gt 0) -and ((Get-RustcQuoteKind -Character $inner[$inner.Length - 1]) -eq $quoteKind)) {
+        $inner = $inner.Substring(0, $inner.Length - 1)
+    }
+
+    if ($quoteKind -eq 'Single') {
+        return $inner -replace "([''\u2018-\u201B])[''\u2018-\u201B]", '$1'
+    }
+
+    $inner -replace '`([`"$\u201C-\u201E])', '$1'
 }
 
 function ConvertTo-RustcQuotedValue {
@@ -131,18 +153,24 @@ function ConvertTo-RustcQuotedValue {
         return $Value
     }
 
-    $needsQuote = $Value -match '\s'
-    $preferSingle = $OriginalToken.StartsWith("'")
+    # Keep the quote the user typed; otherwise quote only a value that a bare
+    # word cannot carry. A comma is left bare on purpose: PowerShell hands
+    # a,b to a native command unchanged, and an unquoted comma list is
+    # completed one segment at a time (see the comma handling in the completer).
+    $quoteKind = if ($OriginalToken) { Get-RustcQuoteKind -Character $OriginalToken[0] } else { '' }
+    if (-not $quoteKind) {
+        if (($Value -notmatch '[\s{}();|&<>''"`$\u2018-\u201E]') -and ($Value -notmatch '^[@#]')) {
+            return $Value
+        }
 
-    if (-not $needsQuote -and -not $OriginalToken.StartsWith('"') -and -not $preferSingle) {
-        return $Value
+        $quoteKind = 'Single'
     }
 
-    if ($preferSingle -and -not $Value.Contains("'")) {
-        return "'" + $Value + "'"
+    if ($quoteKind -eq 'Single') {
+        return "'" + ($Value -replace "([''\u2018-\u201B])", '$1$1') + "'"
     }
 
-    '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Split-RustcPathToken {
@@ -438,6 +466,18 @@ function Get-RustcValueKindSuggestions {
     $clean = Remove-RustcOuterQuotes -Value $raw
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
 
+    # --crate-type, --emit and --remap-path-scope take comma-separated lists:
+    # complete the segment after the last comma and keep the earlier segments.
+    $listHead = ''
+    $segment = $clean
+    if ($ValueKind -in @('CrateType', 'EmitType', 'RemapPathScope')) {
+        $lastComma = $clean.LastIndexOf(',')
+        if ($lastComma -ge 0) {
+            $listHead = $clean.Substring(0, $lastComma + 1)
+            $segment = $clean.Substring($lastComma + 1)
+        }
+    }
+
     switch ($ValueKind) {
         'Edition' {
             foreach ($value in $catalog.Editions) {
@@ -448,15 +488,17 @@ function Get-RustcValueKindSuggestions {
         }
         'CrateType' {
             foreach ($value in $catalog.CrateTypes) {
-                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc crate type'))
+                if ($value.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $quoted = ConvertTo-RustcQuotedValue -Value ($listHead + $value) -OriginalToken $raw
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $quoted -ResultType 'ParameterValue' -ToolTip 'rustc crate type' -ListItemText $value))
                 }
             }
         }
         'EmitType' {
             foreach ($value in $catalog.EmitTypes) {
-                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc emit type'))
+                if ($value.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $quoted = ConvertTo-RustcQuotedValue -Value ($listHead + $value) -OriginalToken $raw
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $quoted -ResultType 'ParameterValue' -ToolTip 'rustc emit type' -ListItemText $value))
                 }
             }
             if ($clean -and ($results.Count -eq 0)) {
@@ -505,8 +547,9 @@ function Get-RustcValueKindSuggestions {
         }
         'RemapPathScope' {
             foreach ($value in @('macro', 'diagnostics', 'debuginfo', 'coverage', 'object', 'all')) {
-                if ($value.StartsWith($clean, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    [void]$results.Add((New-RustcCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip 'rustc --remap-path-scope'))
+                if ($value.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $quoted = ConvertTo-RustcQuotedValue -Value ($listHead + $value) -OriginalToken $raw
+                    [void]$results.Add((New-RustcCompletionResult -CompletionText $quoted -ResultType 'ParameterValue' -ToolTip 'rustc --remap-path-scope' -ListItemText $value))
                 }
             }
         }
@@ -543,9 +586,22 @@ function Get-RustcValueKindSuggestions {
             if ($clean -match '^([^=]+)=(.*)$') {
                 $optionName = $matches[1]
                 $optionValuePrefix = $matches[2]
+                # A quote opened after the '=' (target-feature="+a,+b) makes
+                # PowerShell replace the whole word: keep name= bare and re-quote
+                # the value so the quote is closed.
+                $valueQuoteToken = ''
+                if (-not (Get-RustcQuoteKind -Character $raw[0]) -and $optionValuePrefix -and (Get-RustcQuoteKind -Character $optionValuePrefix[0])) {
+                    $valueQuoteToken = $optionValuePrefix
+                    $optionValuePrefix = Remove-RustcOuterQuotes -Value $optionValuePrefix
+                }
+
                 foreach ($value in (Get-RustcCodegenValueSuggestions -OptionName $optionName -ValuePrefix $optionValuePrefix)) {
                     # A quoted token keeps its quote: list values carry commas.
-                    $quoted = ConvertTo-RustcQuotedValue -Value $value.CompletionText -OriginalToken $raw
+                    $quoted = if ($valueQuoteToken) {
+                        $optionName + '=' + (ConvertTo-RustcQuotedValue -Value $value.CompletionText.Substring($optionName.Length + 1) -OriginalToken $valueQuoteToken)
+                    } else {
+                        ConvertTo-RustcQuotedValue -Value $value.CompletionText -OriginalToken $raw
+                    }
                     [void]$results.Add((New-RustcCompletionResult -CompletionText $quoted -ResultType $value.ResultType -ToolTip $value.ToolTip -ListItemText $value.ListItemText))
                 }
             } else {
@@ -855,27 +911,38 @@ Register-ArgumentCompleter -Native -CommandName @('rustc', 'rustc.exe') -ScriptB
 
     # An unquoted comma splits the word for PowerShell, which then replaces only
     # the segment after the last comma. A -C signed list (target-feature=+a,+b)
-    # is completed whole and trimmed back to that segment.
+    # or a --crate-type/--emit/--remap-path-scope list is completed whole and
+    # trimmed back to that segment. A comma inside quotes, including a quote
+    # opened after the '=' (--emit="asm,ll), does not split the word: PowerShell
+    # replaces all of it, so it is completed whole below.
+    $listKinds = @('CodegenOption', 'CrateType', 'EmitType', 'RemapPathScope')
     $listHead = ''
-    if (-not [string]::IsNullOrEmpty($currentToken) -and -not $currentToken.StartsWith('"') -and -not $currentToken.StartsWith("'")) {
-        $lastComma = $currentToken.LastIndexOf(',')
-        if ($lastComma -ge 0) {
-            $listHead = $currentToken.Substring(0, $lastComma + 1)
+    $openQuote = ''
+    for ($index = 0; $index -lt $currentToken.Length; $index++) {
+        $quoteKind = Get-RustcQuoteKind -Character $currentToken[$index]
+        if ($quoteKind) {
+            if (-not $openQuote) {
+                $openQuote = $quoteKind
+            } elseif ($openQuote -eq $quoteKind) {
+                $openQuote = ''
+            }
+        } elseif (($currentToken[$index] -eq ',') -and -not $openQuote) {
+            $listHead = $currentToken.Substring(0, $index + 1)
         }
     }
 
     if ($listHead) {
         $listResults = $null
         $listState = Get-RustcState -TokensBeforeCurrent @($tokensBeforeCurrent | Select-Object -Skip 1)
-        if ($listState.PendingValueKind -eq 'CodegenOption') {
-            $listResults = @(Get-RustcValueKindSuggestions -ValueKind 'CodegenOption' -CurrentToken $currentToken)
+        if ($listState.PendingValueKind -in $listKinds) {
+            $listResults = @(Get-RustcValueKindSuggestions -ValueKind $listState.PendingValueKind -CurrentToken $currentToken)
         } elseif ($currentToken -match '^(--[A-Za-z0-9\-]+)=(.*)$') {
             $catalog = Get-RustcCatalog
             $optionName = $matches[1]
             $attachedValue = $matches[2]
-            if ($catalog.AliasLookup.ContainsKey($optionName) -and $catalog.AliasLookup[$optionName].ValueKind -eq 'CodegenOption') {
+            if ($catalog.AliasLookup.ContainsKey($optionName) -and $catalog.AliasLookup[$optionName].ValueKind -in $listKinds) {
                 $listResults = @(
-                    Get-RustcValueKindSuggestions -ValueKind 'CodegenOption' -CurrentToken $attachedValue |
+                    Get-RustcValueKindSuggestions -ValueKind $catalog.AliasLookup[$optionName].ValueKind -CurrentToken $attachedValue |
                         ForEach-Object {
                             New-RustcCompletionResult -CompletionText ($optionName + '=' + $_.CompletionText) -ResultType $_.ResultType -ToolTip $_.ToolTip
                         }

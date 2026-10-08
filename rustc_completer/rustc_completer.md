@@ -161,6 +161,16 @@ Both value forms work. The attached form keeps its `--opt=` prefix on the
 inserted text, so `rustc --emit=<TAB>` yields `--emit=asm` rather than a bare
 `asm` that would replace the whole token and delete the option name.
 
+`--crate-type`, `--emit` and `--remap-path-scope` take comma-separated lists,
+in both the separate and the attached form. The segment after the last comma
+is completed and the earlier segments are kept: `rustc --emit asm,ll<TAB>`
+inserts `llvm-bc` / `llvm-ir`, `rustc --crate-type=lib,<TAB>` offers the crate
+types instead of the switch list, and `rustc --emit asm=out.s,li<TAB>` skips the
+`=FILE` suffix of the earlier segment. A comma inside quotes does not split
+the word, so PowerShell replaces all of it: a quoted list is completed whole and
+keeps the user's quote, also when the quote opens after the `=`
+(`"lib,r<TAB>` -> `"lib,rlib"`, `--emit="asm,ll<TAB>` -> `--emit="asm,llvm-bc"`).
+
 For `-C` / `--codegen`, the completer recognizes `name=value` forms and reads
 each option's values from rustc itself, lazily, the first time that option's
 value slot is completed, and caches them for the session:
@@ -192,7 +202,8 @@ Signed lists (`target-feature`, `link-self-contained`, `linker-features`)
 complete the segment after the last comma. Unquoted, PowerShell replaces only
 that segment, so `rustc -C target-feature=+avx2,+ss<TAB>` inserts `+sse`,
 `+sse2`, ...; inside quotes the whole value is replaced and the user's quote is
-kept (`'target-feature=+avx2,+sse'`).
+kept and closed (`'target-feature=+avx2,+sse'`, and
+`target-feature="+avx2,+ss<TAB>` -> `target-feature="+avx2,+sse"`).
 
 Without rustc on PATH the static tables (`opt-level`, the common booleans,
 `code-model`, `lto`, `panic`, `strip`, `split-debuginfo`,
@@ -212,6 +223,11 @@ throws on an empty string, which aborted the whole completion scriptblock and
 silently degraded every empty or bare path slot to PowerShell's filename
 fallback; on a trailing separator it also returns the directory itself as the
 leaf, so a slot could never descend.
+
+A path is quoted when a bare word could not carry it (whitespace, `$`, `'`,
+`(`, a leading `@`, ...), in the quote the user typed or else in single quotes
+(`it's.rs` -> `'it''s.rs'`). The typographic quotes count as the matching ASCII
+quote, as they do for PowerShell.
 
 ### Placeholder-only slots
 
@@ -276,7 +292,7 @@ Clean `pwsh -NoProfile` `TabExpansion2` runs:
 ## Limitations
 
 - The completer does not parse every possible nested `rustc` value grammar; the
-  comma-separated `--emit`/`--crate-type`/`--print` lists and the `=FILE` suffix
+  `--emit` `=FILE` suffix, `--print` `=FILE` and comma-separated `--json` lists
   are not modelled.
 - `-L` and `-l` support richer syntaxes than simple directory/library-name hints; the completer keeps those slots conservative.
 - Path completion is local-only and prefix-based.
