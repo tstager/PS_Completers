@@ -99,7 +99,7 @@ Path completion is used for:
 - inline path options such as `/LOG:` and related log-file options
 - rooted paths typed inside source-relative contexts
 
-Directory completions append a trailing `\`. Values are quoted when needed for spaces or when the input already started with a quote.
+Hidden and system entries (such as `AppData`) are listed too, since robocopy copies them by default. Directory completions append a trailing `\`. A value is quoted when it contains whitespace, a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " `` ` `` $`), a typographic quote, or starts with `@` or `#`, so names such as `$Recycle.Bin` or `a&b` reach robocopy as one literal argument. The quote you typed is kept (`'`, `"`, or a typographic quote, including after an inline option such as `/LOG:"`); otherwise single quotes are used. A path that starts from a variable (`$env:TEMP\`, `/LOG:$env:TEMP\x`, `"$HOME\Doc`) completes against the path PowerShell expands it to, and the accepted completion spells out that real path. Missing, unreadable, or protected folders produce no completions and leave `$Error` untouched.
 
 ### File and directory spec completion
 

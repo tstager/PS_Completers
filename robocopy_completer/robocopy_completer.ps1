@@ -13,7 +13,7 @@ if (-not (Get-Variable -Name RobocopyCompletionCatalog -Scope Script -ErrorActio
 }
 
 function Invoke-RobocopyHelpText {
-    if (-not (Get-Command -Name robocopy.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name robocopy.exe -ErrorAction Ignore)) {
         return @()
     }
 
@@ -328,21 +328,85 @@ function Remove-RobocopyOuterQuotes {
     $Text.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-RobocopyQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function Get-RobocopyTypedQuote {
+    # The quote style a typed word opens with: "'" (any single-quote character),
+    # '"' (any double-quote character) or '' for a bare word.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
+        return ''
+    }
+
+    if ($Value[0] -match '[''\u2018-\u201B]') {
+        return "'"
+    }
+
+    if ($Value[0] -match '["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-RobocopyTypedWord {
+    # The value of a typed word without its quotes and that quote style's
+    # escapes. The parser closes an unterminated quote and undoes every doubled
+    # or backtick-escaped quote, typographic ones included.
+    param([string]$Value)
+
+    $quote = Get-RobocopyTypedQuote -Value $Value
+    if (-not $quote) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value + '"'
+    foreach ($candidate in @($Value, ($Value + $quote))) {
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($candidate, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            continue
+        }
+
+        $constant = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]
+        }, $true)
+        if ($constant) {
+            return $constant.Value
+        }
     }
 
-    $Value
+    Remove-RobocopyOuterQuotes $Value
+}
+
+function ConvertTo-RobocopyQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the typed quote style (single by default).
+    # Whitespace and argument-mode metacharacters (including the typographic
+    # quotes) end or split a bare word, and a leading '@' or '#' would start a
+    # splat or a comment.
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function ConvertFrom-RobocopyHelpToken {
@@ -473,22 +537,13 @@ function Get-RobocopyOptionKey {
 function Resolve-RobocopySourcePath {
     param([string]$PathText)
 
-    $cleanPath = Remove-RobocopyOuterQuotes $PathText
+    $cleanPath = ConvertFrom-RobocopyTypedWord -Value $PathText
     if ([string]::IsNullOrWhiteSpace($cleanPath) -or $cleanPath.StartsWith('\\')) {
         # A UNC source is never resolved from the completion thread.
         return $null
     }
 
-    $errorCountBefore = $Error.Count
-    try {
-        (Resolve-Path -LiteralPath $cleanPath -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Path)
-    } catch {
-        $null
-    } finally {
-        while ($Error.Count -gt $errorCountBefore) {
-            $Error.RemoveAt(0)
-        }
-    }
+    Resolve-Path -LiteralPath $cleanPath -ErrorAction Ignore | Select-Object -First 1 -ExpandProperty Path
 }
 
 function Get-RobocopyArgumentList {
@@ -581,20 +636,22 @@ function Get-RobocopyUniqueCompletions {
 }
 
 function Get-RobocopyPathCompletions {
+    # $InputPath is the unquoted path value; $Quote is the quote style the user
+    # typed for the whole word ('' for a bare word).
     param(
         [string]$InputPath,
         [string]$Kind,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$Quote = ''
     )
 
-    $cleanInput = Remove-RobocopyOuterQuotes $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    $cleanInput = $InputPath
 
     if ($cleanInput.StartsWith('\\')) {
         # robocopy's dominant use is UNC, but a share is never enumerated from
         # the completion thread: keep the typed path and say so.
         return @(
-            New-RobocopyCompletionResult -CompletionText $InputPath -ListItemText '<\\server\share\path>' -ResultType 'ParameterValue' -ToolTip 'UNC path; network shares are not enumerated during completion.'
+            New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value ($CompletionPrefix + $cleanInput) -Quote $Quote) -ListItemText '<\\server\share\path>' -ResultType 'ParameterValue' -ToolTip 'UNC path; network shares are not enumerated during completion.'
         )
     }
 
@@ -614,7 +671,7 @@ function Get-RobocopyPathCompletions {
     }
 
     $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
@@ -644,7 +701,7 @@ function Get-RobocopyPathCompletions {
         }
 
         [void]$results.Add((New-RobocopyCompletionResult `
-            -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText -AlwaysQuote $alwaysQuote) `
+            -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText -Quote $Quote) `
             -ListItemText $tokenText `
             -ResultType 'ParameterValue' `
             -ToolTip $item.FullName))
@@ -653,7 +710,7 @@ function Get-RobocopyPathCompletions {
     if ($results.Count -eq 0 -and $Kind -eq 'Directory' -and [string]::IsNullOrEmpty($CompletionPrefix)) {
         # The source and destination operands must be directories; without a
         # placeholder the engine would substitute file names here.
-        $placeholder = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '<directory>' } else { $InputPath }
+        $placeholder = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '<directory>' } else { ConvertTo-RobocopyQuotedValue -Value $cleanInput -Quote $Quote }
         [void]$results.Add((New-RobocopyCompletionResult -CompletionText $placeholder -ListItemText '<directory>' -ResultType 'ParameterValue' -ToolTip 'Directory path (drive:\path or \\server\share\path).'))
     }
 
@@ -667,16 +724,15 @@ function Get-RobocopySourceRelativeCompletions {
         [string]$Kind
     )
 
-    $cleanInput = Remove-RobocopyOuterQuotes $InputPath
+    $quote = Get-RobocopyTypedQuote -Value $InputPath
+    $cleanInput = ConvertFrom-RobocopyTypedWord -Value $InputPath
     if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
         return @()
     }
 
     if (-not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)) {
-        return @(Get-RobocopyPathCompletions -InputPath $InputPath -Kind $Kind)
+        return @(Get-RobocopyPathCompletions -InputPath $cleanInput -Kind $Kind -Quote $quote)
     }
-
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $relativeParent = ''
@@ -695,7 +751,7 @@ function Get-RobocopySourceRelativeCompletions {
         Join-Path -Path $SourcePath -ChildPath $relativeParent
     }
 
-    $items = @(Get-ChildItem -LiteralPath $basePath -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $basePath -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     if ($Kind -eq 'Directory') {
@@ -718,7 +774,7 @@ function Get-RobocopySourceRelativeCompletions {
         }
 
         New-RobocopyCompletionResult `
-            -CompletionText (ConvertTo-RobocopyQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote) `
+            -CompletionText (ConvertTo-RobocopyQuotedValue -Value $pathText -Quote $quote) `
             -ListItemText $pathText `
             -ResultType 'ParameterValue' `
             -ToolTip $item.FullName
@@ -817,25 +873,26 @@ function Get-RobocopyJobCompletions {
     param(
         [string]$Prefix,
         [string]$CurrentValue,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$Quote = ''
     )
 
-    $cleanCurrentValue = Remove-RobocopyOuterQuotes $CurrentValue
-    $jobFiles = @(Get-ChildItem -LiteralPath . -Filter '*.rcj' -File -ErrorAction SilentlyContinue)
+    $cleanCurrentValue = $CurrentValue
+    $jobFiles = @(Get-ChildItem -LiteralPath . -Filter '*.rcj' -File -ErrorAction Ignore)
 
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($jobFile in $jobFiles | Sort-Object -Property Name) {
         $jobName = [System.IO.Path]::GetFileNameWithoutExtension($jobFile.Name)
         if ($jobName -like ([System.Management.Automation.WildcardPattern]::Escape($cleanCurrentValue) + '*')) {
             $tokenText = $Prefix + $jobName
-            [void]$results.Add((New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $jobFile.FullName))
+            [void]$results.Add((New-RobocopyCompletionResult -CompletionText (ConvertTo-RobocopyQuotedValue -Value $tokenText -Quote $Quote) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $jobFile.FullName))
         }
     }
 
     if ($results.Count -eq 0) {
         # No matching .rcj in the cwd: name the slot instead of letting the option
         # list echo the '/JOB:' the user already typed.
-        $tokenText = if ([string]::IsNullOrWhiteSpace($cleanCurrentValue)) { $Prefix + '<jobname>' } else { $Prefix + $CurrentValue }
+        $tokenText = if ([string]::IsNullOrWhiteSpace($cleanCurrentValue)) { $Prefix + '<jobname>' } else { ConvertTo-RobocopyQuotedValue -Value ($Prefix + $cleanCurrentValue) -Quote $Quote }
         [void]$results.Add((New-RobocopyCompletionResult -CompletionText $tokenText -ListItemText ($Prefix + '<jobname>') -ResultType 'ParameterValue' -ToolTip $ToolTip))
     }
 
@@ -847,7 +904,10 @@ function Get-RobocopyInlineValueCompletions {
 
     Initialize-RobocopyCompletion
 
-    $cleanWord = Remove-RobocopyOuterQuotes $WordToComplete
+    # The quote may open the whole word ('/LOG:C:\a b) or only its value
+    # (/LOG:'C:\a b); either way the completion re-renders the whole word.
+    $quote = Get-RobocopyTypedQuote -Value $WordToComplete
+    $cleanWord = ConvertFrom-RobocopyTypedWord -Value $WordToComplete
     $match = [regex]::Match($cleanWord, '^(?<root>/[A-Za-z0-9?]+(?:[+-])?)(?<separator>:)(?<value>.*)$')
     if (-not $match.Success) {
         return @()
@@ -865,13 +925,17 @@ function Get-RobocopyInlineValueCompletions {
 
     $prefix = $match.Groups['root'].Value + ':'
     $currentValue = $match.Groups['value'].Value
+    if (-not $quote) {
+        $quote = Get-RobocopyTypedQuote -Value $currentValue
+        $currentValue = ConvertFrom-RobocopyTypedWord -Value $currentValue
+    }
 
     switch ($optionInfo.InlineValueKind) {
         'Path' {
-            return @(Get-RobocopyPathCompletions -InputPath $currentValue -Kind 'Any' -CompletionPrefix $prefix)
+            return @(Get-RobocopyPathCompletions -InputPath $currentValue -Kind 'Any' -CompletionPrefix $prefix -Quote $quote)
         }
         'Job' {
-            return @(Get-RobocopyJobCompletions -Prefix $prefix -CurrentValue $currentValue -ToolTip $optionInfo.Description)
+            return @(Get-RobocopyJobCompletions -Prefix $prefix -CurrentValue $currentValue -ToolTip $optionInfo.Description -Quote $quote)
         }
         'List' {
             return @(Get-RobocopyPrefixedSuggestions -Prefix $prefix -CurrentValue $currentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
@@ -913,13 +977,47 @@ function Complete-Robocopy {
         [int]$cursorPosition
     )
 
-    if (-not (Get-Command -Name robocopy.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name robocopy.exe -ErrorAction Ignore)) {
         return @()
     }
 
     Initialize-RobocopyCompletion
 
     $currentWord = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
+
+    # The engine hands over a quoted word already unescaped and re-wrapped in
+    # quotes (or, for /LOG:"x, unquoted), which loses the quote the user typed;
+    # read the word under the cursor as typed instead. The completion replaces
+    # that whole word.
+    $typedElement = $commandAst.CommandElements | Select-Object -Skip 1 | Where-Object {
+        $_.Extent.StartOffset -lt $cursorPosition -and $_.Extent.EndOffset -ge $cursorPosition -and
+        ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+         $_ -is [System.Management.Automation.Language.ExpandableStringExpressionAst])
+    } | Select-Object -Last 1
+    if ($typedElement) {
+        $currentWord = $typedElement.Extent.Text
+
+        if ($typedElement -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+            # A word with variables ($env:TEMP\x) arrives with them expanded, a
+            # double-quoted one re-wrapped in a plain '"' without escaping; the
+            # typed text names no real path. Complete the expanded path, rendered
+            # back in the quote the user typed (around the word or, for
+            # /LOG:"$env:TEMP\x, around the value).
+            $quote = Get-RobocopyTypedQuote -Value $currentWord
+            $expanded = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
+            if ($quote -and $expanded.Length -ge 2 -and $expanded.StartsWith('"') -and $expanded.EndsWith('"')) {
+                $expanded = $expanded.Substring(1, $expanded.Length - 2)
+            }
+
+            $optionMatch = [regex]::Match($typedElement.Extent.Text, '^/[A-Za-z0-9?]+(?:[+-])?:')
+            $valueQuote = if ($optionMatch.Success) { Get-RobocopyTypedQuote -Value $typedElement.Extent.Text.Substring($optionMatch.Length) } else { '' }
+            $currentWord = if (-not $quote -and $valueQuote -and $expanded.StartsWith($optionMatch.Value)) {
+                $optionMatch.Value + (ConvertTo-RobocopyQuotedValue -Value $expanded.Substring($optionMatch.Length) -Quote $valueQuote)
+            } else {
+                ConvertTo-RobocopyQuotedValue -Value $expanded -Quote $quote
+            }
+        }
+    }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and (Remove-RobocopyOuterQuotes $currentWord).StartsWith('/')) {
         $inlineValueCompletions = @(Get-RobocopyInlineValueCompletions -WordToComplete $currentWord)
@@ -943,7 +1041,7 @@ function Complete-Robocopy {
     }
 
     if ($context.Positionals.Count -lt 2) {
-        return @(Get-RobocopyPathCompletions -InputPath $currentWord -Kind 'Directory')
+        return @(Get-RobocopyPathCompletions -InputPath (ConvertFrom-RobocopyTypedWord -Value $currentWord) -Kind 'Directory' -Quote (Get-RobocopyTypedQuote -Value $currentWord))
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {
