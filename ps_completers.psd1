@@ -1079,7 +1079,7 @@
         @{
             Path    = 'schtasks_completer/schtasks_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:616E0209E1574C4E9C415218E4A308025F12B63573D50CFD0D827EFE7D93DCEF'
+            Hash    = 'SHA256:D7C065B490232F383A44F4D89E76C975D003C40AAF7FE6EE529148210F30D8F4'
             Targets = @(
                 @{ CommandName = 'schtasks'; Native = $true }
                 @{ CommandName = 'schtasks.exe'; Native = $true }

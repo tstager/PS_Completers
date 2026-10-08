@@ -126,7 +126,9 @@ A per-subcommand value-slot table (`Get-SchtasksValueOptionTable`) decides how e
 
 ### Quoting behavior
 
-Path and task-name suggestions are double-quoted when they contain whitespace or a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " $` or a backtick, or a leading `@`/`#`), or when the current input already started with a `"`. Inside the quotes a backtick, `"` or `$` is escaped with a backtick, so a task such as `\SoftLanding\...Task-{60e0b626-...}` or a folder such as `x$y` reaches `schtasks` unchanged.
+Path and task-name suggestions are double-quoted when they contain whitespace or a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " $ @ #`, a backtick or a typographic quote), when they start with a dash, or when the current input already started with a `"`. Inside the quotes a backtick, `"` or `$` (or a typographic double quote) is escaped with a backtick, so a task such as `\SoftLanding\...Task-{60e0b626-...}` or a folder such as `x$y` reaches `schtasks` unchanged.
+
+A path candidate keeps the directory part exactly as typed, including a leading `.\`, `./` or `..\` and its separator style. A bare file name that starts with a dash (`-`, or an en or em dash) is offered as `.\-name` so PowerShell does not parse it as a parameter.
 
 Value hints (`/SC`, `/RU`, ...) match the typed prefix past an opening `"` or `'`, so `/RU N`, `/RU "NT` and `/RU 'NT` all reach the `NT AUTHORITY\...` accounts. A hint is quoted with the quote character you typed, or with double quotes when it contains whitespace and you typed none.
 

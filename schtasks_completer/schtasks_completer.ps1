@@ -328,9 +328,10 @@ function ConvertTo-SchtasksQuotedValue {
     }
 
     # Quote on whitespace or any argument-mode metacharacter ('{' would open a
-    # script block, '$' would expand), escaping ` " $ inside the double quotes.
-    if ($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
+    # script block, '$' would expand) or a leading dash (it would parse as a parameter),
+    # escaping ` " $ and the typographic double quotes inside the double quotes.
+    if ($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
 
     $Value
@@ -364,21 +365,15 @@ function Get-SchtasksPathCompletions {
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
     $alwaysQuote = [bool]($InputPath -and $InputPath.StartsWith('"'))
 
-    # Split-Path throws on '', and a trailing separator means "list this directory".
-    $parent = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
-        if ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
-            $parent = $cleanInput
-        } else {
-            $candidateParent = Split-Path -Path $cleanInput -Parent
-            if (-not [string]::IsNullOrWhiteSpace($candidateParent)) {
-                $parent = $candidateParent
-            }
-
-            $leaf = Split-Path -Path $cleanInput -Leaf
-        }
+    # Split the typed text at its last separator and keep the directory part verbatim,
+    # so a typed '.\', './' or '..\' (and its separator style) survives in every candidate.
+    $directoryPart = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/') + 1)
+    if (-not $directoryPart -and $cleanInput -match '^[A-Za-z]:') {
+        $directoryPart = $cleanInput.Substring(0, 2)
     }
+    $leaf = $cleanInput.Substring($directoryPart.Length)
+    $parent = if ($directoryPart) { $directoryPart } else { '.' }
+    $separator = if ($directoryPart.Contains('/') -and -not $directoryPart.Contains('\')) { '/' } else { '\' }
 
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object {
         [string]::IsNullOrWhiteSpace($leaf) -or $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
@@ -390,9 +385,11 @@ function Get-SchtasksPathCompletions {
     }
 
     foreach ($item in $items) {
-        $candidate = if ($parent -eq '.') { $item.Name } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) { $item.FullName } else { Join-Path -Path $parent -ChildPath $item.Name }
-        if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
-            $candidate += '\'
+        # A bare name starting with a dash would parse as a parameter: prefix it like
+        # PowerShell's own file completion does.
+        $candidate = if (-not $directoryPart -and $item.Name -match '^[-\u2013-\u2015]') { '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name } else { $directoryPart + $item.Name }
+        if ($item.PSIsContainer) {
+            $candidate += $separator
         }
 
         ConvertTo-SchtasksQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
