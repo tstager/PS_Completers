@@ -563,19 +563,12 @@ function Get-RgPathCompletions {
     $quoteChar = Get-RgQuoteChar -Value $InputPath
     $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { Remove-RgOuterQuotes -Value $InputPath }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # Candidates keep the typed directory text (.\, ./, ..\, ~\, C:\...) exactly as typed.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
+    $separator = if ($typedDirectory.EndsWith('/')) { '/' } else { [string][System.IO.Path]::DirectorySeparatorChar }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
     $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
@@ -584,18 +577,14 @@ function Get-RgPathCompletions {
     }
 
     foreach ($item in $items) {
-        $completionText = if (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
-            $item.FullName
+        $completionText = $typedDirectory + $item.Name
+        if ($item.PSIsContainer) {
+            $completionText += $separator
         }
 
-        if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionText += [System.IO.Path]::DirectorySeparatorChar
+        # A whole-word value starting with a dash would parse as a parameter: anchor it to the current directory.
+        if (-not $Prefix -and $completionText -match '^[-\u2013-\u2015]') {
+            $completionText = '.' + $separator + $completionText
         }
 
         $completionText = ConvertTo-RgQuotedValue -Value $completionText -QuoteChar $quoteChar
