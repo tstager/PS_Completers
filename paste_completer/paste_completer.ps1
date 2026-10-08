@@ -149,22 +149,17 @@ function Get-PastePathCompletions {
     $cleanInput = ConvertFrom-PasteTypedWord -Value $InputPath
     $typedQuote = Get-PasteTypedQuote -Value $InputPath
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The directory part is kept exactly as typed (a typed .\ or ./ included); only the leaf is completed.
+    $typedDirectory = ''
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $separatorIndex = $cleanInput.LastIndexOfAny([char[]]'\/:')
+        $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+        $leaf = $cleanInput.Substring($separatorIndex + 1)
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
@@ -172,12 +167,10 @@ function Get-PastePathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        if (-not $typedDirectory -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash parses as a parameter, so name it relative to the current directory.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
@@ -206,7 +199,7 @@ function ConvertTo-PasteValueArgument {
         return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
 
-    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -or $Value -match '^[-\u2013-\u2015]') {
         return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
