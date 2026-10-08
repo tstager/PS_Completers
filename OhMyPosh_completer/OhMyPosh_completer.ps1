@@ -140,44 +140,106 @@ function Get-OhMyPoshFlag {
     $null
 }
 
+function ConvertFrom-OhMyPoshTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-OhMyPoshQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-OhMyPoshCurrentWord {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # PowerShell hands a quoted word over re-quoted and drops the quote inside an attached
+    # "--config='a", so the word is the whole element under the cursor as typed (the span PowerShell replaces).
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text
+        }
+    }
+
+    ''
+}
+
 function Get-OhMyPoshPathCompletions {
     param(
-        [string]$Prefix,
+        [string]$TypedPrefix,
         [string]$Attached
     )
+
+    # --config='a b.txt' parses as one constant argument, so an attached value is quoted after the '='.
+    $Prefix = ConvertFrom-OhMyPoshTypedWord -Value $TypedPrefix
+    $quoteChar = if ($TypedPrefix -match '^[''"\u2018-\u201E]') { $TypedPrefix.Substring(0, 1) } else { '' }
 
     $results = @()
     $themeRoot = $env:POSH_THEMES_PATH
     if ($themeRoot -and $Prefix -notmatch '[\\/]' -and (Test-Path -LiteralPath $themeRoot)) {
-        foreach ($theme in (Get-ChildItem -LiteralPath $themeRoot -File -Filter '*.omp.*' -ErrorAction SilentlyContinue | Sort-Object -Property Name)) {
+        foreach ($theme in (Get-ChildItem -LiteralPath $themeRoot -File -Filter '*.omp.*' -ErrorAction Ignore | Sort-Object -Property Name)) {
             if ($theme.Name.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $text = if ($theme.FullName -match '\s') { '"' + $theme.FullName + '"' } else { $theme.FullName }
+                $text = ConvertTo-OhMyPoshQuotedValue -Value $theme.FullName -QuoteChar $quoteChar
                 $results += [System.Management.Automation.CompletionResult]::new($Attached + $text, $theme.Name, 'ProviderItem', $theme.FullName)
             }
         }
     }
 
-    if ([string]::IsNullOrEmpty($Prefix) -or $Prefix -match '[\\/]$') {
-        $parent = if ($Prefix) { $Prefix } else { '.' }
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $Prefix -Parent
-        if ([string]::IsNullOrEmpty($parent)) {
-            $parent = '.'
-        }
-        $leaf = Split-Path -Path $Prefix -Leaf
-    }
+    # The typed directory part is kept verbatim, so a typed .\ or ./ and its separator style survive.
+    $directory = $Prefix.Substring(0, $Prefix.LastIndexOfAny([char[]]'\/') + 1)
+    $leaf = $Prefix.Substring($directory.Length)
+    $parent = if ($directory) { $directory } else { '.' }
+    $separator = if ($directory.EndsWith('/')) { '/' } else { '\' }
 
-    foreach ($item in (Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)) {
-        $text = if ($parent -eq '.') { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
+    foreach ($item in (Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)) {
+        $text = $directory + $item.Name
+        # A whole word starting with a dash parses as a parameter, so it gets PowerShell's own .\ prefix.
+        if (-not $directory -and -not $Attached -and $text -match '^[-\u2013-\u2015]') {
+            $text = '.' + [System.IO.Path]::DirectorySeparatorChar + $text
+        }
         if ($item.PSIsContainer) {
-            $text += '\'
+            $text += $separator
         }
-        if ($text -match '\s') {
-            $text = '"' + $text + '"'
-        }
+        $quoted = ConvertTo-OhMyPoshQuotedValue -Value $text -QuoteChar $quoteChar
         $type = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
-        $results += [System.Management.Automation.CompletionResult]::new($Attached + $text, $item.Name, $type, $item.FullName)
+        $results += [System.Management.Automation.CompletionResult]::new($Attached + $quoted, $item.Name, $type, $item.FullName)
     }
 
     $results
@@ -233,10 +295,11 @@ function Complete-OhMyPosh {
         }
     }
 
+    $currentWord = Get-OhMyPoshCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition
     $valueFlag = $null
-    $valuePrefix = $wordToComplete
+    $valuePrefix = $currentWord
     $attached = ''
-    if ($wordToComplete -match '^(?<flag>--?[A-Za-z0-9-]+)=(?<value>.*)$') {
+    if ($currentWord -match '^(?<flag>--?[A-Za-z0-9-]+)=(?<value>.*)$') {
         $valueFlag = Get-OhMyPoshFlag -Help $help -Token $Matches['flag']
         $valuePrefix = $Matches['value']
         $attached = $Matches['flag'] + '='
@@ -250,7 +313,7 @@ function Complete-OhMyPosh {
         }
 
         if ($valueFlag.Long -in '--config', '--data') {
-            return @(Get-OhMyPoshPathCompletions -Prefix $valuePrefix -Attached $attached)
+            return @(Get-OhMyPoshPathCompletions -TypedPrefix $valuePrefix -Attached $attached)
         }
 
         $values = switch ($valueFlag.Long) {
@@ -258,10 +321,13 @@ function Complete-OhMyPosh {
             default { @() }
         }
 
+        # A quoted attached value (--shell='p) is matched on its text and keeps the typed quote.
+        $quoteChar = if ($valuePrefix -match '^[''"\u2018-\u201E]') { $valuePrefix.Substring(0, 1) } else { '' }
+        $valueText = ConvertFrom-OhMyPoshTypedWord -Value $valuePrefix
         return @(
             foreach ($value in $values) {
-                if ($value.StartsWith($valuePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    [System.Management.Automation.CompletionResult]::new($attached + $value, $value, 'ParameterValue', $valueFlag.Tip)
+                if ($value.StartsWith($valueText, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [System.Management.Automation.CompletionResult]::new($attached + (ConvertTo-OhMyPoshQuotedValue -Value $value -QuoteChar $quoteChar), $value, 'ParameterValue', $valueFlag.Tip)
                 }
             }
         )
