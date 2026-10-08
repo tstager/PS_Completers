@@ -56,22 +56,47 @@ function Remove-SDeleteOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-SDeleteQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-SDeleteTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-SDeleteQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-SDeleteTokenState {
@@ -91,10 +116,12 @@ function Get-SDeleteTokenState {
     $quoteChar = [char]0
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
+        # Typographic quotes close a quote of their own class: U+2018-U+201B single, U+201C-U+201E double.
+        $quoteClass = if ([string]$character -match '^[''\u2018-\u201B]$') { [char]39 } elseif ([string]$character -match '^["\u201C-\u201E]$') { [char]34 } else { [char]0 }
+        if ($quoteClass -ne [char]0) {
             if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
+                $quoteChar = $quoteClass
+            } elseif ($quoteChar -eq $quoteClass) {
                 $quoteChar = [char]0
             }
 
@@ -226,42 +253,30 @@ function Get-SDeleteSwitchCompletions {
 function Get-SDeleteDeletePathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-SDeleteOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-SDeleteTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The typed directory part (through the last separator, or a bare drive such as C:) is kept
+    # verbatim, so a typed .\ or ./ prefix and the typed separator style survive.
+    $directoryText = if ($cleanInput -match '^(.*[\\/]|[A-Za-z]:)') { $Matches[1] } else { '' }
+    $parent = if ($directoryText) { $directoryText } else { '.' }
+    $leaf = $cleanInput.Substring($directoryText.Length)
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+        if (-not $directoryText -and $pathText -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash parses as a parameter; anchor it to the current directory.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-SDeleteQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-SDeleteQuotedValue -Value $pathText -QuoteChar $quoteChar
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
         New-SDeleteCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
@@ -293,7 +308,7 @@ function Get-SDeletePassCompletions {
 function Get-SDeleteDriveLetterCache {
     if ($null -eq $script:SDeleteCompletionCatalog.DriveCache) {
         $script:SDeleteCompletionCatalog.DriveCache = @(
-            Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+            Get-PSDrive -PSProvider FileSystem -ErrorAction Ignore |
                 Where-Object { $_.Name.Length -eq 1 } |
                 Sort-Object -Property Name |
                 ForEach-Object { $_.Name + ':' }
@@ -339,8 +354,11 @@ function Get-SDeleteAmbiguousLetterResults {
         return @()
     }
 
+    $value = ConvertFrom-SDeleteTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+
     @(
-        New-SDeleteCompletionResult -CompletionText $CurrentWord -ListItemText $CurrentWord -ResultType 'ParameterValue' -ToolTip 'Bare-letter paths are ambiguous for SDelete; use -f or a path separator to force file or directory mode.'
+        New-SDeleteCompletionResult -CompletionText (ConvertTo-SDeleteQuotedValue -Value $value -QuoteChar $quoteChar) -ListItemText $value -ResultType 'ParameterValue' -ToolTip 'Bare-letter paths are ambiguous for SDelete; use -f or a path separator to force file or directory mode.'
     )
 }
 
@@ -391,7 +409,7 @@ function Complete-SDelete {
         return @($results.ToArray())
     }
 
-    if (-not $state.UsedSwitches.ContainsKey('-f') -and (Remove-SDeleteOuterQuotes -Value $currentWord) -match '^[A-Za-z]$') {
+    if (-not $state.UsedSwitches.ContainsKey('-f') -and (ConvertFrom-SDeleteTypedWord -Value $currentWord) -match '^[A-Za-z]$') {
         foreach ($item in @(Get-SDeleteAmbiguousLetterResults -CurrentWord $currentWord)) {
             $results.Add($item)
         }

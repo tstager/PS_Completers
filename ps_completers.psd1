@@ -1098,7 +1098,7 @@
         @{
             Path    = 'sdelete_completer/sdelete_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:57CDDBBD700067A8DDC5B48002EF5A59CE36ACC4841BC982AB5EA142F4984B89'
+            Hash    = 'SHA256:73D43D5291DAE0A3DD76346E2DB9596BDED09715A01B2D72126B51F425BBF8F2'
             Targets = @(
                 @{ CommandName = 'sdelete'; Native = $true }
                 @{ CommandName = 'sdelete.exe'; Native = $true }
