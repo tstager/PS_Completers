@@ -37,7 +37,7 @@ Register-ArgumentCompleter -Native -CommandName @('markitdown', 'markitdown.exe'
 - `markitdown -o <TAB>` completes output paths and suggests `output.md` when the slot is empty.
 - `markitdown --extension <TAB>` suggests all 47 extensions accepted by the markitdown 0.1.7 converters (documents, text, images, audio and video).
 - `markitdown --mime-type <TAB>` suggests the MIME type prefixes those converters accept, including the `image/*`, `audio/*` and `video/*` families.
-- `markitdown --cu-file-types <TAB>` completes a comma-separated list segment by segment, offering only the 31 Content Understanding file types markitdown 0.1.8 accepts (for example `jpeg`, not `jpg`).
+- `markitdown --cu-file-types <TAB>` completes a comma-separated list segment by segment, offering only the 31 Content Understanding file types markitdown 0.1.8 accepts (for example `jpeg`, not `jpg`). The attached form `--cu-file-types=pdf,<TAB>` works the same way and skips types already in the list.
 - `markitdown --charset <TAB>` suggests common text encodings.
 - `markitdown --endpoint <TAB>` suggests an Azure Document Intelligence endpoint placeholder.
 

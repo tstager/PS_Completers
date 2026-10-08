@@ -520,14 +520,44 @@ function Complete-MarkItDown {
         return @(Get-MarkItDownValueCompletions -Spec $expectedValue -CurrentWord $currentWord)
     }
 
-    $attached = Split-MarkItDownAttachedOption -Token $currentWord
+    # PowerShell parses '--opt=a,b' as an array literal and replaces only the
+    # segment after the last comma, so read the whole element up to the cursor
+    # and emit just that segment.
+    $attachedWord = $currentWord
+    $segmentPrefix = ''
+    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+        Select-Object -First 1
+    if ($cursorElement) {
+        $elementText = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
+        if ($elementText.EndsWith(',' + $currentWord, [System.StringComparison]::Ordinal)) {
+            $attachedWord = $elementText
+            $segmentPrefix = $elementText.Substring(0, $elementText.Length - $currentWord.Length)
+        }
+    }
+
+    $attached = Split-MarkItDownAttachedOption -Token $attachedWord
     if ($attached) {
         $prefix = $attached.Name + '='
-        return @(
+        $attachedResults = @(
             foreach ($item in @(Get-MarkItDownValueCompletions -Spec $attached.Spec -CurrentWord $attached.Value)) {
-                New-MarkItDownCompletionResult -CompletionText ($prefix + $item.CompletionText) -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
+                $completionText = $prefix + $item.CompletionText
+                if ($segmentPrefix) {
+                    if (-not $completionText.StartsWith($segmentPrefix, [System.StringComparison]::Ordinal)) { continue }
+                    $completionText = $completionText.Substring($segmentPrefix.Length)
+                }
+
+                New-MarkItDownCompletionResult -CompletionText $completionText -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
             }
         )
+
+        # An empty answer inside an array literal that runs past the cursor
+        # makes PowerShell's own fallback throw ('Value cannot be null'), so a
+        # comma segment with no value candidates continues to the generic
+        # completions below instead.
+        if ($attachedResults.Count -gt 0 -or -not $segmentPrefix) {
+            return $attachedResults
+        }
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
