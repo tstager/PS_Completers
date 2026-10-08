@@ -84,64 +84,82 @@ function New-StdbufCompletionResult {
     )
 }
 
-function Remove-StdbufOuterQuotes {
+function Get-StdbufTypedQuote {
+    # The first quote typed in a word (ASCII or typographic), or '' when none was typed.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -match '[''"\u2018-\u201E]') {
+        return $Matches[0]
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    ''
 }
 
-function ConvertTo-StdbufQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-StdbufTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic) is read by the
+    # PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if (-not (Get-StdbufTypedQuote -Value $Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-StdbufQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-StdbufCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-StdbufPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-StdbufOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-StdbufTypedWord -Value $InputPath
+    $quoteChar = Get-StdbufTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -158,11 +176,11 @@ function Get-StdbufPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -177,7 +195,7 @@ function Get-StdbufPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-StdbufQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-StdbufQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-StdbufCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -250,9 +268,11 @@ function Get-StdbufOptionValueCompletions {
     # A recognised value slot always returns an array (possibly empty), so the caller does not fall through to paths.
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
+        # Quote the whole --opt=value word so it stays one constant argument.
+        $quoteChar = Get-StdbufTypedQuote -Value $CurrentWord
         return , @(
             foreach ($result in Get-StdbufPathCompletions -InputPath $prefix) {
-                New-StdbufCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
+                New-StdbufCompletionResult -CompletionText (ConvertTo-StdbufQuotedValue -Value ($attached + $result.ListItemText) -QuoteChar $quoteChar) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
     }
@@ -351,12 +371,8 @@ function Get-StdbufCommandNameList {
 function Get-StdbufCommandOperandCompletion {
     param([string]$CurrentWord)
 
-    $quote = ''
-    if ($CurrentWord.StartsWith("'") -or $CurrentWord.StartsWith('"')) {
-        $quote = $CurrentWord.Substring(0, 1)
-    }
-
-    $prefix = Remove-StdbufOuterQuotes -Value $CurrentWord
+    $quote = Get-StdbufTypedQuote -Value $CurrentWord
+    $prefix = ConvertFrom-StdbufTypedWord -Value $CurrentWord
     if ($prefix -match '[\\/:]|^[.~]') {
         return @()
     }
@@ -367,14 +383,7 @@ function Get-StdbufCommandOperandCompletion {
                 continue
             }
 
-            $text = $name
-            if ($quote -eq '"') {
-                $text = '"' + $name.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
-            } elseif ($quote -eq "'" -or $name -match '[\s{}();,|&<>''"`$]' -or $name -match '^[@#]') {
-                $text = "'" + $name.Replace("'", "''") + "'"
-            }
-
-            New-StdbufCompletionResult -CompletionText $text -ListItemText $name -ResultType 'Command' -ToolTip 'Command to run with modified buffering.'
+            New-StdbufCompletionResult -CompletionText (ConvertTo-StdbufQuotedValue -Value $name -QuoteChar $quote) -ListItemText $name -ResultType 'Command' -ToolTip 'Command to run with modified buffering.'
         }
     )
 }
@@ -386,11 +395,7 @@ function Complete-Stdbuf {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-StdbufCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-StdbufCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = Get-StdbufOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord
     if ($null -ne $optionValues) {

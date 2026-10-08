@@ -1224,7 +1224,7 @@
         @{
             Path    = 'stdbuf_completer/stdbuf_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:AFD47C4B1C3AB56BF3A667FE25012E29F49A0B6127D47F550200CFEB8567EC3F'
+            Hash    = 'SHA256:09848D628E6183C3D6B4BFB89F7A92C20EC2F619BCA0B3688A2D1FE7FBFB7BD6'
             Targets = @(
                 @{ CommandName = 'stdbuf'; Native = $true }
                 @{ CommandName = 'stdbuf.exe'; Native = $true }
