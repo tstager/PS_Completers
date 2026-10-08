@@ -97,6 +97,26 @@ function Remove-DircolorsOuterQuotes {
     $parseErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$tokens, [ref]$parseErrors)
     if ($tokens.Count -gt 1 -and $tokens[1] -is [System.Management.Automation.Language.StringToken]) {
+        # A bareword whose single quote opens mid-word and never closes (it's) means
+        # the quote literally: escape that quote and read the word again, but only
+        # when the literal reading is still one word (it's b stays one quoted word).
+        # A double quote cannot be part of a file name, so it keeps its string reading.
+        if ($tokens[1].Kind -eq [System.Management.Automation.Language.TokenKind]::Generic) {
+            $openQuote = $parseErrors | Where-Object { $_.ErrorId -eq 'TerminatorExpectedAtEndOfString' } | Select-Object -First 1
+            if ($null -ne $openQuote) {
+                $quoteAt = $openQuote.Extent.StartOffset - 2
+                if ($quoteAt -gt 0 -and $quoteAt -lt $Value.Length -and $Value[$quoteAt] -match '[''\u2018-\u201B]') {
+                    $literal = $Value.Substring(0, $quoteAt) + '`' + $Value.Substring($quoteAt)
+                    $literalTokens = $null
+                    $literalErrors = $null
+                    [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $literal, [ref]$literalTokens, [ref]$literalErrors)
+                    if ($literalTokens.Count -gt 1 -and $literalTokens[1].Extent.EndOffset -eq $literal.Length + 2) {
+                        return Remove-DircolorsOuterQuotes -Value $literal
+                    }
+                }
+            }
+        }
+
         return $tokens[1].Value
     }
 
@@ -139,19 +159,23 @@ function Get-DircolorsCurrentToken {
     }
 
     $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
 
-    # The word under the cursor is the parser token that ends at the cursor; an
-    # unterminated quote is one token running to the cursor, spaces included.
+    # The word under the cursor is the whole parser token around the cursor, the
+    # span PowerShell replaces, so text typed after the cursor stays part of the
+    # word instead of being deleted; an unterminated quote is one token running
+    # to the end, spaces included.
     $tokens = $null
     $parseErrors = $null
-    [void][System.Management.Automation.Language.Parser]::ParseInput($prefix, [ref]$tokens, [ref]$parseErrors)
-    $lastToken = $tokens | Where-Object { $_.Kind -ne [System.Management.Automation.Language.TokenKind]::EndOfInput } | Select-Object -Last 1
-    if ($null -eq $lastToken -or $lastToken.Extent.EndOffset -ne $prefix.Length) {
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Line, [ref]$tokens, [ref]$parseErrors)
+    $currentToken = $tokens | Where-Object {
+        $_.Kind -ne [System.Management.Automation.Language.TokenKind]::EndOfInput -and
+        $_.Extent.StartOffset -lt $safeCursor -and $_.Extent.EndOffset -ge $safeCursor
+    } | Select-Object -First 1
+    if ($null -eq $currentToken) {
         return ''
     }
 
-    $lastToken.Text
+    $currentToken.Text
 }
 
 function Get-DircolorsPathCompletions {
@@ -186,7 +210,7 @@ function Get-DircolorsPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
