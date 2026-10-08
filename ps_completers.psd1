@@ -212,7 +212,7 @@
         @{
             Path    = 'csplit_completer/csplit_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:DDBBB62596F2FAAD9CD40DAE38CF0E1EB599F5130DCDF75AB9A052B947BE7C41'
+            Hash    = 'SHA256:2A9BFAC7C0B98872B0BB823A4B7F41A714B259B97E6F167DD78935F51E9A8A64'
             Targets = @(
                 @{ CommandName = 'csplit'; Native = $true }
                 @{ CommandName = 'csplit.exe'; Native = $true }
