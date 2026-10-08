@@ -12,7 +12,7 @@ The completer covers:
 - command-specific `/option:value` tokens parsed from command help
 - selected enum values for common high-value options like `/format:`, `/unicode:`, `/configurationmode:`, `/contentformat:`, `/transportname:`, `/credentialstype:` and `/transportport:`
 - config-file path completion for `/c:` and `/config:`, which lists directories first so the tree can be navigated and prefers `.xml` files over the rest
-- local subscription-name completion when `wecutil es` succeeds, quoted when the ID contains spaces
+- local subscription-name completion when `wecutil es` succeeds
 - placeholder-only completion for risky or free-form values such as credentials, queries, event-source names, host names, certificate thumbprints, DNS subject lists, SDDL and descriptions
 
 ## Registration and command names
@@ -46,6 +46,8 @@ The file keeps its top level compatible with `CompleterActions`:
 - Value models are keyed by command first and by option token second, because the same token can mean different things per command: `/q:` is `Quiet` (true/false) under `qc` and a free-form `QUERY` string under `ss`.
 - Local subscription enumeration may fail if the Event Collector service or RPC path is unavailable; when that happens the completer falls back to placeholders.
 - Free-form query, credential, and event-source slots intentionally avoid remote probing.
+- Subscription IDs and paths are quoted when they contain whitespace, a PowerShell metacharacter (`{ } ( ) ; , | & < > ' " `` ` `` $ @ #`) or a typographic quote. The completer keeps the quote the user opened the word with (straight or typographic) and defaults to single quotes, doubling single quotes inside them and backtick-escaping `` ` ``, `"` and `$` inside double quotes.
+- PowerShell replaces the whole word under the cursor, so the completer matches and echoes the whole word, including any text after the cursor: Tab inside `sub1`, `a.xml` or `/f:XML` never offers a candidate that drops the typed tail. Whitespace inside an open quote stays part of the word, so `"C:\some dir ` still completes paths.
 
 ## Validation examples
 

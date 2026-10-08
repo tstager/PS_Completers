@@ -48,25 +48,70 @@ function Remove-WecutilOuterQuotes {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    # PowerShell reads the typographic quotes as quotes too.
+    $Value.Trim([char[]]@([char]34, [char]39, [char]0x2018, [char]0x2019, [char]0x201A, [char]0x201B, [char]0x201C, [char]0x201D, [char]0x201E))
+}
+
+function Get-WecutilTypedQuote {
+    # The quote style the user opened the word with: "'" or '"', or '' when bare.
+    param([string]$Value)
+
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
+    }
+
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-WecutilTypedWord {
+    # The value of a typed word without its quotes and that quote style's escapes.
+    param([string]$Value)
+
+    $quote = Get-WecutilTypedQuote -Value $Value
+    $clean = Remove-WecutilOuterQuotes -Value $Value
+    if ($quote -eq "'") {
+        # A doubled single quote stands for its second character.
+        return $clean -replace '[''\u2018-\u201B]([''\u2018-\u201B])', '$1'
+    }
+
+    if ($quote) {
+        return $clean -replace '`(.)', '$1'
+    }
+
+    $clean
 }
 
 function ConvertTo-WecutilQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). Whitespace and argument-mode
+    # metacharacters (including the typographic quotes) end or split a bare word, and a
+    # leading '@' or '#' would start a splat or a comment.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    $Value
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-WecutilTokenState {
@@ -86,10 +131,12 @@ function Get-WecutilTokenState {
     $quoteChar = [char]0
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
+        # Any quote of a class (straight or typographic) closes a quote of the same class.
+        $quoteClass = Get-WecutilTypedQuote -Value ([string]$character)
+        if ($quoteClass) {
             if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
+                $quoteChar = [char]$quoteClass
+            } elseif ($quoteChar -eq [char]$quoteClass) {
                 $quoteChar = [char]0
             }
 
@@ -109,7 +156,8 @@ function Get-WecutilTokenState {
         [void]$builder.Append($character)
     }
 
-    $hasTrailingSpace = $prefix -match '\s$'
+    # Whitespace inside an open quote is part of the word, not a separator.
+    $hasTrailingSpace = $quoteChar -eq [char]0 -and $prefix -match '\s$'
     if ($builder.Length -gt 0) {
         $tokens.Add($builder.ToString())
     }
@@ -271,7 +319,7 @@ function Get-WecutilCatalog {
 function Invoke-WecutilCommandHelp {
     param([string]$CommandName)
 
-    if (-not (Get-Command -Name wecutil.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name wecutil.exe -ErrorAction Ignore)) {
         return @()
     }
 
@@ -413,7 +461,7 @@ function Get-WecutilSubscriptionNames {
     }
 
     $values = @()
-    if (Get-Command -Name wecutil.exe -ErrorAction SilentlyContinue) {
+    if (Get-Command -Name wecutil.exe -ErrorAction Ignore) {
         try {
             $lines = @(& wecutil.exe es 2>$null)
             $values = @(
@@ -507,8 +555,8 @@ function Get-WecutilPathCompletions {
     )
 
     $typedValue = if ($null -eq $CurrentWord) { '' } else { $CurrentWord }
-    $cleanValue = Remove-WecutilOuterQuotes -Value $typedValue
-    $alwaysQuote = $typedValue.StartsWith('"')
+    $cleanValue = ConvertFrom-WecutilTypedWord -Value $typedValue
+    $quote = Get-WecutilTypedQuote -Value $typedValue
     $results = New-Object System.Collections.Generic.List[object]
 
     $parentPath = '.'
@@ -536,11 +584,8 @@ function Get-WecutilPathCompletions {
         }
     }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-    } catch {
-        $items = @()
-    }
+    # A missing or protected folder is an expected miss, not an error record.
+    $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
 
     # Directories come first so the tree stays navigable, then the preferred
     # file kind, then anything else.
@@ -564,7 +609,7 @@ function Get-WecutilPathCompletions {
             $candidate += '\'
         }
 
-        $completionText = ConvertTo-WecutilQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-WecutilQuotedValue -Value $candidate -Quote $quote
         $result = New-WecutilCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $completionText)
 
         if ($item.PSIsContainer) {
@@ -581,7 +626,7 @@ function Get-WecutilPathCompletions {
     }
 
     if ($results.Count -eq 0) {
-        $fallback = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { $Prefix + $Placeholder } else { $Prefix + $CurrentWord }
+        $fallback = if ([string]::IsNullOrWhiteSpace($typedValue)) { $Prefix + $Placeholder } else { $Prefix + $typedValue }
         [void]$results.Add((New-WecutilCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $fallback))
     }
 
@@ -639,7 +684,8 @@ function Get-WecutilSubscriptionCompletions {
     param([string]$CurrentWord)
 
     $results = New-Object System.Collections.Generic.List[object]
-    $typed = Remove-WecutilOuterQuotes -Value $CurrentWord
+    $typed = ConvertFrom-WecutilTypedWord -Value $CurrentWord
+    $quote = Get-WecutilTypedQuote -Value $CurrentWord
     foreach ($name in @(Get-WecutilSubscriptionNames)) {
         if (-not [string]::IsNullOrWhiteSpace($typed) -and -not $name.StartsWith($typed, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
@@ -647,7 +693,7 @@ function Get-WecutilSubscriptionCompletions {
 
         # Subscription IDs come from a user-authored XML tag and often contain
         # spaces, so they have to be quoted to stay one operand.
-        $completionText = ConvertTo-WecutilQuotedValue -Value $name -AlwaysQuote ($CurrentWord.StartsWith('"'))
+        $completionText = ConvertTo-WecutilQuotedValue -Value $name -Quote $quote
         [void]$results.Add((New-WecutilCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip 'Subscription ID.' -ListItemText $name))
     }
 
@@ -676,9 +722,22 @@ function Complete-Wecutil {
     )
 
     $catalog = Get-WecutilCatalog
-    $tokenState = Get-WecutilTokenState -Line $commandAst.ToString() -CursorPosition $cursorPosition
+    # The cursor is an offset into the whole input, the AST text starts at the
+    # command name, so rebase the cursor onto the AST text.
+    $tokenState = Get-WecutilTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
     $argumentState = Get-WecutilArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
+
+    # PowerShell replaces the whole word under the cursor, including the text
+    # after the cursor.
+    $wordSuffix = ''
+    if (-not $hasTrailingSpace) {
+        foreach ($element in $commandAst.CommandElements) {
+            if ($element.Extent.StartOffset -lt $cursorPosition -and $element.Extent.EndOffset -gt $cursorPosition) {
+                $wordSuffix = $element.Extent.Text.Substring($cursorPosition - $element.Extent.StartOffset)
+            }
+        }
+    }
 
     if ($hasTrailingSpace -and -not [string]::IsNullOrEmpty($argumentState.CurrentArgument)) {
         $currentWord = ''
@@ -687,6 +746,10 @@ function Complete-Wecutil {
         $currentWord = if ($null -eq $argumentState.CurrentArgument) { '' } else { $argumentState.CurrentArgument }
         $argumentsBeforeCurrent = @($argumentState.ArgumentsBeforeCurrent)
     }
+
+    # Every candidate replaces the whole word, so match and echo the whole word,
+    # not just the text before the cursor.
+    $currentWord += $wordSuffix
 
     $activeCommand = $null
     $commandIndex = -1
