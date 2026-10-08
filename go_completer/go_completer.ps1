@@ -613,74 +613,58 @@ function Get-GoValuePlaceholder {
 }
 
 function Get-GoQuoteCharacter {
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and
+    # U+201C-U+201E as double quotes.
     param([string]$InputText)
 
-    if ([string]::IsNullOrEmpty($InputText)) {
-        return $null
-    }
-
-    if ($InputText.StartsWith("'", [System.StringComparison]::Ordinal)) {
-        return "'"
-    }
-
-    if ($InputText.StartsWith('"', [System.StringComparison]::Ordinal)) {
-        return '"'
+    if ($InputText -match '^[''"\u2018-\u201E]') {
+        return $InputText.Substring(0, 1)
     }
 
     $null
 }
 
-function Remove-GoOuterQuotes {
+function ConvertFrom-GoTypedWord {
+    # The value of a typed word. A word opened with a quote is read by the
+    # PowerShell tokenizer, which drops the quotes and undoes that quote
+    # style's escapes.
     param([string]$InputText)
 
-    if ([string]::IsNullOrEmpty($InputText)) {
-        return ''
-    }
-
-    $quoteCharacter = Get-GoQuoteCharacter -InputText $InputText
-    if ($null -eq $quoteCharacter) {
+    if ($null -eq (Get-GoQuoteCharacter -InputText $InputText)) {
         return $InputText
     }
 
-    $unquoted = $InputText.Substring(1)
-    if ($unquoted.EndsWith($quoteCharacter, [System.StringComparison]::Ordinal)) {
-        $unquoted = $unquoted.Substring(0, $unquoted.Length - 1)
-    }
-
-    if ($quoteCharacter -eq "'") {
-        return $unquoted.Replace("''", "'")
-    }
-
-    $unquoted.Replace('`"', '"')
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($InputText, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-GoQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote
+    # was typed, otherwise in the quote the user typed (single by default).
     param(
         [string]$Value,
         [string]$QuoteCharacter
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if ([string]::IsNullOrWhiteSpace($QuoteCharacter)) {
-        if ($Value -notmatch '\s') {
+    if ([string]::IsNullOrEmpty($QuoteCharacter)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
             return $Value
         }
 
-        $QuoteCharacter = '"'
+        $QuoteCharacter = "'"
     }
 
-    if (($QuoteCharacter -eq "'") -and $Value.Contains("'")) {
-        $QuoteCharacter = '"'
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    if ($QuoteCharacter -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
-    }
-
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-GoPathCompletions {
@@ -691,7 +675,7 @@ function Get-GoPathCompletions {
     )
 
     $quoteCharacter = Get-GoQuoteCharacter -InputText $InputText
-    $cleanInput = Remove-GoOuterQuotes -InputText $InputText
+    $cleanInput = ConvertFrom-GoTypedWord -InputText $InputText
 
     $completions =
         [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
@@ -700,12 +684,12 @@ function Get-GoPathCompletions {
             $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
         } |
         ForEach-Object {
-            # CompleteFilename applies its own quoting; strip it before applying
-            # the quoting style the user actually typed.
-            $completionText = ConvertTo-GoQuotedValue -Value (Remove-GoOuterQuotes -InputText $_.CompletionText) -QuoteCharacter $quoteCharacter
-            if ($InlinePrefix) {
-                $completionText = $InlinePrefix + $completionText
-            }
+            # CompleteFilename quotes for PowerShell and wildcard-escapes
+            # (tick``x.txt); unwrap it with the tokenizer and unescape before
+            # quoting the plain path once. An attached value is quoted as one
+            # word with its '-flag=' prefix.
+            $path = [System.Management.Automation.WildcardPattern]::Unescape((ConvertFrom-GoTypedWord -InputText $_.CompletionText))
+            $completionText = ConvertTo-GoQuotedValue -Value ($InlinePrefix + $path) -QuoteCharacter $quoteCharacter
 
             New-GoCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
@@ -726,22 +710,29 @@ function Split-GoCommandLine {
 
     $builder = New-Object System.Text.StringBuilder
     $started = $false
-    $quote = [char]0
+    # The open quote's class: PowerShell closes a single-quoted string with any
+    # of ' and U+2018-U+201B, and a double-quoted one with " or U+201C-U+201E.
+    $quote = $null
 
     for ($index = 0; $index -lt $Text.Length; $index++) {
         $character = $Text[$index]
 
-        if ($quote -ne [char]0) {
+        if ($null -ne $quote) {
             [void]$builder.Append($character)
-            if ($character -eq $quote) {
-                $quote = [char]0
+            if ([string]$character -match $quote) {
+                $quote = $null
             }
 
             continue
         }
 
-        if ($character -eq '"' -or $character -eq "'") {
-            $quote = $character
+        if ([string]$character -match '^[''\u2018-\u201B]$') {
+            $quote = '^[''\u2018-\u201B]$'
+        } elseif ([string]$character -match '^["\u201C-\u201E]$') {
+            $quote = '^["\u201C-\u201E]$'
+        }
+
+        if ($null -ne $quote) {
             $started = $true
             [void]$builder.Append($character)
             continue

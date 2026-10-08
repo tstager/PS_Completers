@@ -75,9 +75,13 @@ reads all four parts of it:
   the input, which is what happens while a quoted path containing a space is
   still being typed. A regex that only matched balanced quotes split
   `go -C "C:\Program Fi` into two tokens and completed the wrong slot.
-- Path completions strip the quoting `CompleteFilename` applies before applying
-  the quoting style the user actually typed, so a directory with a space comes
-  back quoted once, not twice.
+- Path completions unwrap the quoting `CompleteFilename` applies with the
+  PowerShell tokenizer and undo its wildcard escapes, then quote the plain path
+  once in the quote the user typed (single quotes by default, typographic quotes
+  included). A path stays bare only when it holds no whitespace or PowerShell
+  metacharacter, so names such as `a$b.txt`, `amp&c.txt` or `it's.txt` come back
+  as one literal argument. An attached value is quoted together with its flag
+  (`'-o=.\sp ace.txt'`).
 - Every `go` invocation runs with standard input closed.
 - Parsed help is cached per command path for the session, and the whole cache is
   dropped when the working directory changes, because go's output is

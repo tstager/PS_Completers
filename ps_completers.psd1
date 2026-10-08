@@ -446,7 +446,7 @@
         @{
             Path    = 'go_completer/go_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:C3BC88BA5600840AF552C2CC8499615D594469189CCC41CE7356D456E1BFCBA0'
+            Hash    = 'SHA256:88B75AEDA2C89470864BB1876B78D84C2405784B6558DF8F47B53950FD54B4AA'
             Targets = @(
                 @{ CommandName = 'go'; Native = $true }
                 @{ CommandName = 'go.exe'; Native = $true }
