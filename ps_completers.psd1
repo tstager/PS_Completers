@@ -1188,7 +1188,7 @@
         @{
             Path    = 'shuf_completer/shuf_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:846DBA2203732510F13EE0C1E534B31FF73D8B705BC13AA65538777CC3A0B0CD'
+            Hash    = 'SHA256:C2B7E1089F05ABD37AF1E7D65C2408E2D1C656E1F09724AD0BCB6CFC05C973BD'
             Targets = @(
                 @{ CommandName = 'shuf'; Native = $true }
                 @{ CommandName = 'shuf.exe'; Native = $true }
