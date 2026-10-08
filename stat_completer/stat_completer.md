@@ -69,6 +69,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 
 - `--cached`: `always`, `never`, `default`
 - `-c`, `--format`, `--printf`: the format sequences parsed from the same `--help` text (GNU `  %a   desc` and uutils ``  -`%a`: desc`` shapes), with the help description as tooltip, plus `<format>`. When `-f`, a prefix of `--file-system`, or a short cluster with `f` before any `c` (such as `-Lf`) appears before `--`, the file-system sequence block is offered instead of the file block. Static fallbacks (9 file sequences, the 12 file-system sequences) apply when the tool is absent.
+- A quoted value (`-c '%`, `--format="%`) matches without its quote; each candidate keeps the quote character the user typed and closes it, so `-c '%` completes to `'%a'` and `--format="%` to `--format="%a"`.
 
 ## Representative validation scenarios
 
@@ -78,6 +79,7 @@ stat --
 stat --cached 
 stat --cached=
 stat -c %
+stat -c '%
 stat -f -c 
 ```
 
@@ -86,6 +88,7 @@ Expected behavior:
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--cached` shows its documented values in both the separate and the attached form
 - `-c %` lists every documented file format sequence; with `-f` on the line it lists the file-system sequences
+- `-c '%` lists the same sequences single-quoted (`'%a'`), keeping the typed quote
 - operand slots offer filesystem completion
 - the completer remains importable through `Import-CompleterScript`
 

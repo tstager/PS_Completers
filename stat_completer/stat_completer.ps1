@@ -310,11 +310,30 @@ function Get-StatOptionValueCompletions {
         )
     }
 
+    # A quoted value ('%, --format="%) matches without its quotes; the candidate keeps
+    # the user's quote character and closes it.
+    $quote = ''
+    if ($prefix.Length -gt 0 -and ($prefix[0] -eq [char]39 -or $prefix[0] -eq [char]34)) {
+        $quote = [string]$prefix[0]
+        $prefix = $prefix.Substring(1)
+        if ($prefix.EndsWith($quote, [System.StringComparison]::Ordinal)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
+        }
+    }
+
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
     @(
         foreach ($entry in $values) {
             if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-StatCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+                $text = if ($quote -eq "'") {
+                    "'" + $entry.Text.Replace("'", "''") + "'"
+                } elseif ($quote -eq '"') {
+                    '"' + ($entry.Text -replace '([`"$])', '`$1') + '"'
+                } else {
+                    $entry.Text
+                }
+
+                New-StatCompletionResult -CompletionText ($attached + $text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
