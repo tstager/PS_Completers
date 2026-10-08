@@ -50,24 +50,49 @@ function Remove-TakeownOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-TakeownQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-TakeownTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    # Whitespace or an argument-mode metacharacter (hidden items such as C:\$Recycle.Bin and
-    # ~$name.docx lock files included) would otherwise split or expand the path.
-    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-TakeownQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). Whitespace or an argument-mode
+    # metacharacter (hidden items such as C:\$Recycle.Bin and ~$name.docx lock files included)
+    # would otherwise split or expand the path; a leading dash would read as a parameter.
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-TakeownTokenState {
@@ -399,41 +424,28 @@ function Get-TakeownPathCompletions {
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
-    $cleanValue = Remove-TakeownOuterQuotes -Value $typedValue
-    $alwaysQuote = $typedValue.StartsWith('"')
+    $cleanValue = ConvertFrom-TakeownTypedWord -Value $typedValue
+    $quoteChar = if ($typedValue -match '^[''"\u2018-\u201E]') { $typedValue.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
 
     if ($cleanValue.StartsWith('\\')) {
         return @(Get-TakeownUncPathCompletions -CurrentValue $typedValue -ToolTip $ToolTip)
     }
 
-    $parentPath = '.'
-    $leaf = ''
-
-    if (-not [string]::IsNullOrWhiteSpace($cleanValue)) {
-        if ($cleanValue -match '^[A-Za-z]:$') {
-            $parentPath = $cleanValue + '\'
-        } elseif ($cleanValue.EndsWith('\') -or $cleanValue.EndsWith('/')) {
-            $parentPath = $cleanValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $cleanValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
-
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $cleanValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $cleanValue -Leaf
-                } catch {
-                    $leaf = $cleanValue
-                }
-            }
+    # The directory part is kept exactly as typed ('.\', '../', 'C:\x/', 'C:'), so no typed text is lost.
+    if ($cleanValue -match '^[A-Za-z]:$') {
+        $typedDirectory = $cleanValue + '\'
+    } else {
+        $separatorIndex = $cleanValue.LastIndexOfAny([char[]]@('\', '/'))
+        if ($separatorIndex -lt 0 -and $cleanValue -match '^[A-Za-z]:') {
+            $separatorIndex = 1
         }
+
+        $typedDirectory = $cleanValue.Substring(0, $separatorIndex + 1)
     }
+
+    $leaf = $cleanValue.Substring([Math]::Min($typedDirectory.Length, $cleanValue.Length))
+    $parentPath = if ($typedDirectory) { $typedDirectory } else { '.' }
 
     try {
         # -Force: hidden and system folders (ProgramData, WindowsApps, AppData) are typical takeown targets.
@@ -448,12 +460,17 @@ function Get-TakeownPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
-        if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
+        $candidate = $typedDirectory + $item.Name
+        # A bare word led by a dash parses as a parameter; lead it with '.\' as PowerShell does.
+        if (-not $typedDirectory -and $candidate -match '^[-\u2013-\u2015]') {
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
+        }
+
+        if ($item.PSIsContainer) {
             $candidate += '\'
         }
 
-        $completionText = ConvertTo-TakeownQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-TakeownQuotedValue -Value $candidate -QuoteChar $quoteChar
         [void]$results.Add((New-TakeownCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $completionText))
     }
 

@@ -96,7 +96,8 @@ Value behavior by switch:
   - enum completion for `Y` and `N`
 - `/F`
   - local path completion for files and directories, including hidden and system items such as `C:\ProgramData`, `C:\Program Files\WindowsApps`, and `AppData`
-  - paths containing whitespace or an argument-mode metacharacter (`$ & ( ) ; , ' { } | < >`, or a leading `@`/`#`) are double-quoted with `` ` `` escapes, e.g. ``"C:\`$Recycle.Bin\"``
+  - paths containing whitespace, a quote character, or an argument-mode metacharacter (`$ & ( ) ; , { } | < > @ #`) are quoted in the quote you typed (single by default), e.g. `'C:\$Recycle.Bin\'`
+  - a typed directory part such as `.\` or `../` is kept exactly as typed, and a relative name that starts with a dash is led with `.\` (e.g. `.\-dash.txt`) so PowerShell does not read it as a parameter
   - UNC values echo the typed path and add scoped placeholder guidance without enumerating remote shares
   - once `/S` names a remote system, the slot switches to the documented share-relative form (`<share>\<file>`, `<share>\*`, or `share\<file>` after a share segment is typed) instead of listing the local directory
 
