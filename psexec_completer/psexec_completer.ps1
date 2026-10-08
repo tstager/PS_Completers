@@ -73,15 +73,13 @@ function Split-PsExecPath {
         return [pscustomobject]@{ Parent = '.'; Leaf = '' }
     }
 
-    if ($Path -match '[\\/]+$') {
+    # Split-Path -Leaf resolves a '.' or '..' leaf to the folder's own name,
+    # so those leaves are matched on the text instead.
+    if ($Path -match '[\\/]+$|(^|[\\/])\.\.?$') {
         return [pscustomobject]@{ Parent = $Path; Leaf = '' }
     }
 
     $leaf = Split-Path -Path $Path -Leaf
-    if ($leaf -in @('.', '..')) {
-        return [pscustomobject]@{ Parent = $Path; Leaf = '' }
-    }
-
     $parent = Split-Path -Path $Path -Parent
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = '.' }
 
@@ -102,51 +100,77 @@ function New-PsExecCompletionResult {
     [System.Management.Automation.CompletionResult]::new($CompletionText, $ListItemText, $ResultType, $ToolTip)
 }
 
-function Get-PsExecCurrentToken {
-    param([string]$Line, [int]$CursorPosition, [string]$Fallback)
-
-    if ([string]::IsNullOrWhiteSpace($Line)) { return $Fallback }
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') { return '' }
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) { return $parts[-1] }
-    $Fallback
+function Get-PsExecTypedQuote {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return '' }
+    $first = $Value.Substring(0, 1)
+    if ($first -in @('"', "'")) { return $first }
+    ''
 }
 
 function Remove-PsExecOuterQuotes {
     param([string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return '' }
-    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
-        return $Value.Substring(1, $Value.Length - 2)
-    }
-    $Value.TrimStart('"')
+    $quote = Get-PsExecTypedQuote -Value $Value
+    if (-not $quote) { return $Value -replace '`(.)', '$1' }
+    # An unterminated quote is one token running to the cursor: strip the
+    # opening quote, and the closing one when present.
+    $inner = $Value.Substring(1)
+    if ($inner.Length -gt 0 -and $inner.EndsWith($quote)) { $inner = $inner.Substring(0, $inner.Length - 1) }
+    if ($quote -eq "'") { return $inner.Replace("''", "'") }
+    $inner -replace '`(.)', '$1'
 }
 
 function ConvertTo-PsExecQuotedValue {
-    param([string]$Value, [bool]$AlwaysQuote = $false)
+    param([string]$Value, [string]$Quote = '')
     if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
-    }
-    $Value
+    if (-not $Quote -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') { return $Value }
+    # Keep the quote the user typed; an unquoted value that needs quoting keeps
+    # this completer's double-quote style.
+    if ($Quote -eq "'") { return "'" + $Value.Replace("'", "''") + "'" }
+    '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
 }
 
 function Get-PsExecArgumentState {
     param([System.Management.Automation.Language.CommandAst]$CommandAst, [string]$WordToComplete, [int]$CursorPosition)
 
-    $currentWord = if ([string]::IsNullOrEmpty($WordToComplete)) {
-        ''
-    } else {
-        Get-PsExecCurrentToken -Line $CommandAst.Extent.Text -CursorPosition ($CursorPosition - $CommandAst.Extent.StartOffset) -Fallback $WordToComplete
+    # A bare '@' is an unrecognized token, so the parser splits '@.\hosts.txt'
+    # into '@' and '.\hosts.txt'; glue it back onto the element it touches so
+    # the word is the one psexec will see.
+    $words = New-Object System.Collections.Generic.List[object]
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $previous = if ($words.Count -gt 0) { $words[$words.Count - 1] } else { $null }
+        if ($previous -and $previous.Text -eq '@' -and -not $previous.At -and $previous.End -eq $element.Extent.StartOffset) {
+            $previous.Text = '@' + $element.Extent.Text
+            $previous.End = $element.Extent.EndOffset
+            $previous.At = $true
+            continue
+        }
+        [void]$words.Add([pscustomobject]@{ Start = $element.Extent.StartOffset; End = $element.Extent.EndOffset; Text = $element.Extent.Text; At = $false })
+    }
+
+    # The word under the cursor is the parser's element that contains the
+    # cursor, cut at the cursor; an unterminated quote is one element.
+    # StrandedAt is set when PowerShell's replacement span starts after a glued
+    # '@' ('@.\' replaces only '.\'), so results must keep that '@' valid.
+    $currentWord = ''
+    $strandedAt = $false
+    if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+        $currentWord = $WordToComplete
+        foreach ($word in $words) {
+            if ($word.Start -lt $CursorPosition -and $word.End -ge $CursorPosition) {
+                $currentWord = $word.Text.Substring(0, $CursorPosition - $word.Start)
+                $strandedAt = $word.At -and $WordToComplete -eq $currentWord.Substring(1)
+                break
+            }
+        }
     }
 
     # Only elements that end at or before the cursor have actually been typed
     # to the left of it; anything further right must not classify this slot.
-    $tokens = @($CommandAst.CommandElements |
-        Select-Object -Skip 1 |
-        Where-Object { $_.Extent.EndOffset -le $CursorPosition } |
-        ForEach-Object { $_.Extent.Text })
+    $tokens = @($words |
+        Where-Object { $_.End -le $CursorPosition } |
+        ForEach-Object { $_.Text })
     $tokensBeforeCurrent = @($tokens)
     if (-not [string]::IsNullOrEmpty($currentWord) -and $tokensBeforeCurrent.Count -gt 0 -and $tokensBeforeCurrent[-1] -eq $currentWord) {
         $tokensBeforeCurrent = @($tokensBeforeCurrent | Select-Object -First ($tokensBeforeCurrent.Count - 1))
@@ -154,12 +178,13 @@ function Get-PsExecArgumentState {
 
     [pscustomobject]@{
         CurrentWord        = $currentWord
+        StrandedAt         = [bool]$strandedAt
         TokensBeforeCurrent = $tokensBeforeCurrent
     }
 }
 
 function Get-PsExecAtFileCompletions {
-    param([string]$CurrentWord)
+    param([string]$CurrentWord, [bool]$StrandedAt = $false)
 
     $trimmed = Remove-PsExecOuterQuotes -Value $CurrentWord
     if (-not $trimmed.StartsWith('@')) { return @() }
@@ -168,8 +193,8 @@ function Get-PsExecAtFileCompletions {
     $parent = $parts.Parent
     $leaf = $parts.Leaf
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
+    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
+    $quote = Get-PsExecTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($item in $items) {
@@ -185,11 +210,18 @@ function Get-PsExecAtFileCompletions {
             $completionPath += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath) -AlwaysQuote:$alwaysQuote) -ListItemText ('@' + $item.Name) -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.'))
+        # A stranded '@' stays in the line, and only '@(' keeps it valid: it
+        # passes the quoted '@path' to psexec as one argument.
+        $completionText = if ($StrandedAt) {
+            '(' + (ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath) -Quote '"') + ')'
+        } else {
+            ConvertTo-PsExecQuotedValue -Value ('@' + $completionPath) -Quote $quote
+        }
+        [void]$results.Add((New-PsExecCompletionResult -CompletionText $completionText -ListItemText ('@' + $item.Name) -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.'))
     }
 
     if ($results.Count -eq 0) {
-        $placeholder = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { '@file' } else { $CurrentWord }
+        $placeholder = if ([string]::IsNullOrWhiteSpace($CurrentWord)) { '@file' } elseif ($StrandedAt) { $CurrentWord.Substring(1) } else { $CurrentWord }
         return @(
             New-PsExecCompletionResult -CompletionText $placeholder -ResultType 'ParameterValue' -ToolTip 'File containing remote computer names for @file syntax.'
         )
@@ -202,7 +234,7 @@ function Get-PsExecExecutableCompletions {
     param([string]$CurrentWord)
 
     $trimmed = Remove-PsExecOuterQuotes -Value $CurrentWord
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
+    $quote = Get-PsExecTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
     if ([string]::IsNullOrWhiteSpace($trimmed)) {
@@ -224,7 +256,7 @@ function Get-PsExecExecutableCompletions {
         $parent = $parts.Parent
         $leaf = $parts.Leaf
         $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-        foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)) {
+        foreach ($item in @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)) {
             $completionPath = if ($trimmed -and -not [System.IO.Path]::IsPathRooted($trimmed) -and $parent -ne '.') {
                 Join-Path -Path $parent -ChildPath $item.Name
             } elseif ($parent -eq '.') {
@@ -237,7 +269,7 @@ function Get-PsExecExecutableCompletions {
                 $completionPath += [System.IO.Path]::DirectorySeparatorChar
             }
 
-            [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value $completionPath -AlwaysQuote:$alwaysQuote) -ResultType $(if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }) -ToolTip $item.FullName))
+            [void]$results.Add((New-PsExecCompletionResult -CompletionText (ConvertTo-PsExecQuotedValue -Value $completionPath -Quote $quote) -ResultType $(if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }) -ToolTip $item.FullName))
         }
     } else {
         foreach ($command in @(Get-Command -Name "$trimmed*" -CommandType Application -ErrorAction SilentlyContinue | Sort-Object -Property Name -Unique | Select-Object -First 20)) {
@@ -356,8 +388,8 @@ function Complete-PsExec {
         }
     }
 
-    if ($currentWord.StartsWith('@') -or $currentWord.StartsWith('"@')) {
-        return Get-PsExecAtFileCompletions -CurrentWord $currentWord
+    if ((Remove-PsExecOuterQuotes -Value $currentWord).StartsWith('@')) {
+        return Get-PsExecAtFileCompletions -CurrentWord $currentWord -StrandedAt $state.StrandedAt
     }
 
     if ($copyMode -and -not $commandToken -and [string]::IsNullOrEmpty($currentWord)) {

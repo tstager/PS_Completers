@@ -46,6 +46,8 @@ never proposes a `<command>` placeholder where only a host name is legal.
 
 When the current token starts with `@`, completion switches to local path completion for the file portion while preserving the `@` prefix. Path completion handles a trailing separator and the `.` / `..` leaves, so `@.\` and `-c .\` enumerate the current directory. A UNC copy source (`-c \\server\share\...`) is never enumerated: resolving the share can block the prompt for seconds on an unknown host, so the typed path is echoed back unchanged.
 
+The word being completed is the parser's element under the cursor, so an open quote that contains a space (`-c "C:\Program Fi`, `'@C:\Program Fi`) stays one path. Path results keep the quote the user typed: single-quoted results double an embedded `'`, double-quoted results escape `` ` ``, `"` and `$` with a backtick. An unquoted result is double-quoted when it contains whitespace or an argument-mode metacharacter, or starts with `@` or `#`. A bare `@` followed by `.` or `..` (`@.\`, `@..`) is an unrecognized token in PowerShell, and Tab replaces only the path after it, so those results are written as `("@.\hosts.txt")`: the line becomes `@("@.\hosts.txt")`, which passes `@.\hosts.txt` to psexec as one argument. Typing `` `@ ``, `'@` or `"@` avoids that form.
+
 ### Switches and value slots
 
 The completer covers the locally validated help surface, including:
