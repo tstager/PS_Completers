@@ -949,6 +949,105 @@ function Test-WslcPathLikeWord {
     return ($Word -match '^[.~]|[\\/]|^[A-Za-z]:')
 }
 
+function Get-WslcCurrentWord {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition,
+        [string]$WordToComplete
+    )
+
+    # PowerShell hands a quoted word over re-quoted ("'ti" arrives as "'ti'") and drops the quote
+    # inside an attached "--input='ti", while it replaces the whole word as typed; so the word is
+    # read from the element under the cursor. A comma list is the exception: only its last segment
+    # is replaced.
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            if ($element -is [System.Management.Automation.Language.ArrayLiteralAst] -or $element -is [System.Management.Automation.Language.ErrorExpressionAst]) {
+                return $WordToComplete
+            }
+
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
+    }
+
+    return ''
+}
+
+function ConvertFrom-WslcTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    return $tokens[0].Value
+}
+
+function ConvertTo-WslcQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    return $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-WslcPathCompletions {
+    param(
+        [string]$Word,
+        [string]$Prefix = ''
+    )
+
+    # CompleteFilename escapes [ ] and ` in the typed value itself and returns each path quoted
+    # and wildcard-escaped for PowerShell (tick````x.txt). wslc takes literal paths, so each
+    # result is unwrapped by the tokenizer and unescaped, then quoted once in the style the user
+    # typed. After a short option (-i=) PowerShell ends the parameter token at a dot or slash and
+    # passes the rest as a separate argument, so that value is always quoted.
+    $quoteChar = if ($Word -match '^[''"\u2018-\u201E]') { $Word.Substring(0, 1) } elseif ($Prefix -match '^-[^-]') { "'" } else { '' }
+    $value = ConvertFrom-WslcTypedWord -Value $Word
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($value))) {
+        $path = [System.Management.Automation.WildcardPattern]::Unescape((ConvertFrom-WslcTypedWord -Value $item.CompletionText))
+        $isContainer = [string]$item.ResultType -eq 'ProviderContainer'
+        if ($isContainer -and $path -notmatch '[\\/]$') {
+            $path += [System.IO.Path]::DirectorySeparatorChar
+        }
+
+        $listItemText = [System.Management.Automation.WildcardPattern]::Unescape($item.ListItemText)
+        $completion = New-WslcCompletionResult -CompletionText ($Prefix + (ConvertTo-WslcQuotedValue -Value $path -QuoteChar $quoteChar)) -ResultType ([string]$item.ResultType) -ToolTip $item.ToolTip -ListItemText $listItemText
+        if ($null -ne $completion) {
+            [void]$results.Add($completion)
+        }
+    }
+
+    return @($results.ToArray())
+}
+
 function Get-WslcPlaceholder {
     param([string]$Name)
 
@@ -1045,7 +1144,8 @@ function Get-WslcOptionValueCompletions {
         [object]$Option,
         [string]$Word,
         [string]$Prefix,
-        [string]$Session
+        [string]$Session,
+        [string]$RawWord
     )
 
     if ($null -eq $Option) {
@@ -1053,7 +1153,7 @@ function Get-WslcOptionValueCompletions {
     }
 
     if ($Option.IsPath -or ($Option.ValueKind -eq 'path')) {
-        return @([System.Management.Automation.CompletionCompleters]::CompleteFilename($Word))
+        return @(Get-WslcPathCompletions -Word $RawWord -Prefix $Prefix)
     }
 
     if ($Option.ValueKind -eq 'volume' -and (Test-WslcPathLikeWord -Word $Word)) {
@@ -1090,7 +1190,8 @@ function Get-WslcOperandCompletions {
         [string]$Word,
         [string[]]$Path,
         [string]$Session,
-        [string]$InspectType
+        [string]$InspectType,
+        [string]$RawWord
     )
 
     $operands = @($Catalog.Operands)
@@ -1122,7 +1223,7 @@ function Get-WslcOperandCompletions {
     }
 
     if ($operand.IsPath -or $operand.Kind -eq 'path') {
-        return @([System.Management.Automation.CompletionCompleters]::CompleteFilename($Word))
+        return @(Get-WslcPathCompletions -Word $RawWord)
     }
 
     $kind = [string]$operand.Kind
@@ -1163,6 +1264,7 @@ function Complete-Wslc {
     }
 
     $word = if ($null -eq $wordToComplete) { '' } else { [string]$wordToComplete }
+    $rawWord = Get-WslcCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition -WordToComplete $word
     $results = New-Object System.Collections.Generic.List[object]
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
@@ -1171,13 +1273,15 @@ function Complete-Wslc {
             return @()
         }
 
-        return @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType)
+        return @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType -RawWord $rawWord)
     }
 
     if ($word -match '^(?<name>--?[A-Za-z0-9?][A-Za-z0-9-]*)=(?<value>.*)$') {
         $option = Resolve-WslcOption -Catalog $context.Catalog -Name $Matches.name
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-WslcOptionValueCompletions -Option $option -Word $Matches.value -Prefix ($Matches.name + '=') -Session $context.Session)
+            $prefix = $Matches.name + '='
+            $rawValue = if ($rawWord.StartsWith($prefix, [System.StringComparison]::Ordinal)) { $rawWord.Substring($prefix.Length) } else { $Matches.value }
+            return @(Get-WslcOptionValueCompletions -Option $option -Word $Matches.value -Prefix $prefix -Session $context.Session -RawWord $rawValue)
         }
 
         return @()
@@ -1220,7 +1324,7 @@ function Complete-Wslc {
     if ($context.Previous.StartsWith('-') -and -not $context.Previous.Contains('=')) {
         $option = Resolve-WslcOption -Catalog $context.Catalog -Name $context.Previous
         if ($null -ne $option -and $option.TakesValue) {
-            return @(Get-WslcOptionValueCompletions -Option $option -Word $word -Prefix '' -Session $context.Session)
+            return @(Get-WslcOptionValueCompletions -Option $option -Word $word -Prefix '' -Session $context.Session -RawWord $rawWord)
         }
     }
 
@@ -1239,7 +1343,7 @@ function Complete-Wslc {
         }
     }
 
-    foreach ($item in @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType)) {
+    foreach ($item in @(Get-WslcOperandCompletions -Catalog $context.Catalog -OperandCount $context.OperandCount -Word $word -Path $context.Path -Session $context.Session -InspectType $context.InspectType -RawWord $rawWord)) {
         if ($null -ne $item -and $seen.Add($item.CompletionText)) {
             [void]$results.Add($item)
         }

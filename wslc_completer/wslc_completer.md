@@ -54,6 +54,7 @@ Object list output is newline-delimited JSON. If a query is empty or fails, the 
 - `-e` / `--env`, `--build-arg`, and `--label` are `<key=value>`.
 - `build --secret` is `<secret>`; its value is a spec (`id=NAME,src=PATH`), not a path.
 - `--file`, `--cidfile`, `--iidfile`, `--env-file`, `export -o` / `save -o`, and path operands use filesystem completion. `build -o` takes a buildx output spec and gets `<output>`.
+- File names are quoted as one literal argument (`'.\sp ace.txt'`, `'a$b.txt'`), in the quote you typed (single by default, typographic quotes included). An attached value keeps its option: `--file=sp` completes to `--file='.\sp ace.txt'`. After a short option the value is always quoted (`-i=pl` completes to `-i='.\plain.txt'`), because PowerShell splits a bare `-i=.\plain.txt` into two arguments.
 - A volume value that already looks like a path (`.\`, `C:\`, `/`, `~`) is left to filesystem completion. Otherwise volume names are offered.
 
 ## Version
