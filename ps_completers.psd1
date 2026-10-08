@@ -185,7 +185,7 @@
         @{
             Path    = 'compact_completer/compact_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B66E9D1C9C7A89831069EA661D794FA28E1669A9C42E423BF7788224759A6D93'
+            Hash    = 'SHA256:B02E09E570DA70E10977BEF7188DD4355AE8166443BE4FA2B620117F9011A53C'
             Targets = @(
                 @{ CommandName = 'compact'; Native = $true }
                 @{ CommandName = 'compact.exe'; Native = $true }

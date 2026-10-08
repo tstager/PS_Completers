@@ -40,117 +40,81 @@ function New-CompactCompletionResult {
     )
 }
 
-function Remove-CompactOuterQuotes {
+function ConvertFrom-CompactTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic, also mid-word) is
+    # read by the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ([string]::IsNullOrEmpty($Value)) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-CompactQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0] -is [System.Management.Automation.Language.StringToken]) {
+        return $tokens[0].Value
     }
 
     $Value
 }
 
-function Get-CompactTokenState {
+function Get-CompactTypedQuote {
+    # The first quote typed in a word (opening or mid-word), or '' when none was typed.
+    param([string]$Value)
+
+    $match = [regex]::Match($Value, '[''"\u2018-\u201E]')
+    if ($match.Success) { $match.Value } else { '' }
+}
+
+function ConvertTo-CompactQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
-        [string]$Line,
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-CompactArgumentState {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
-    if ($null -eq $Line) {
-        $Line = ''
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    $tokens = New-Object System.Collections.Generic.List[string]
-    $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
-
-    foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
-            }
-
-            [void]$builder.Append($character)
-            continue
-        }
-
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
-            if ($builder.Length -gt 0) {
-                $tokens.Add($builder.ToString())
-                [void]$builder.Clear()
-            }
-
-            continue
-        }
-
-        [void]$builder.Append($character)
-    }
-
-    $hasTrailingSpace = $prefix -match '\s$'
-    if ($builder.Length -gt 0) {
-        $tokens.Add($builder.ToString())
-    }
-
-    if ($hasTrailingSpace) {
-        return [pscustomobject]@{
-            TokensBeforeCurrent = @($tokens)
-            CurrentToken        = ''
-        }
-    }
-
-    if ($tokens.Count -gt 0) {
-        return [pscustomobject]@{
-            TokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1))
-            CurrentToken        = $tokens[$tokens.Count - 1]
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    $argumentsBeforeCurrent = New-Object System.Collections.Generic.List[string]
+    $currentArgument = ''
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.EndOffset -lt $CursorPosition) {
+            $argumentsBeforeCurrent.Add($extent.Text)
+        } elseif ($extent.StartOffset -lt $CursorPosition) {
+            $currentArgument = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
         }
     }
 
     [pscustomobject]@{
-        TokensBeforeCurrent = @()
-        CurrentToken        = ''
-    }
-}
-
-function Get-CompactArgumentsFromTokenState {
-    param([pscustomobject]$TokenState)
-
-    $tokensBeforeCurrent = @($TokenState.TokensBeforeCurrent)
-    $currentArgument = if ($null -eq $TokenState.CurrentToken) { '' } else { $TokenState.CurrentToken }
-
-    if ($tokensBeforeCurrent.Count -gt 0) {
-        $argumentsBeforeCurrent = @($tokensBeforeCurrent | Select-Object -Skip 1)
-    } else {
-        $argumentsBeforeCurrent = @()
-    }
-
-    if ($tokensBeforeCurrent.Count -eq 0 -and $currentArgument -match '^(?i)compact(?:\.exe)?$') {
-        $currentArgument = ''
-    }
-
-    [pscustomobject]@{
-        ArgumentsBeforeCurrent = $argumentsBeforeCurrent
+        ArgumentsBeforeCurrent = @($argumentsBeforeCurrent)
         CurrentArgument        = $currentArgument
     }
 }
@@ -240,7 +204,8 @@ function Get-CompactPrefixedValueCompletions {
         [string]$Placeholder
     )
 
-    $typedValue = Remove-CompactOuterQuotes -Value $CurrentValue
+    $typedValue = ConvertFrom-CompactTypedWord -Value $CurrentValue
+    $quoteChar = Get-CompactTypedQuote -Value $CurrentValue
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($suggestion in $Suggestions) {
@@ -253,7 +218,7 @@ function Get-CompactPrefixedValueCompletions {
     }
 
     if ($results.Count -eq 0) {
-        $fallback = if ([string]::IsNullOrWhiteSpace($CurrentValue)) { $Prefix + $Placeholder } else { $Prefix + $CurrentValue }
+        $fallback = if ([string]::IsNullOrWhiteSpace($CurrentValue)) { $Prefix + $Placeholder } elseif (-not $quoteChar) { $Prefix + $CurrentValue } else { $Prefix + (ConvertTo-CompactQuotedValue -Value $typedValue -QuoteChar $quoteChar) }
         [void]$results.Add((New-CompactCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $fallback))
     }
 
@@ -272,39 +237,26 @@ function Get-CompactPathCompletions {
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
-    $cleanValue = Remove-CompactOuterQuotes -Value $typedValue
-    $alwaysQuote = $typedValue.StartsWith('"')
+    $cleanValue = ConvertFrom-CompactTypedWord -Value $typedValue
+    $quoteChar = Get-CompactTypedQuote -Value $typedValue
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($cleanValue)) {
-        if ($cleanValue.EndsWith('\') -or $cleanValue.EndsWith('/')) {
-            $parentPath = $cleanValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $cleanValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
-
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $cleanValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $cleanValue -Leaf
-                } catch {
-                    $leaf = $cleanValue
-                }
-            }
-        }
+    # The typed directory part (.\, ../, sub/, C:) is kept exactly as typed on every candidate.
+    $directoryPart = ''
+    $separatorIndex = $cleanValue.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $directoryPart = $cleanValue.Substring(0, $separatorIndex + 1)
+    } elseif ($cleanValue -match '^[A-Za-z]:') {
+        $directoryPart = $cleanValue.Substring(0, 2)
     }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -Force -ErrorAction Stop)
-    } catch {
-        $items = @()
+    $leaf = $cleanValue.Substring($directoryPart.Length)
+    $parentPath = if ($directoryPart) { $directoryPart } else { '.' }
+    $separator = if ($directoryPart.EndsWith('/')) { '/' } else { [System.IO.Path]::DirectorySeparatorChar }
+
+    $items = @()
+    if (Test-Path -LiteralPath $parentPath -PathType Container -ErrorAction Ignore) {
+        $items = @(Get-ChildItem -LiteralPath $parentPath -Force -ErrorAction Ignore)
     }
 
     foreach ($item in $items) {
@@ -317,17 +269,22 @@ function Get-CompactPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
-        if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
-            $candidate += '\'
+        $candidate = $directoryPart + $item.Name
+        # A whole word starting with a dash would parse as a parameter: prefix .\ as PowerShell does.
+        if (-not $Prefix -and -not $directoryPart -and $candidate -match '^[-\u2013-\u2015]') {
+            $candidate = '.' + $separator + $candidate
         }
 
-        $completionText = ConvertTo-CompactQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        [void]$results.Add((New-CompactCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $completionText)))
+        if ($item.PSIsContainer) {
+            $candidate += $separator
+        }
+
+        $completionText = ConvertTo-CompactQuotedValue -Value $candidate -QuoteChar $quoteChar
+        [void]$results.Add((New-CompactCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText ($Prefix + $candidate)))
     }
 
     if ($results.Count -eq 0 -and -not $NoPlaceholder) {
-        $fallback = if ([string]::IsNullOrWhiteSpace($typedValue)) { $Prefix + $Placeholder } else { $Prefix + $typedValue }
+        $fallback = if ([string]::IsNullOrWhiteSpace($typedValue)) { $Prefix + $Placeholder } elseif (-not $quoteChar) { $Prefix + $typedValue } else { $Prefix + (ConvertTo-CompactQuotedValue -Value $cleanValue -QuoteChar $quoteChar) }
         [void]$results.Add((New-CompactCompletionResult -CompletionText $fallback -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $fallback))
     }
 
@@ -350,17 +307,9 @@ function Complete-Compact {
         [int]$cursorPosition
     )
 
-    $tokenState = Get-CompactTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
-    $argumentState = Get-CompactArgumentsFromTokenState -TokenState $tokenState
-    $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
-
-    if ($hasTrailingSpace -and -not [string]::IsNullOrEmpty($argumentState.CurrentArgument)) {
-        $currentWord = ''
-        $argumentsBeforeCurrent = @($argumentState.ArgumentsBeforeCurrent + $argumentState.CurrentArgument)
-    } else {
-        $currentWord = if ($null -eq $argumentState.CurrentArgument) { '' } else { $argumentState.CurrentArgument }
-        $argumentsBeforeCurrent = @($argumentState.ArgumentsBeforeCurrent)
-    }
+    $argumentState = Get-CompactArgumentState -CommandAst $commandAst -CursorPosition $cursorPosition
+    $currentWord = $argumentState.CurrentArgument
+    $argumentsBeforeCurrent = @($argumentState.ArgumentsBeforeCurrent)
 
     $helpRequested = $argumentsBeforeCurrent -contains '/?'
     $catalog = Get-CompactCatalog
