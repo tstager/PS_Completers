@@ -1359,7 +1359,7 @@
         @{
             Path    = 'tsort_completer/tsort_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:8AB5297B9A8DE678F55654E983EB5DB67834DDF2A21E33AB6D821BF78B0B7722'
+            Hash    = 'SHA256:6784989CCCE0D10E60B8FED0BA9E63D40B83C99D2ACD958264A0C83676495681'
             Targets = @(
                 @{ CommandName = 'tsort'; Native = $true }
                 @{ CommandName = 'tsort.exe'; Native = $true }
