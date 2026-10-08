@@ -84,64 +84,70 @@ function New-PasteCompletionResult {
     )
 }
 
-function Remove-PasteOuterQuotes {
+function Get-PasteTypedQuote {
+    # The quote style the user opened the word with: ' or " ('' when bare). PowerShell reads the
+    # typographic quotes U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
 }
 
-function ConvertTo-PasteQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-PasteTypedWord {
+    # The value of a typed word without its quotes and that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    $quote = Get-PasteTypedQuote -Value $Value
+    if (-not $quote) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $clean = $Value.Substring(1)
+    if ($quote -eq "'") {
+        # An odd run of quote characters at the end holds the closing quote.
+        if ($clean -match '[''\u2018-\u201B]+$' -and $Matches[0].Length % 2 -eq 1) {
+            $clean = $clean.Substring(0, $clean.Length - 1)
+        }
+
+        return $clean -replace '([''\u2018-\u201B])[''\u2018-\u201B]', '$1'
     }
 
-    $Value
+    if ($clean -match '(?<!`)(?:``)*["\u201C-\u201E]$') {
+        $clean = $clean.Substring(0, $clean.Length - 1)
+    }
+
+    $clean -replace '`(.)', '$1'
 }
 
 function Get-PasteCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the cursor, so a quoted word with a space stays whole.
+    $word = ''
+    foreach ($element in $CommandAst.CommandElements) {
+        if ($element.Extent.StartOffset -le $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            $word = $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    $word
 }
 
 function Get-PastePathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-PasteOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-PasteTypedWord -Value $InputPath
+    $typedQuote = Get-PasteTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -162,7 +168,7 @@ function Get-PastePathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -178,7 +184,7 @@ function Get-PastePathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-PasteQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-PasteValueArgument -Value $pathText -Quote $typedQuote
         if ($item.PSIsContainer) {
             New-PasteCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -193,12 +199,15 @@ function ConvertTo-PasteValueArgument {
         [string]$Quote
     )
 
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed, otherwise
+    # in the typed quote style (single by default), with every quote character of that style
+    # (typographic ones included) escaped.
     if ($Quote -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
     }
 
-    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if ($Quote -eq "'" -or $Value -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
     }
 
     $Value
@@ -262,14 +271,8 @@ function Get-PasteOptionValueCompletions {
         )
     }
 
-    $quote = ''
-    if ($prefix.StartsWith("'") -or $prefix.StartsWith('"')) {
-        $quote = $prefix.Substring(0, 1)
-        $prefix = $prefix.Substring(1)
-        if ($prefix.EndsWith($quote)) {
-            $prefix = $prefix.Substring(0, $prefix.Length - 1)
-        }
-    }
+    $quote = Get-PasteTypedQuote -Value $prefix
+    $prefix = ConvertFrom-PasteTypedWord -Value $prefix
 
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
     , @(
@@ -303,7 +306,7 @@ function Complete-Paste {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-PasteCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-PasteCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     }
 
     $optionValues = Get-PasteOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -WordToComplete $wordToComplete
