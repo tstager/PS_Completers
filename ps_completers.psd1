@@ -1469,7 +1469,7 @@
         @{
             Path    = 'where_completer/where_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:9DEC6E781E4A45ABD93E6A72547AE88A79DF592ECA09EF318F1A8ADF75A2ABD8'
+            Hash    = 'SHA256:4FF5F5ECD292587B3036D1F345B5FE1CC5C0F592F781EDA16F8FFC14BAAF1E84'
             Targets = @(
                 @{ CommandName = 'where.exe'; Native = $true }
                 @{ CommandName = 'where'; Native = $true }

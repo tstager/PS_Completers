@@ -144,7 +144,7 @@ function Get-WherePathCompletions {
     $parent = if ([string]::IsNullOrEmpty($parentText)) { '.' } else { $parentText }
     $pattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
 
-    $directories = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue |
+    $directories = @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Ignore |
         Where-Object { $_.Name -like $pattern } |
         Sort-Object -Property Name)
 
