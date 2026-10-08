@@ -113,7 +113,7 @@ function ConvertTo-Md5sumQuotedValue {
     }
 
     if (-not $QuoteChar) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
             return $Value
         }
 
@@ -150,20 +150,11 @@ function Get-Md5sumPathCompletions {
     $cleanInput = ConvertFrom-Md5sumTypedWord -Value $InputPath
     $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # The directory part is kept exactly as typed (.\, ./, ..\ and the typed separators).
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]'\/')
+    $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
@@ -173,10 +164,10 @@ function Get-Md5sumPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+        if (-not $directoryText -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash parses as a parameter; anchor it like PowerShell does.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
