@@ -647,7 +647,7 @@
         @{
             Path    = 'od_completer/od_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:A813AD73275E478E61A851F0FC5CE4DBD90DBFFA5E258701A5FEB3304DE93720'
+            Hash    = 'SHA256:FA71A3FE8434AF3E068D63A79567DB72673A1C358E7D35ED96595B69A29CD288'
             Targets = @(
                 @{ CommandName = 'od'; Native = $true }
                 @{ CommandName = 'od.exe'; Native = $true }
