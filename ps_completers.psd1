@@ -130,7 +130,7 @@
         @{
             Path    = 'claude_completer/claude_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:52DE80EB6EB20F9C5B450BAF5AA9CBCA2D551E80490B7E226FE0DEFF71ACCA0A'
+            Hash    = 'SHA256:4F8B2DC7490B4E695B54B198D8D1989FBD55D2C78980DEF97DAF0A02B8460D9E'
             Targets = @(
                 @{ CommandName = 'claude'; Native = $true }
                 @{ CommandName = 'claude.exe'; Native = $true }

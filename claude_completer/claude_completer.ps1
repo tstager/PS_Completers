@@ -631,6 +631,78 @@ function New-ClaudeCompletion {
     )
 }
 
+# The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+# the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+function ConvertFrom-ClaudeTypedWord {
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens    = $null
+    $parseErrs = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrs)
+    $tokens[0].Value
+}
+
+# Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+# otherwise in the quote the user typed (single by default). PowerShell reads ' and
+# U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+function ConvertTo-ClaudeQuotedValue {
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') { return $Value }
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+# File-system candidates for a path slot. CompleteFilename output is already quoted for
+# PowerShell and wildcard-escaped (tick``x.txt), so each result is unwrapped by the parser
+# and unescaped, then quoted once in the style the user typed. An inline '--flag=' prefix
+# stays bare in front of the quoted value, which keeps the word one constant argument.
+function Get-ClaudePathCompletions {
+    param(
+        [string]$WordToComplete,
+        [string]$InlinePrefix = '',
+        [switch]$DirectoriesOnly,
+        [switch]$AllowZip
+    )
+
+    $quoteChar = if ($WordToComplete -match '^[''"\u2018-\u201E]') { $WordToComplete.Substring(0, 1) } else { '' }
+    $value     = ConvertFrom-ClaudeTypedWord -Value $WordToComplete
+
+    foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($value)) {
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast      = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) { $path = $constant.Value }
+        }
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+
+        $isContainer = $item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
+        if ($DirectoriesOnly -and -not $isContainer -and -not ($AllowZip -and $path -like '*.zip')) { continue }
+
+        New-ClaudeCompletion "$InlinePrefix$(ConvertTo-ClaudeQuotedValue -Value $path -QuoteChar $quoteChar)" `
+            -ListItemText $item.ListItemText `
+            -ResultType   $item.ResultType `
+            -Tooltip      $item.ToolTip
+    }
+}
+
 # Normalises a command/subcommand alias to its canonical name.
 function Resolve-ClaudeCmdAlias {
     param([string]$Token)
@@ -869,24 +941,9 @@ function Write-ClaudeFlagValue {
 
     # Path / dir completion. --add-dir takes directories only; --plugin-dir a directory or a .zip.
     if ($script:ClaudePathFlags -contains $Flag -or $script:ClaudeDirFlags -contains $Flag) {
-        $directoriesOnly = $script:ClaudeDirFlags -contains $Flag
-        $allowZip = $Flag -eq '--plugin-dir'
-        [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-            Where-Object {
-                (-not $directoriesOnly) -or
-                ($_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer) -or
-                ($allowZip -and $_.CompletionText -like '*.zip*')
-            } |
-            ForEach-Object {
-                if ($InlinePrefix) {
-                    New-ClaudeCompletion "$InlinePrefix$($_.CompletionText)" `
-                        -ListItemText $_.ListItemText `
-                        -ResultType   $_.ResultType `
-                        -Tooltip      $_.ToolTip
-                } else {
-                    $_
-                }
-            }
+        Get-ClaudePathCompletions -WordToComplete $WordToComplete -InlinePrefix $InlinePrefix `
+            -DirectoriesOnly:($script:ClaudeDirFlags -contains $Flag) `
+            -AllowZip:($Flag -eq '--plugin-dir')
         return
     }
 
@@ -1165,9 +1222,8 @@ function Complete-ClaudeNative {
             }
         }
         if ($script:ClaudePathPositionalL2.Contains($l3k) -and $positionalCount -eq 0) {
-            $directoriesOnly = $script:ClaudeDirPositionalL2.Contains($l3k)
-            [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-                Where-Object { -not $directoriesOnly -or $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer }
+            Get-ClaudePathCompletions -WordToComplete $WordToComplete `
+                -DirectoriesOnly:($script:ClaudeDirPositionalL2.Contains($l3k))
             $emitted = $true
         }
 
@@ -1235,9 +1291,8 @@ function Complete-ClaudeNative {
             }
         }
         if ($script:ClaudePathPositionalL2.Contains($sub) -and $positionalCount -eq 0) {
-            $directoriesOnly = $script:ClaudeDirPositionalL2.Contains($sub)
-            [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
-                Where-Object { -not $directoriesOnly -or $_.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer }
+            Get-ClaudePathCompletions -WordToComplete $WordToComplete `
+                -DirectoriesOnly:($script:ClaudeDirPositionalL2.Contains($sub))
             $emitted = $true
         }
         $placeholder = Get-ClaudePositionalPlaceholder -ContextKey $sub -PositionIndex $positionalCount
