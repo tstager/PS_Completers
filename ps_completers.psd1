@@ -94,7 +94,7 @@
         @{
             Path    = 'cargo_binstall_completer/cargo_binstall_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:B3644CDA54A6CE6C73B844A8C6294CF917B3D3065FB611C402994BEBE1841B59'
+            Hash    = 'SHA256:877798E6CE83367776F491831946E98710B266C1A1F870B47C1D522D193D2707'
             Targets = @(
                 @{ CommandName = 'cargo-binstall'; Native = $true }
                 @{ CommandName = 'cargo-binstall.exe'; Native = $true }

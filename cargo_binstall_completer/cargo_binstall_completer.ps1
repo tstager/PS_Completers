@@ -189,46 +189,65 @@ function Remove-CargoBinstallOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-CargoBinstallQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-CargoBinstallTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-CargoBinstallQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        # A bare word starting with a dash would be parsed as a parameter.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-CargoBinstallCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-CargoBinstallTokensBeforeCursor {
@@ -250,18 +269,31 @@ function Get-CargoBinstallTokensBeforeCursor {
 function Get-CargoBinstallPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-CargoBinstallOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-CargoBinstallTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+    # CompleteFilename rewrites a typed ./ or ../ as .\ or ..\; the typed prefix is kept.
+    $typedPrefix = if ($cleanInput -match '^\.{1,2}[\\/]') { $Matches[0] } else { '' }
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            # CompleteFilename already quotes a path containing spaces; wrapping
-            # that again would produce a path with literal quotes inside it.
-            $completionText = if ($_.CompletionText -match '^[''"]') {
-                $_.CompletionText
-            } else {
-                ConvertTo-CargoBinstallQuotedValue -Value $_.CompletionText -AlwaysQuote $alwaysQuote
+            # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path
+            # parameters (tick``x.txt); cargo-binstall takes literal paths, so the
+            # result is unwrapped by the parser, unescaped, and quoted once here.
+            $path = $_.CompletionText
+            if ($path -match '^[''"\u2018-\u201E]') {
+                $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+                $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+                if ($constant) {
+                    $path = $constant.Value
+                }
             }
+
+            $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+            if ($typedPrefix -and -not $path.StartsWith($typedPrefix)) {
+                $path = $typedPrefix + ($path -replace '^\.{1,2}[\\/]', '')
+            }
+
+            $completionText = ConvertTo-CargoBinstallQuotedValue -Value $path -QuoteChar $quoteChar
             New-CargoBinstallCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 }
@@ -445,7 +477,7 @@ function Complete-CargoBinstall {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-CargoBinstallCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-CargoBinstallCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     }
 
     $tokensBeforeCurrent = @(Get-CargoBinstallTokensBeforeCursor -CommandAst $commandAst -CursorPosition $cursorPosition)
@@ -464,7 +496,8 @@ function Complete-CargoBinstall {
     }
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and $currentWord.StartsWith('-')) {
-        $attached = [regex]::Match((Remove-CargoBinstallOuterQuotes -Value $currentWord), '^(?<name>--[^=]+)=(?<value>.*)$')
+        # The value keeps any typed opening quote so the completion keeps it too.
+        $attached = [regex]::Match($currentWord, '^(?<name>--[^=]+)=(?<value>.*)$')
         if ($attached.Success) {
             # Attached --opt=value form: complete the value, keeping the prefix.
             $definition = Get-CargoBinstallHelpDefinition

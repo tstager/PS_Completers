@@ -62,7 +62,7 @@ The script:
   - free-form values such as `--version`, `--git`, `--registry`, `--github-token`, and the positional `crate[@version]` operand use placeholders instead of filesystem fallback; the placeholder is offered only while the slot is empty (or matches the typed prefix), never echoing typed text back
 - Attached `--opt=value` form: the value completes with the `--opt=` prefix kept (`--pkg-fmt=t`, `--install-path=C:\Win`)
 - After `--` every token is a crate operand and option names are no longer offered
-- Path values containing spaces keep the single quotes `CompleteFilename` applies and are not wrapped a second time
+- Path values are quoted once as a literal argument: names with spaces or PowerShell metacharacters (`$`, `&`, `;`, `` ` ``, quotes, typographic quotes) are wrapped in the quote you typed (single quotes by default), and the attached form keeps the prefix outside the quotes (`--root='.\sub dir&x'`); a name starting with a dash keeps the `.\` prefix (`.\-dash.txt`) so it is not read as an option, and a typed `./` or `../` prefix is kept as typed
 
 ## Usage / loading example
 
