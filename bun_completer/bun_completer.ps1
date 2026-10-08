@@ -164,7 +164,8 @@ function New-BunSuggestionItem {
     param(
         [string]$CompletionText,
         [string]$ToolTip,
-        [string]$ResultType = 'ParameterValue'
+        [string]$ResultType = 'ParameterValue',
+        [string]$ListItemText
     )
 
     if ([string]::IsNullOrWhiteSpace($CompletionText)) {
@@ -173,6 +174,7 @@ function New-BunSuggestionItem {
 
     [pscustomobject]@{
         CompletionText = $CompletionText
+        ListItemText   = if ([string]::IsNullOrWhiteSpace($ListItemText)) { $CompletionText } else { $ListItemText }
         ToolTip        = if ([string]::IsNullOrWhiteSpace($ToolTip)) { $CompletionText } else { $ToolTip }
         ResultType     = $ResultType
     }
@@ -593,7 +595,7 @@ function Get-BunPackageJsonData {
         return $null
     }
 
-    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    $item = Get-Item -LiteralPath $Path -ErrorAction Ignore
     if (-not $item) {
         return $null
     }
@@ -682,9 +684,9 @@ function Get-BunWorkspaceNames {
             continue
         }
 
-        $resolvedPaths = @(Resolve-Path -Path (Join-Path -Path $projectRoot -ChildPath ([string]$pattern)) -ErrorAction SilentlyContinue)
+        $resolvedPaths = @(Resolve-Path -Path (Join-Path -Path $projectRoot -ChildPath ([string]$pattern)) -ErrorAction Ignore)
         foreach ($resolvedPath in $resolvedPaths) {
-            $item = Get-Item -LiteralPath $resolvedPath.ProviderPath -ErrorAction SilentlyContinue
+            $item = Get-Item -LiteralPath $resolvedPath.ProviderPath -ErrorAction Ignore
             if (-not $item) {
                 continue
             }
@@ -827,13 +829,13 @@ function Get-BunInstalledPackageNames {
     }
 
     $names = New-Object System.Collections.Generic.List[string]
-    foreach ($item in @(Get-ChildItem -LiteralPath $nodeModulesPath -Directory -ErrorAction SilentlyContinue)) {
+    foreach ($item in @(Get-ChildItem -LiteralPath $nodeModulesPath -Directory -ErrorAction Ignore)) {
         if ($item.Name -eq '.bin') {
             continue
         }
 
         if ($item.Name.StartsWith('@', [System.StringComparison]::Ordinal)) {
-            foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Directory -ErrorAction SilentlyContinue)) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Directory -ErrorAction Ignore)) {
                 [void]$names.Add("$($item.Name)/$($child.Name)")
             }
 
@@ -903,7 +905,7 @@ function Get-BunNodeModulesBinNames {
         return @()
     }
 
-    $names = foreach ($item in @(Get-ChildItem -LiteralPath $binPath -File -ErrorAction SilentlyContinue)) {
+    $names = foreach ($item in @(Get-ChildItem -LiteralPath $binPath -File -ErrorAction Ignore)) {
         if ($item.BaseName.EndsWith('.cmd', [System.StringComparison]::OrdinalIgnoreCase)) {
             [System.IO.Path]::GetFileNameWithoutExtension($item.BaseName)
         } elseif ($item.Extension -in @('.cmd', '.ps1', '.psm1', '.exe')) {
@@ -937,7 +939,7 @@ function Get-BunCreateTemplateNames {
             continue
         }
 
-        foreach ($item in @(Get-ChildItem -LiteralPath $basePath -Directory -ErrorAction SilentlyContinue)) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $basePath -Directory -ErrorAction Ignore)) {
             [void]$names.Add($item.Name)
         }
     }
@@ -951,60 +953,48 @@ function Get-BunCreateTemplateNames {
     $values
 }
 
-function Get-BunQuoteCharacter {
+function ConvertFrom-BunTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$InputText)
 
-    if ([string]::IsNullOrEmpty($InputText)) {
-        return $null
+    if ($InputText -notmatch '^[''"\u2018-\u201E]') {
+        return $InputText
     }
 
-    if ($InputText.StartsWith('"')) {
-        return '"'
-    }
-
-    if ($InputText.StartsWith("'")) {
-        return "'"
-    }
-
-    $null
-}
-
-function Remove-BunOuterQuotes {
-    param([string]$InputText)
-
-    if ([string]::IsNullOrEmpty($InputText)) {
-        return ''
-    }
-
-    if ($InputText.Length -ge 2) {
-        if (($InputText.StartsWith('"') -and $InputText.EndsWith('"')) -or
-            ($InputText.StartsWith("'") -and $InputText.EndsWith("'"))) {
-            return $InputText.Substring(1, $InputText.Length - 2)
-        }
-    }
-
-    $InputText.Trim('"', "'")
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($InputText, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-BunQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteCharacter
     )
 
-    if ([string]::IsNullOrWhiteSpace($QuoteCharacter)) {
-        if ($Value -match '\s') {
-            return '"' + ($Value -replace '"', '\"') + '"'
-        }
-
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if ($QuoteCharacter -eq "'") {
-        return "'" + ($Value -replace "'", "''") + "'"
+    if (-not $QuoteCharacter) {
+        # A bare word led by a dash would parse as a parameter.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    '"' + ($Value -replace '"', '\"') + '"'
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
+    }
+
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-BunPathSuggestions {
@@ -1016,13 +1006,13 @@ function Get-BunPathSuggestions {
     )
 
     $text = if ($null -eq $InputText) { '' } else { $InputText }
-    $quoteCharacter = Get-BunQuoteCharacter -InputText $text
-    $trimmedInput = Remove-BunOuterQuotes -InputText $text
+    $quoteCharacter = if ($text -match '^[''"\u2018-\u201E]') { $text.Substring(0, 1) } else { '' }
+    $trimmedInput = ConvertFrom-BunTypedWord -InputText $text
 
     if ([string]::IsNullOrWhiteSpace($trimmedInput)) {
         $parent = '.'
         $leaf = ''
-    } elseif (Test-Path -LiteralPath $trimmedInput -PathType Container) {
+    } elseif (Test-Path -LiteralPath $trimmedInput -PathType Container -ErrorAction Ignore) {
         $parent = $trimmedInput
         $leaf = ''
     } else {
@@ -1034,7 +1024,7 @@ function Get-BunPathSuggestions {
         $leaf = Split-Path -Path $trimmedInput -Leaf
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
+    $filter = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
     $preferredMap = @{}
     foreach ($extension in @($PreferredExtensions)) {
         if ([string]::IsNullOrWhiteSpace($extension)) {
@@ -1044,7 +1034,9 @@ function Get-BunPathSuggestions {
         $preferredMap[$extension.ToLowerInvariant()] = $true
     }
 
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    # -LiteralPath and an escaped -like keep '[', '`' and other wildcard characters in a typed
+    # name literal.
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like $filter })
     if ($DirectoryOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
@@ -1065,25 +1057,35 @@ function Get-BunPathSuggestions {
             @{ Expression = { $_.Name } }
     )
 
+    # A relative candidate keeps the directory part exactly as typed ('.\', '../', 'sub/'); a name
+    # led by a dash gets PowerShell's own '.\' so the word cannot parse as a parameter.
+    $typedDirectory = if ($leaf -eq '' -and $parent -ne '.') {
+        if ($trimmedInput -match '[\\/]$') { $trimmedInput } else { $trimmedInput + [System.IO.Path]::DirectorySeparatorChar }
+    } elseif ($trimmedInput -eq '.') {
+        '.' + [System.IO.Path]::DirectorySeparatorChar
+    } else {
+        $trimmedInput.Substring(0, $trimmedInput.LastIndexOfAny([char[]]'\/') + 1)
+    }
+
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($item in $sortedItems) {
-        $completionText = if (-not [System.IO.Path]::IsPathRooted($trimmedInput)) {
-            if ($parent -eq '.') {
-                $item.Name
+        $pathText = if (-not [System.IO.Path]::IsPathRooted($trimmedInput)) {
+            if ($typedDirectory -eq '' -and -not $AttachedPrefix -and $item.Name -match '^[-\u2013-\u2015]') {
+                '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
             } else {
-                Join-Path -Path $parent -ChildPath $item.Name
+                $typedDirectory + $item.Name
             }
         } else {
             $item.FullName
         }
 
-        if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $completionText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($quoteCharacter) -or ($completionText -match '\s')) {
-            $completionText = ConvertTo-BunQuotedValue -Value $completionText -QuoteCharacter $quoteCharacter
-        }
+        # An attached '--opt=' stays bare in front of the quoted value: --config='a b.toml' is
+        # one constant argument.
+        $completionText = $AttachedPrefix + (ConvertTo-BunQuotedValue -Value $pathText -QuoteCharacter $quoteCharacter)
 
         $toolTip = if ($item.PSIsContainer) {
             'Directory: {0}' -f $item.FullName
@@ -1091,7 +1093,8 @@ function Get-BunPathSuggestions {
             $item.FullName
         }
 
-        $suggestion = New-BunSuggestionItem -CompletionText ($AttachedPrefix + $completionText) -ToolTip $toolTip
+        $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
+        $suggestion = New-BunSuggestionItem -CompletionText $completionText -ListItemText $pathText -ToolTip $toolTip -ResultType $resultType
         if ($suggestion) {
             [void]$results.Add($suggestion)
         }
@@ -1309,6 +1312,23 @@ function Get-BunEffectiveWordToComplete {
         $lastElement = $CommandAst.CommandElements[$CommandAst.CommandElements.Count - 1]
         if ($CursorPosition -gt $lastElement.Extent.EndOffset) {
             return ''
+        }
+    }
+
+    # PowerShell hands a quoted word over re-quoted ("'sp" arrives as "'sp'") and drops the quote
+    # inside an attached "--config='sp", while it replaces the whole word as typed (also with the
+    # cursor inside it); so a string word is read whole from the element under the cursor. Other
+    # elements ('-c:value', a comma list) keep $WordToComplete, the part PowerShell replaces.
+    for ($index = 1; $index -lt $CommandAst.CommandElements.Count; $index++) {
+        $element = $CommandAst.CommandElements[$index]
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                $element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+                return $extent.Text
+            }
+
+            break
         }
     }
 
@@ -1960,8 +1980,20 @@ function Get-BunPositionalSuggestions {
 function ConvertTo-BunCompletionResults {
     param(
         [object[]]$Items,
-        [string]$WordToComplete
+        [string]$WordToComplete,
+        [switch]$ExcludePaths,
+        [switch]$OptionValue,
+        [string]$AssignmentPrefix = ''
     )
+
+    # A quoted option value ("'w", "--filter='w") matches on its unquoted text and keeps the typed
+    # quote; path candidates already carry it.
+    $valueQuote = ''
+    if ($OptionValue -and $WordToComplete.StartsWith($AssignmentPrefix, [System.StringComparison]::Ordinal) -and
+        $WordToComplete.Substring($AssignmentPrefix.Length) -match '^[''"\u2018-\u201E]') {
+        $valueQuote = $Matches[0]
+        $WordToComplete = $AssignmentPrefix + (ConvertFrom-BunTypedWord -InputText $WordToComplete.Substring($AssignmentPrefix.Length))
+    }
 
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     # A typed short flag keeps its case so -F never completes to -f; long options and values keep
@@ -1973,20 +2005,33 @@ function ConvertTo-BunCompletionResults {
             continue
         }
 
-        if (-not [string]::IsNullOrEmpty($WordToComplete)) {
+        # Path candidates are already matched on their unquoted name; their quoted CompletionText
+        # need not start with the typed word.
+        $isPath = $item.ResultType -in @('ProviderItem', 'ProviderContainer')
+        if ($isPath -and $ExcludePaths) {
+            continue
+        }
+
+        if (-not $isPath -and -not [string]::IsNullOrEmpty($WordToComplete)) {
             $matched = if ($caseSensitive) { $item.CompletionText -clike $pattern } else { $item.CompletionText -like $pattern }
             if (-not $matched) {
                 continue
             }
         }
 
-        if (-not $seen.Add($item.CompletionText)) {
+        $completionText = if ($valueQuote -and -not $isPath) {
+            $AssignmentPrefix + (ConvertTo-BunQuotedValue -Value $item.CompletionText.Substring($AssignmentPrefix.Length) -QuoteCharacter $valueQuote)
+        } else {
+            $item.CompletionText
+        }
+
+        if (-not $seen.Add($completionText)) {
             continue
         }
 
         [System.Management.Automation.CompletionResult]::new(
-            $item.CompletionText,
-            $item.CompletionText,
+            $completionText,
+            $item.ListItemText,
             [System.Management.Automation.CompletionResultType]::$($item.ResultType),
             $item.ToolTip
         )
@@ -2011,6 +2056,14 @@ function Complete-Bun {
     $previousToken = $context.PreviousToken
     $assignmentContext = Get-BunOptionAssignmentContext -WordToComplete $effectiveWordToComplete
 
+    # 'a,b' parses as an array literal and 'a,' as an error expression; PowerShell replaces only
+    # the segment after the last comma, where any path would turn the word into an array.
+    $inCommaList = @($commandAst.CommandElements | Where-Object {
+            $_.Extent.StartOffset -lt $cursorPosition -and $cursorPosition -le $_.Extent.EndOffset -and
+            ($_ -is [System.Management.Automation.Language.ArrayLiteralAst] -or
+                $_ -is [System.Management.Automation.Language.ErrorExpressionAst])
+        }).Count -gt 0
+
     if ($assignmentContext -and (Get-BunOptionExpectsValue -Path $path -Option $assignmentContext.Option)) {
         $items = Get-BunOptionValueSuggestions `
             -Path $path `
@@ -2019,7 +2072,7 @@ function Complete-Bun {
             -WordToComplete $assignmentContext.ValuePrefix `
             -AssignmentPrefix ('{0}=' -f $assignmentContext.Option)
 
-        ConvertTo-BunCompletionResults -Items $items -WordToComplete $effectiveWordToComplete
+        ConvertTo-BunCompletionResults -Items $items -WordToComplete $effectiveWordToComplete -ExcludePaths:$inCommaList -OptionValue -AssignmentPrefix ('{0}=' -f $assignmentContext.Option)
         return
     }
 
@@ -2030,7 +2083,7 @@ function Complete-Bun {
             -Option $previousToken `
             -WordToComplete $effectiveWordToComplete
 
-        ConvertTo-BunCompletionResults -Items $items -WordToComplete $effectiveWordToComplete
+        ConvertTo-BunCompletionResults -Items $items -WordToComplete $effectiveWordToComplete -ExcludePaths:$inCommaList -OptionValue
         return
     }
 
@@ -2056,7 +2109,7 @@ function Complete-Bun {
         }
     }
 
-    ConvertTo-BunCompletionResults -Items $items.ToArray() -WordToComplete $effectiveWordToComplete
+    ConvertTo-BunCompletionResults -Items $items.ToArray() -WordToComplete $effectiveWordToComplete -ExcludePaths:$inCommaList
 }
 
 Register-ArgumentCompleter -Native -CommandName 'bun', 'bun.exe' -ScriptBlock {

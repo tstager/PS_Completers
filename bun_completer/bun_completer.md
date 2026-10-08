@@ -233,7 +233,7 @@ For path-valued options, the completer returns filesystem suggestions and prefer
 
 Directory-only completion is used for options such as `--cwd`, `--outdir`, `--coverage-dir`, `--destination`, `--cache-dir`, and `--patches-dir`.
 
-The completer supports both separate values and `--option=value` forms. When completing paths, it preserves or adds quotes when needed and appends a trailing directory separator for directories.
+The completer supports both separate values and `--option=value` forms. When completing paths, it appends a trailing directory separator for directories and quotes the path so it reaches `bun` as one literal argument: a name with whitespace or a PowerShell metacharacter (`$`, `&`, `;`, `,`, `(`, `{`, a backtick, a quote, ...) is single-quoted, a quote the user typed (ASCII or typographic) is kept, and an attached option stays bare in front of the quoted value (`--config='my config.toml'`). A typed directory part (`.\`, `../`, `src\`) is kept exactly as typed, and a relative name that starts with a dash gets PowerShell's own `.\` prefix (`.\-notes.txt`) so it cannot parse as a parameter. A quoted option value (`--filter='w`, `--filter 'w`) matches on its unquoted text and keeps the typed quote (`--filter='web'`). The list shows the plain name. Inside a comma list (`a,b`) no path is offered, because any path there would turn the word into an array.
 
 ## Dependencies or external command expectations
 

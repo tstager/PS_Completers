@@ -85,7 +85,7 @@
         @{
             Path    = 'bun_completer/bun_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7E32754C04C1214285750D75781200AE7A1781E21C170A11FE7FA4F1542F9E07'
+            Hash    = 'SHA256:AA9844E3B670D257BA97AED9723F3F7C7B50F837759CF934AEEF9954153419A9'
             Targets = @(
                 @{ CommandName = 'bun'; Native = $true }
                 @{ CommandName = 'bun.exe'; Native = $true }
