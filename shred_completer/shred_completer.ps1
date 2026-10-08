@@ -173,7 +173,10 @@ function Get-ShredCurrentToken {
 }
 
 function Get-ShredPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$Attached
+    )
 
     $cleanInput = Remove-ShredOuterQuotes -Value $InputPath
     $typedQuote = ''
@@ -196,6 +199,9 @@ function Get-ShredPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
+    # The directory part is kept as typed (.\, ./, ..\ and the separator style included).
+    $typedDirectory = if ([string]::IsNullOrWhiteSpace($cleanInput)) { '' } else { $cleanInput.Substring(0, $cleanInput.Length - $leaf.Length) }
+
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
     }
@@ -204,12 +210,11 @@ function Get-ShredPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        if ($typedDirectory -eq '' -and -not $Attached -and $pathText -match '^[-\u2013-\u2015]') {
+            # A whole word starting with a dash is read as a parameter: lead it with .\ as
+            # PowerShell's own file completion does.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
@@ -283,7 +288,7 @@ function Get-ShredOptionValueCompletions {
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
-            foreach ($result in Get-ShredPathCompletions -InputPath $prefix) {
+            foreach ($result in Get-ShredPathCompletions -InputPath $prefix -Attached:($attached -ne '')) {
                 New-ShredCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
