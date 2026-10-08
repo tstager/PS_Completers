@@ -1496,7 +1496,7 @@
         @{
             Path    = 'wpr_completer/wpr_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:3A60490B77A54C64E4915B57D7C0C00DE9D64B223C14C32388D875C8B402299C'
+            Hash    = 'SHA256:38E42E2094261803A0F3F951051AE007BCA77FCD8D17BBF60431385E4AE98E47'
             Targets = @(
                 @{ CommandName = 'wpr'; Native = $true }
                 @{ CommandName = 'wpr.exe'; Native = $true }

@@ -129,58 +129,29 @@ function Get-WprEnableDisableValues {
 
 function Get-WprTokenState {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
-    if ($null -eq $Line) {
-        $Line = ''
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
+    # Words come from the parser, so quoted words (ASCII or typographic, with escapes) stay
+    # whole; an unterminated quoted word is one element running to the cursor.
     $tokens = New-Object System.Collections.Generic.List[string]
-    $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
-
-    foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
-            }
-
-            [void]$builder.Append($character)
-            continue
+    $currentToken = ''
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -ge $CursorPosition) {
+            break
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
-            if ($builder.Length -gt 0) {
-                $tokens.Add($builder.ToString())
-                [void]$builder.Clear()
-            }
-
-            continue
+        if ($CursorPosition -le $extent.EndOffset) {
+            $currentToken = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+            break
         }
 
-        [void]$builder.Append($character)
+        $tokens.Add($extent.Text)
     }
 
-    $hasTrailingSpace = $prefix -match '\s$'
-    if ($builder.Length -gt 0) {
-        $tokens.Add($builder.ToString())
-    }
-
-    if ($hasTrailingSpace) {
-        return [pscustomobject]@{ TokensBeforeCurrent = @($tokens); CurrentToken = '' }
-    }
-
-    if ($tokens.Count -gt 0) {
-        return [pscustomobject]@{ TokensBeforeCurrent = @($tokens | Select-Object -First ($tokens.Count - 1)); CurrentToken = $tokens[$tokens.Count - 1] }
-    }
-
-    [pscustomobject]@{ TokensBeforeCurrent = @(); CurrentToken = '' }
+    [pscustomobject]@{ TokensBeforeCurrent = @($tokens); CurrentToken = $currentToken }
 }
 
 function Get-WprArgumentsFromTokenState {
@@ -205,36 +176,58 @@ function Get-WprArgumentsFromTokenState {
     }
 }
 
-function Remove-WprOuterQuotes {
+function ConvertFrom-WprTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ([string]::IsNullOrEmpty($Value)) {
-        return ''
-    }
-
-    if ($Value.Length -ge 2 -and (($Value.StartsWith('"') -and $Value.EndsWith('"')) -or ($Value.StartsWith("'") -and $Value.EndsWith("'")))) {
-        return $Value.Substring(1, $Value.Length - 2)
-    }
-
-    $Value.TrimStart('"', "'")
-}
-
-function ConvertTo-WprQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function Get-WprTypedQuote {
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        return $Value.Substring(0, 1)
     }
 
-    $Value
+    ''
+}
+
+function ConvertTo-WprQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        # A bare word opened with a dash would be read as a parameter.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-WprPathCompletions {
@@ -246,40 +239,26 @@ function Get-WprPathCompletions {
         [string]$Placeholder = '<path>'
     )
 
-    $typedValue = Remove-WprOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $typedValue = ConvertFrom-WprTypedWord -Value $CurrentWord
+    $quoteChar = Get-WprTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $typedValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
-
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $typedValue -Leaf
-                } catch {
-                    $leaf = $typedValue
-                }
-            }
-        }
+    # The typed directory part (through the last separator, or a bare drive 'C:') is kept
+    # verbatim so a typed .\ or ./ prefix and separator style survive.
+    $typedParent = ''
+    $leaf = if ($null -eq $typedValue) { '' } else { $typedValue }
+    $lastSeparator = $leaf.LastIndexOfAny([char[]]@('\', '/'))
+    if ($lastSeparator -ge 0) {
+        $typedParent = $leaf.Substring(0, $lastSeparator + 1)
+        $leaf = $leaf.Substring($lastSeparator + 1)
+    } elseif ($leaf -match '^[A-Za-z]:') {
+        $typedParent = $leaf.Substring(0, 2)
+        $leaf = $leaf.Substring(2)
     }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-    } catch {
-        $items = @()
-    }
+    $parentPath = if ($typedParent) { $typedParent } else { '.' }
+    $separator = if ($typedParent.EndsWith('/')) { '/' } else { '\' }
+    $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
 
     foreach ($item in $items) {
         # Directories are always kept so a file slot can be steered into a subfolder;
@@ -292,13 +271,19 @@ function Get-WprPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
-        if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
-            $candidate += '\'
+        # A bare relative name opening with a dash gets the current-directory prefix, as
+        # PowerShell's own file completion does, so it is never read as a parameter.
+        $candidate = if (-not $typedParent -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+        } else {
+            $typedParent + $item.Name
+        }
+        if ($item.PSIsContainer) {
+            $candidate += $separator
         }
 
-        $completionText = ConvertTo-WprQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
-        [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.FullName))
+        $completionText = ConvertTo-WprQuotedValue -Value $candidate -QuoteChar $quoteChar
+        [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $candidate))
     }
 
     if ($results.Count -eq 0) {
@@ -334,14 +319,16 @@ function Get-WprEnumCompletions {
         [string]$ToolTip
     )
 
-    $typedValue = Remove-WprOuterQuotes -Value $CurrentWord
+    $typedValue = ConvertFrom-WprTypedWord -Value $CurrentWord
+    $quoteChar = Get-WprTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($value in @($Values)) {
         if (-not [string]::IsNullOrWhiteSpace($typedValue) -and -not $value.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        [void]$results.Add((New-WprCompletionResult -CompletionText $value -ResultType 'ParameterValue' -ToolTip $ToolTip))
+        $completionText = ConvertTo-WprQuotedValue -Value $value -QuoteChar $quoteChar
+        [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $ToolTip -ListItemText $value))
     }
 
     if ($results.Count -eq 0) {
@@ -391,7 +378,7 @@ function Get-WprProfileNames {
     }
 
     $values = New-Object System.Collections.Generic.List[string]
-    if (Get-Command -Name wpr.exe -ErrorAction SilentlyContinue) {
+    if (Get-Command -Name wpr.exe -ErrorAction Ignore) {
         try {
             foreach ($line in @(& wpr.exe -profiles 2>$null)) {
                 $text = [string]$line
@@ -421,17 +408,20 @@ function Get-WprProfileNames {
 function Get-WprProfileSpecCompletions {
     param([string]$CurrentWord)
 
-    $typedValue = Remove-WprOuterQuotes -Value $CurrentWord
+    $typedValue = ConvertFrom-WprTypedWord -Value $CurrentWord
     if ($typedValue -match '^(?<path>.+!)(?<profile>[^!]*)$') {
         $prefix = $matches['path']
         $profilePrefix = $matches['profile']
+        $quoteChar = Get-WprTypedQuote -Value $CurrentWord
         $results = New-Object System.Collections.Generic.List[object]
         foreach ($profile in @(Get-WprProfileNames)) {
             if (-not [string]::IsNullOrWhiteSpace($profilePrefix) -and -not $profile.StartsWith($profilePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
 
-            [void]$results.Add((New-WprCompletionResult -CompletionText ($prefix + $profile) -ResultType 'ParameterValue' -ToolTip 'WPR profile specification.'))
+            # The file part of file.wprp!Profile may need quoting like any other path.
+            $completionText = ConvertTo-WprQuotedValue -Value ($prefix + $profile) -QuoteChar $quoteChar
+            [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip 'WPR profile specification.' -ListItemText ($prefix + $profile)))
         }
 
         if ($results.Count -gt 0) {
@@ -443,13 +433,15 @@ function Get-WprProfileSpecCompletions {
         return @(Get-WprPathCompletions -CurrentWord $CurrentWord -Kind 'File' -ToolTip 'Path to a .wprp profile definition file.' -Placeholder '<profile.wprp>')
     }
 
+    $quoteChar = Get-WprTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($profile in @(Get-WprProfileNames)) {
         if (-not [string]::IsNullOrWhiteSpace($typedValue) -and -not $profile.StartsWith($typedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        [void]$results.Add((New-WprCompletionResult -CompletionText $profile -ResultType 'ParameterValue' -ToolTip 'WPR profile specification.'))
+        $completionText = ConvertTo-WprQuotedValue -Value $profile -QuoteChar $quoteChar
+        [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip 'WPR profile specification.' -ListItemText $profile))
     }
 
     if ($results.Count -eq 0) {
@@ -463,7 +455,7 @@ function Get-WprProfileSpecCompletions {
 function Get-WprPlusListCompletions {
     param([string]$CurrentWord)
 
-    $typedValue = Remove-WprOuterQuotes -Value $CurrentWord
+    $typedValue = ConvertFrom-WprTypedWord -Value $CurrentWord
     $prefix = ''
     $segment = $typedValue
     $lastPlus = if ([string]::IsNullOrEmpty($typedValue)) { -1 } else { $typedValue.LastIndexOf('+') }
@@ -472,13 +464,15 @@ function Get-WprPlusListCompletions {
         $segment = $typedValue.Substring($lastPlus + 1)
     }
 
+    $quoteChar = Get-WprTypedQuote -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($profile in @(Get-WprProfileNames)) {
         if (-not [string]::IsNullOrWhiteSpace($segment) -and -not $profile.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        [void]$results.Add((New-WprCompletionResult -CompletionText ($prefix + $profile) -ResultType 'ParameterValue' -ToolTip 'WPR profile list item.'))
+        $completionText = ConvertTo-WprQuotedValue -Value ($prefix + $profile) -QuoteChar $quoteChar
+        [void]$results.Add((New-WprCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip 'WPR profile list item.' -ListItemText ($prefix + $profile)))
     }
 
     if ($results.Count -eq 0) {
@@ -612,8 +606,7 @@ function Complete-Wpr {
     )
 
     $commandLookup = Get-WprCommandLookup
-    # $cursorPosition is a whole-line offset; the command text is command-relative.
-    $tokenState = Get-WprTokenState -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset)
+    $tokenState = Get-WprTokenState -CommandAst $commandAst -CursorPosition $cursorPosition
     $argumentState = Get-WprArgumentsFromTokenState -TokenState $tokenState
     $hasTrailingSpace = [string]::IsNullOrEmpty($wordToComplete)
 
