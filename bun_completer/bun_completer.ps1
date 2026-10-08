@@ -889,7 +889,7 @@ function Get-BunManifestPackageNames {
 }
 
 function Get-BunKnownPackageNames {
-    Get-BunUniqueStrings -Items ((Get-BunManifestPackageNames) + (Get-BunInstalledPackageNames))
+    Get-BunUniqueStrings -Items (@(Get-BunManifestPackageNames) + @(Get-BunInstalledPackageNames))
 }
 
 function Get-BunNodeModulesBinNames {
