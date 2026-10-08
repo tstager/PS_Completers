@@ -58,7 +58,7 @@
         @{
             Path    = 'base32_completer/base32_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:53CAECDC6A12796979D80819F1EE01C590D62E8D0FF74ED57386CBCBD442128D'
+            Hash    = 'SHA256:54C8B158B7FFC01508AA16221D79D1207C94FA933C6F8453CEE9CBA4E4E7DAA4'
             Targets = @(
                 @{ CommandName = 'base32'; Native = $true }
                 @{ CommandName = 'base32.exe'; Native = $true }
