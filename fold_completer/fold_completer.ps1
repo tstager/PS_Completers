@@ -12,7 +12,7 @@ function Get-FoldCompletionOptions {
     $fallbackOptions = @('-b', '--bytes', '-s', '--spaces', '-w', '--width', '-h', '--help', '-V', '--version')
     $commandCandidates = @('fold.exe', 'fold')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -94,54 +94,94 @@ function Remove-FoldOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
+function Get-FoldTypedQuote {
+    # The quote the user opened the word with, as its ASCII form ('' when bare). PowerShell
+    # reads U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
+    param([string]$Value)
+
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
+    }
+
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-FoldTypedWord {
+    # The value of a typed word without its quotes and that quote style's escapes.
+    param([string]$Value)
+
+    $quote = Get-FoldTypedQuote -Value $Value
+    if (-not $quote) {
+        return $Value
+    }
+
+    # The parser undoes doubled quotes (typographic ones included) and backtick escapes; a word
+    # still open at the cursor is closed first.
+    foreach ($candidate in @($Value, ($Value + $quote))) {
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($candidate, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            continue
+        }
+
+        $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+        if ($null -ne $constant -and $constant.Extent.Text -eq $candidate) {
+            return $constant.Value
+        }
+    }
+
+    Remove-FoldOuterQuotes -Value $Value
+}
+
 function ConvertTo-FoldQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [bool]$AlwaysQuote = $false,
+        [string]$QuoteChar = "'"
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Whitespace, argument-mode metacharacters and the typographic quotes split or change a bare word.
+    if (-not $AlwaysQuote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+        return $Value
     }
 
-    $Value
+    if ($QuoteChar -eq '"') {
+        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    }
+
+    "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
 }
 
 function Get-FoldCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-FoldPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-FoldOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = Get-FoldTypedQuote -Value $InputPath
+    $cleanInput = ConvertFrom-FoldTypedWord -Value $InputPath
+    $alwaysQuote = [bool]$quoteChar
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -162,7 +202,7 @@ function Get-FoldPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -176,7 +216,7 @@ function Get-FoldPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-FoldQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-FoldQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-FoldCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -255,17 +295,14 @@ function Get-FoldOptionDescription {
 }
 
 function Complete-Fold {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-FoldCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-FoldCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-FoldOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {

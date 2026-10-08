@@ -46,8 +46,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is cut from the `CommandAst` element that contains the cursor, up to the cursor. An unterminated quote is one token, so `fold "my d` completes `my dir` rather than a file named `d*`.
+- A path is quoted when the user opened a quote or the path holds whitespace, any of `{ } ( ) ; , | & < > ' " $ @ #`, a backtick, or a typographic quote (U+2018-U+201E, which PowerShell reads as quotes). It keeps the quote the user typed, and single quotes are the default. Single quotes double every single-quote character, typographic ones included; double quotes escape `` ` ``, `"`, `$` and U+201C-U+201E with a backtick.
+- A typed quoted word is unescaped by the PowerShell parser before it is matched, so `'it''s` finds `it's.txt` and a typographic opening quote such as `‘Dad` is understood.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe, the tool lookup and the directory listing use `-ErrorAction Ignore` so no completion adds anything to `$Error`, even with fold absent from PATH.
 
 ## Option values
 
