@@ -291,7 +291,7 @@ function Get-PsmuxTargetSuggestions {
 }
 
 function Get-PsmuxSessionSuggestions {
-    $command = Get-Command -Name psmux.exe, psmux -ErrorAction SilentlyContinue | Select-Object -First 1
+    $command = Get-Command -Name psmux.exe, psmux -ErrorAction Ignore | Select-Object -First 1
     if (-not $command) {
         return @()
     }
@@ -431,54 +431,72 @@ function Remove-PsmuxOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-PsmuxQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-PsmuxTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-PsmuxQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-PsmuxPathCompletions {
     param([string]$InputPath)
 
-    $typedValue = Remove-PsmuxOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $typedValue = ConvertFrom-PsmuxTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($typedValue)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-        $parent = $typedValue
-        $leaf = ''
-    } else {
-        $candidateParent = Split-Path -Path $typedValue -Parent
-        if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-            $parent = '.'
-            $leaf = $typedValue
-        } else {
-            $parent = $candidateParent
-            $leaf = Split-Path -Path $typedValue -Leaf
-        }
-    }
+    # The typed directory part (.\, ./, sub/ ...) is kept verbatim so no typed text is lost.
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/'))
+    $prefix = $typedValue.Substring(0, $separatorIndex + 1)
+    $leaf = $typedValue.Substring($separatorIndex + 1)
+    $parent = if ($prefix) { $prefix } else { '.' }
 
     $results = New-Object System.Collections.Generic.List[object]
-    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)) {
-        $pathText = if ($parent -eq '.') { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
+    foreach ($item in @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)) {
+        $pathText = $prefix + $item.Name
+        # A bare word starting with a dash is parsed as a parameter; anchor it to the current directory.
+        if (-not $prefix -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
+        }
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
-        [void]$results.Add((New-PsmuxCompletionResult -CompletionText (ConvertTo-PsmuxQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote) -ToolTip $item.FullName))
+        [void]$results.Add((New-PsmuxCompletionResult -CompletionText (ConvertTo-PsmuxQuotedValue -Value $pathText -QuoteChar $quoteChar) -ListItemText $pathText -ToolTip $item.FullName))
     }
 
     if ($results.Count -eq 0) {
@@ -805,6 +823,16 @@ function Complete-Psmux {
         Get-PsmuxCurrentToken -Line $CommandAst.ToString() -CursorPosition $CursorPosition -Fallback $WordToComplete
     } else {
         $WordToComplete
+    }
+
+    # The engine hands a quoted word over re-quoted in ASCII quotes; read the typed text so the user's quote survives.
+    if ($currentWord -match '^[''"\u2018-\u201E]') {
+        foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+            $extent = $element.Extent
+            if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+                $currentWord = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+            }
+        }
     }
 
     $tokensBeforeCurrent = @(Get-PsmuxArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition)

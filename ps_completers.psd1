@@ -853,7 +853,7 @@
         @{
             Path    = 'psmux_completer/psmux_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:147E39529C643EE69EFEA0430C9E550EF80D8CD2095FFA1BCEBD46C533E0876E'
+            Hash    = 'SHA256:D8128F48D8B5D01A2D663BB6E3EE75C8CA67465EC48C9E39B479501355F09B51'
             Targets = @(
                 @{ CommandName = 'psmux'; Native = $true }
                 @{ CommandName = 'psmux.exe'; Native = $true }
