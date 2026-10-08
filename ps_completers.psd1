@@ -962,7 +962,7 @@
         @{
             Path    = 'realpath_completer/realpath_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:2A499C0AEFCC41F25BBE9070768D3DC9A43E665270933A4010EE2488AB1A7D2F'
+            Hash    = 'SHA256:96169F08AA6B8CE323D21EEF42735E081E554A0C3059BF2A16588D00DE3822A5'
             Targets = @(
                 @{ CommandName = 'realpath'; Native = $true }
                 @{ CommandName = 'realpath.exe'; Native = $true }

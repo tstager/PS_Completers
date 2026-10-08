@@ -85,14 +85,24 @@ function New-RealpathCompletionResult {
     )
 }
 
-function Remove-RealpathOuterQuotes {
+function ConvertFrom-RealpathTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    # Text after the closing quote belongs to the same word; there is no single value to complete.
+    if ($tokens.Count -gt 2) {
+        return $null
+    }
+
+    $tokens[0].Value
 }
 
 function ConvertTo-RealpathQuotedValue {
@@ -101,21 +111,26 @@ function ConvertTo-RealpathQuotedValue {
         [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
     # Keep the quote the user opened with; otherwise quote only when the bare word
     # would be split, expanded or re-parsed by PowerShell's argument mode.
-    if ($QuoteChar -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    if ($QuoteChar -eq "'" -or $Value -match '[\s{}();,|&<>''"`$]' -or $Value -match '^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
     }
 
-    $Value
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-RealpathCurrentToken {
@@ -138,10 +153,19 @@ function Get-RealpathCurrentToken {
 }
 
 function Get-RealpathPathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [switch]$Attached
+    )
 
-    $cleanInput = Remove-RealpathOuterQuotes -Value $InputPath
-    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
+    $cleanInput = ConvertFrom-RealpathTypedWord -Value $InputPath
+    if ($null -eq $cleanInput) {
+        return @()
+    }
+
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+    # The directory part exactly as typed (.\, ./, ..\ and separators included), so no typed text is lost.
+    $typedDir = if ($cleanInput -match '^(?<dir>.*[\\/])') { $Matches['dir'] } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -158,7 +182,7 @@ function Get-RealpathPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
@@ -166,12 +190,15 @@ function Get-RealpathPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = if ($typedDir -or $parent -eq '.') {
+            $typedDir + $item.Name
         } else {
             Join-Path -Path $parent -ChildPath $item.Name
+        }
+
+        # A whole-word value starting with a dash would be read by PowerShell as a parameter.
+        if (-not $Attached -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
@@ -221,7 +248,7 @@ function Get-RealpathOptionValueCompletions {
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
-            foreach ($result in Get-RealpathPathCompletions -InputPath $prefix) {
+            foreach ($result in Get-RealpathPathCompletions -InputPath $prefix -Attached:([bool]$attached)) {
                 New-RealpathCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType 'ProviderItem' -ToolTip $result.ToolTip
             }
         )
