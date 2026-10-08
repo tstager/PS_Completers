@@ -156,22 +156,48 @@ function Remove-FindStrOuterQuotes {
     $Value.TrimStart('"')
 }
 
+function ConvertFrom-FindStrTypedWord {
+    # The value of a typed word and the quote it opened with ('' when bare). A word opened
+    # with a quote (ASCII or typographic) is read by the PowerShell tokenizer, which drops
+    # the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return [pscustomobject]@{ Value = $Value; Quote = '' }
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    [pscustomobject]@{ Value = [string]$tokens[0].Value; Quote = $Value.Substring(0, 1) }
+}
+
 function ConvertTo-FindStrQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-FindStrTokenState {
@@ -188,21 +214,38 @@ function Get-FindStrTokenState {
     $prefix = $Line.Substring(0, $safeCursor)
     $tokens = New-Object System.Collections.Generic.List[string]
     $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and
+    # U+201C-U+201E as double quotes; a backtick outside single quotes escapes
+    # the next character.
+    $quoteClass = ''
+    $escapeNext = $false
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
+        if ($escapeNext) {
+            $escapeNext = $false
+            [void]$builder.Append($character)
+            continue
+        }
+
+        if ($character -eq '`' -and $quoteClass -ne 'single') {
+            $escapeNext = $true
+            [void]$builder.Append($character)
+            continue
+        }
+
+        $characterClass = if ($character -match '[''\u2018-\u201B]') { 'single' } elseif ($character -match '["\u201C-\u201E]') { 'double' } else { '' }
+        if ($characterClass) {
+            if (-not $quoteClass) {
+                $quoteClass = $characterClass
+            } elseif ($quoteClass -eq $characterClass) {
+                $quoteClass = ''
             }
 
             [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
+        if ([char]::IsWhiteSpace($character) -and -not $quoteClass) {
             if ($builder.Length -gt 0) {
                 $tokens.Add($builder.ToString())
                 [void]$builder.Clear()
@@ -468,13 +511,22 @@ function Get-FindStrPathCompletions {
         [string]$ToolTip = 'Path value.',
         [string]$Placeholder = '<path>',
         [bool]$AllowConsoleSentinel = $false,
-        [bool]$HasOpenQuotePrefix = $false
+        [string]$ListSeparator = ''
     )
 
     $results = New-Object System.Collections.Generic.List[object]
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
-    $cleanValue = Remove-FindStrOuterQuotes -Value $typedValue
-    $alwaysQuote = -not $HasOpenQuotePrefix -and $typedValue.StartsWith('"')
+    $typedWord = ConvertFrom-FindStrTypedWord -Value $typedValue
+    $cleanValue = $typedWord.Value
+
+    # In a list value the whole list is re-quoted as one argument, so the
+    # entries before the last separator ride along in front of each candidate.
+    $valuePrefix = ''
+    if ($ListSeparator -and $cleanValue.Contains($ListSeparator)) {
+        $separatorIndex = $cleanValue.LastIndexOf($ListSeparator)
+        $valuePrefix = $cleanValue.Substring(0, $separatorIndex + 1)
+        $cleanValue = $cleanValue.Substring($separatorIndex + 1)
+    }
 
     if ($AllowConsoleSentinel) {
         if ([string]::IsNullOrWhiteSpace($cleanValue) -or '/'.StartsWith($cleanValue, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -482,35 +534,22 @@ function Get-FindStrPathCompletions {
         }
     }
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($cleanValue)) {
-        if ($cleanValue.EndsWith('\') -or $cleanValue.EndsWith('/')) {
-            $parentPath = $cleanValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $cleanValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
-
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $cleanValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $cleanValue -Leaf
-                } catch {
-                    $leaf = $cleanValue
-                }
-            }
-        }
+    # Candidates are built on the directory text exactly as typed, so a typed
+    # .\ or ./ prefix and the typed separator style survive.
+    $directoryText = ''
+    $separatorIndex = $cleanValue.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $directoryText = $cleanValue.Substring(0, $separatorIndex + 1)
+    } elseif ($cleanValue -match '^[A-Za-z]:') {
+        $directoryText = $cleanValue.Substring(0, 2)
     }
 
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Stop)
-    } catch {
-        $items = @()
+    $parentPath = if ($directoryText) { $directoryText } else { '.' }
+    $leaf = $cleanValue.Substring($directoryText.Length)
+
+    $items = @()
+    if (Test-Path -LiteralPath $parentPath -PathType Container -ErrorAction Ignore) {
+        $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore)
     }
 
     foreach ($item in $items) {
@@ -523,23 +562,19 @@ function Get-FindStrPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') {
-            $item.Name
-        } else {
-            Join-Path -Path $parentPath -ChildPath $item.Name
-        }
-
-        if ($item.PSIsContainer -and -not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
+        $candidate = $directoryText + $item.Name
+        if ($item.PSIsContainer) {
             $candidate += '\'
         }
 
-        $completionText = if ($HasOpenQuotePrefix) {
-            $candidate
-        } else {
-            ConvertTo-FindStrQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        # A whole-word value starting with a dash would parse as a parameter, so
+        # it gets the current-directory prefix, as PowerShell's own file completion does.
+        if (-not ($Prefix -or $valuePrefix) -and $candidate -match '^[-\u2013-\u2015]') {
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
         }
 
-        [void]$results.Add((New-FindStrCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName))
+        $completionText = ConvertTo-FindStrQuotedValue -Value ($valuePrefix + $candidate) -QuoteChar $typedWord.Quote
+        [void]$results.Add((New-FindStrCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName -ListItemText $candidate))
     }
 
     if ($results.Count -eq 0) {
@@ -559,41 +594,10 @@ function Get-FindStrDirectoryListCompletions {
         [string]$CurrentValue
     )
 
-    $valuePrefix = ''
-    $currentSegment = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
-
     # A real multi-directory list must be quoted (an unquoted ';' ends the
-    # PowerShell statement), so a balanced closing quote is set aside here and
-    # reinstated on every completion instead of being swallowed or matched.
-    $closingQuote = ''
-    if ($currentSegment.Length -ge 2 -and $currentSegment.StartsWith('"') -and $currentSegment.EndsWith('"')) {
-        $closingQuote = '"'
-        $currentSegment = $currentSegment.Substring(0, $currentSegment.Length - 1)
-    }
-
-    $lastSemicolonIndex = if ([string]::IsNullOrEmpty($currentSegment)) { -1 } else { $currentSegment.LastIndexOf(';') }
-
-    if ($lastSemicolonIndex -ge 0) {
-        $valuePrefix = $currentSegment.Substring(0, $lastSemicolonIndex + 1)
-        $currentSegment = $currentSegment.Substring($lastSemicolonIndex + 1)
-    }
-
-    $combinedPrefix = $Prefix + $valuePrefix
-    $hasOpenQuotePrefix = ([regex]::Matches($combinedPrefix, '"').Count % 2) -eq 1
-    $placeholder = if ([string]::IsNullOrEmpty($valuePrefix) -and [string]::IsNullOrEmpty($currentSegment)) {
-        '<dir[;dir...]>'
-    } else {
-        '<dir>'
-    }
-
-    $results = @(Get-FindStrPathCompletions -CurrentValue $currentSegment -Prefix $combinedPrefix -Kind 'Directory' -ToolTip 'Directory list entry.' -Placeholder $placeholder -HasOpenQuotePrefix:$hasOpenQuotePrefix)
-    if (-not $closingQuote) {
-        return $results
-    }
-
-    @($results | ForEach-Object {
-            New-FindStrCompletionResult -CompletionText ($_.CompletionText + $closingQuote) -ResultType $_.ResultType -ToolTip $_.ToolTip -ListItemText $_.ListItemText
-        })
+    # PowerShell statement); each candidate re-quotes the whole list, so a
+    # typed closing quote is neither swallowed nor left dangling.
+    @(Get-FindStrPathCompletions -CurrentValue $CurrentValue -Prefix $Prefix -Kind 'Directory' -ToolTip 'Directory list entry.' -Placeholder '<dir[;dir...]>' -ListSeparator ';')
 }
 
 function Get-FindStrTerminalCompletions {

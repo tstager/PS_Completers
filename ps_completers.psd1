@@ -381,7 +381,7 @@
         @{
             Path    = 'findstr_completer/findstr_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5C6C12CBDF68CB8C65AFD0D57686CD5EED1FE5A8FEA9EE03881AF8FDAE0CE25C'
+            Hash    = 'SHA256:FFBEDB65C3698329F660418229A2CE6ED8AFFC06331E8C9961564848A81BAA43'
             Targets = @(
                 @{ CommandName = 'findstr'; Native = $true }
                 @{ CommandName = 'findstr.exe'; Native = $true }
