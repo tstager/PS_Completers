@@ -313,31 +313,73 @@ function Get-ScoopRootPath {
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
 }
 
-function Remove-ScoopOuterQuotes {
+function ConvertFrom-ScoopTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic, leading or
+    # mid-word) is read by the PowerShell tokenizer, which drops the quotes and undoes escapes.
     param([string]$Value)
 
     if ($null -eq $Value) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-ScoopQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + ($Value.Replace('`', '``').Replace('"', '`"')) + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput('scoop ' + $Value, [ref]$tokens, [ref]$parseErrors)
+
+    # Strings glued together ('./dir sp'\) make up one completion word: join their values.
+    $text = ''
+    for ($i = 1; $i -lt $tokens.Count -and $tokens[$i].Kind -ne 'EndOfInput'; $i++) {
+        if ($i -gt 1 -and $tokens[$i].Extent.StartOffset -ne $tokens[$i - 1].Extent.EndOffset) {
+            return $Value
+        }
+
+        if ($tokens[$i] -is [System.Management.Automation.Language.StringToken]) {
+            $text += $tokens[$i].Value
+        } elseif ($tokens[$i].Kind -eq 'Generic') {
+            # A bare '/' after a closed quote is a plain Generic token, not a StringToken.
+            $text += $tokens[$i].Text
+        } else {
+            return $Value
+        }
+    }
+
+    if ($i -gt 1) {
+        return $text
     }
 
     $Value
+}
+
+function ConvertTo-ScoopQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Test-ScoopPathLikeInput {
@@ -347,7 +389,7 @@ function Test-ScoopPathLikeInput {
         return $false
     }
 
-    $cleanValue = Remove-ScoopOuterQuotes -Value $Value
+    $cleanValue = ConvertFrom-ScoopTypedWord -Value $Value
     $cleanValue -match '^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:|\\\\)'
 }
 
@@ -674,13 +716,30 @@ function Find-ScoopOptionSpec {
 
 function Get-ScoopCommandState {
     param(
-        [string]$WordToComplete,
         [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition
     )
 
-    $currentToken = if ($CursorPosition -gt $CommandAst.Extent.EndOffset) { '' } else { $WordToComplete }
-    $tokens = Get-ScoopArgumentTokens -CommandAst $CommandAst -CursorPosition $CursorPosition
+    # The word as typed up to the cursor, quotes included; the parser keeps an unterminated
+    # quoted word as one element running to the cursor. Elements glued together ('./dir sp'\)
+    # are one word, as in the engine's replacement span.
+    $currentToken = ''
+    $wordStart = $CursorPosition
+    $runStart = -1
+    $previousEnd = -1
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -ne $previousEnd) {
+            $runStart = $extent.StartOffset
+        }
+        $previousEnd = $extent.EndOffset
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            $wordStart = $runStart
+            $currentToken = $CommandAst.Extent.Text.Substring($runStart - $CommandAst.Extent.StartOffset, $CursorPosition - $runStart)
+        }
+    }
+
+    $tokens = Get-ScoopArgumentTokens -CommandAst $CommandAst -CursorPosition $wordStart
 
     $pathTokens = New-Object System.Collections.Generic.List[string]
     $positionals = New-Object System.Collections.Generic.List[string]
@@ -746,11 +805,20 @@ function Get-ScoopPathCompletions {
     param(
         [string]$InputPath,
         [string]$Prefix = '',
-        [switch]$DirectoriesOnly
+        [switch]$DirectoriesOnly,
+        [switch]$VersionSuffix
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    # The plain path is quoted once, in the quote the user typed (anywhere in the word).
+    $cleanInput = ConvertFrom-ScoopTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '[''"\u2018-\u201E]') { $matches[0] } else { '' }
+
+    # '<manifest-path>@<version>': complete the path and keep the version suffix inside the quotes.
+    $suffix = ''
+    if ($VersionSuffix -and $cleanInput -match '^(?<base>.+)(?<suffix>@[^@]*)$') {
+        $cleanInput = $matches['base']
+        $suffix = $matches['suffix']
+    }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -766,19 +834,15 @@ function Get-ScoopPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') })
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
     foreach ($item in $items) {
+        # A relative path keeps the directory text exactly as typed ('./' stays; nothing typed is dropped).
         $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
+            ($cleanInput -replace '[^\\/]*$', '') + $item.Name
         } else {
             $item.FullName
         }
@@ -787,10 +851,10 @@ function Get-ScoopPathCompletions {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-ScoopQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-ScoopQuotedValue -Value ($completionText + $suffix) -QuoteChar $quoteChar
         $completionText = $Prefix + $completionText
 
-        New-ScoopCompletionResult -CompletionText $completionText -ToolTip $item.FullName -ListItemText $item.Name
+        New-ScoopCompletionResult -CompletionText $completionText -ToolTip $item.FullName -ListItemText ($item.Name + $suffix)
     }
 }
 
@@ -838,7 +902,7 @@ function Get-ScoopStringValueResults {
         [string]$Prefix = ''
     )
 
-    $typedValue = Remove-ScoopOuterQuotes -Value $CurrentValue
+    $typedValue = ConvertFrom-ScoopTypedWord -Value $CurrentValue
     $results = New-Object System.Collections.Generic.List[object]
 
     if ([string]::IsNullOrWhiteSpace($typedValue)) {
@@ -916,7 +980,7 @@ function Get-ScoopAppAtVersionResult {
         [string]$Prefix = ''
     )
 
-    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    $value = ConvertFrom-ScoopTypedWord -Value $CurrentValue
     if ($value -notmatch '^(?<base>[^@]+)@(?<suffix>[^@]*)$') {
         return @()
     }
@@ -942,7 +1006,7 @@ function Get-ScoopBucketScopedManifestNameList {
     # '<bucket>/<app>' scopes the manifest scan to that bucket and keeps the prefix on every result.
     param([string]$CurrentValue)
 
-    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    $value = ConvertFrom-ScoopTypedWord -Value $CurrentValue
     if ($value -notmatch '^(?<bucket>[A-Za-z0-9._-]+)/(?<app>[^/@]*)$') {
         return @()
     }
@@ -965,7 +1029,7 @@ function Get-ScoopAppNameResult {
         [string]$Prefix = ''
     )
 
-    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    $value = ConvertFrom-ScoopTypedWord -Value $CurrentValue
     if ($value -match '^[^@]+@[^@]*$') {
         return Get-ScoopAppAtVersionResult -CurrentValue $CurrentValue -ToolTip $ToolTip -Prefix $Prefix
     }
@@ -980,7 +1044,7 @@ function Get-ScoopAppNameResult {
 function Get-ScoopInstallTargetResults {
     param([string]$CurrentValue)
 
-    $value = Remove-ScoopOuterQuotes -Value $CurrentValue
+    $value = ConvertFrom-ScoopTypedWord -Value $CurrentValue
     # Empty word: the placeholder plus the first 200 local manifests (install skips installed apps); all of them once typed.
     if ([string]::IsNullOrWhiteSpace($value)) {
         return Get-ScoopStringValueResults -Values @(Get-ScoopManifestAppNames | Select-Object -First 200) -CurrentValue $CurrentValue -Placeholder '<app-or-manifest>' -ToolTip 'Scoop app name, local manifest path, or manifest URL.' -SuggestWhenEmpty
@@ -990,14 +1054,8 @@ function Get-ScoopInstallTargetResults {
         return New-ScoopLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<manifest-url>' -ToolTip 'Manifest URL.'
     }
 
-    if ($value -match '^(?<base>.+)@(?<suffix>[^@]*)$' -and (Test-ScoopPathLikeInput -Value $matches['base'])) {
-        $base = $matches['base']
-        $suffix = $matches['suffix']
-        $results = foreach ($result in @(Get-ScoopPathCompletions -InputPath $base)) {
-            $updatedValue = ConvertTo-ScoopQuotedValue -Value ((Remove-ScoopOuterQuotes -Value $result.CompletionText) + '@' + $suffix) -AlwaysQuote ($result.CompletionText.StartsWith('"') -and $result.CompletionText.EndsWith('"'))
-            New-ScoopCompletionResult -CompletionText $updatedValue -ToolTip $result.ToolTip -ListItemText ($result.ListItemText + '@' + $suffix)
-        }
-        return @(Get-ScoopDistinctResults -Results $results)
+    if ($value -match '^(?<base>.+)@[^@]*$' -and (Test-ScoopPathLikeInput -Value $matches['base'])) {
+        return Get-ScoopPathCompletions -InputPath $CurrentValue -VersionSuffix
     }
 
     if (Test-ScoopPathLikeInput -Value $value) {
@@ -1020,7 +1078,12 @@ function Get-ScoopConfigValueResults {
 
     if ($ConfigKey -in @('root_path', 'global_path', 'cache_path')) {
         if (Test-ScoopPathLikeInput -Value $CurrentValue) {
-            return Get-ScoopPathCompletions -InputPath $CurrentValue -DirectoriesOnly
+            # No matching directory: keep the typed word, since an empty result hands the slot
+            # to the engine's file completion, which offers files and mis-quotes backticks.
+            $directories = @(Get-ScoopPathCompletions -InputPath $CurrentValue -DirectoriesOnly)
+            if ($directories.Count -gt 0) {
+                return $directories
+            }
         }
 
         return New-ScoopLiteralValueResults -CurrentValue $CurrentValue -Placeholder '<path>' -ToolTip "Path value for '$ConfigKey'."
@@ -1055,7 +1118,7 @@ function Get-ScoopValueResults {
         }
         'ManifestApp' {
             # Empty word: the (small) installed list; once typed: installed plus every local manifest.
-            if ([string]::IsNullOrWhiteSpace((Remove-ScoopOuterQuotes -Value $CurrentValue))) {
+            if ([string]::IsNullOrWhiteSpace((ConvertFrom-ScoopTypedWord -Value $CurrentValue))) {
                 return Get-ScoopStringValueResults -Values (Get-ScoopInstalledApps) -CurrentValue $CurrentValue -Placeholder '<app>' -ToolTip 'Scoop app name.' -SuggestWhenEmpty -Prefix $Prefix
             }
 
@@ -1191,7 +1254,7 @@ function Complete-ScoopNative {
         [int]$CursorPosition
     )
 
-    $state = Get-ScoopCommandState -WordToComplete $WordToComplete -CommandAst $CommandAst -CursorPosition $CursorPosition
+    $state = Get-ScoopCommandState -CommandAst $CommandAst -CursorPosition $CursorPosition
 
     # scoop's getopt rejects '--arch=64bit'; only the space-separated form is completed.
     if ($state.PendingOption) {
