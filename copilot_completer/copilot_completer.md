@@ -141,7 +141,7 @@ Notable value handling:
   - supports inline `=` completion and file / directory path suggestions
 - `--additional-mcp-config` and `workflow run --args`
   - supports inline values
-  - when the value starts with `@`, path completion is applied after the `@` prefix
+  - when the value starts with `@`, path completion is applied after the `@` prefix, and the `@` stays inside the quotes (`'@my file.json'`) so PowerShell does not read it as a splat; PowerShell completes a bare `@name` as a splatted variable itself, so type `'@name` to complete a file after a partial name
 - freeform slots such as `--agent`, `--prompt`, tool patterns, URL patterns, counts, and session IDs
   - use placeholders / echo completions rather than unrelated filesystem fallback
 
@@ -181,6 +181,7 @@ Notable value handling:
 - Tokens are selected by their extent relative to the cursor, so completing a value mid-line (or with the command after another statement) uses only the text left of the cursor.
 - Optional-value switches such as `--resume`, `--share`, `--mouse`, and `--bash-env` are handled in both separated and inline `--flag=value` forms; as in copilot, a separated optional value takes the next word even when it is a command name (`copilot --resume mcp` resumes the session named `mcp`).
 - The list options `--allow-tool`, `--deny-tool`, `--allow-url`, `--deny-url`, `--available-tools`, `--excluded-tools` and `--secret-env-vars` (`[<x>...]`) take every following word up to the next option, so after `copilot --allow-tool read write ` another value or an option is offered, never a command. The attached form (`--allow-tool=read`) takes only its one value.
+- File and directory candidates are quoted when they hold whitespace or PowerShell metacharacters (`$`, `&`, `;`, `(`, `{`, `,`, a backtick, quotes), in the quote you typed (ASCII or typographic) or single quotes by default; attached forms keep the option outside the quotes (`--attachment='my file.png'`). A typed directory part (`.\`, `../`) is kept as typed, a name starting with a dash gets a `.\` prefix (`.\-notes.txt`) so it is not read as an option, and a value picked from a list after a typed quote is quoted the same way (`--model 'gpt-5.5'`).
 - After `--` every word is an operand (`copilot config powershellFlags -- -NoProfile`, `copilot mcp add <name> -- <command>`), so no options or commands are offered there.
 - The completer does not infer live session IDs, marketplace plugin catalogs, or interactive in-session slash commands.
 - Runtime-backed suggestions depend on the installed `copilot` executable being available on `PATH`.

@@ -203,7 +203,7 @@
         @{
             Path    = 'copilot_completer/copilot_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:77AFA74EB3C49A4CF6933CD832CE00DA63AE452EC8EAB1AD76062F54BD17AD0E'
+            Hash    = 'SHA256:AA2417F905DD96CAC33F3839AFB8EA115D04EAAC0EBBBD0A6157852D2B02CEB4'
             Targets = @(
                 @{ CommandName = 'copilot'; Native = $true }
                 @{ CommandName = 'copilot.exe'; Native = $true }

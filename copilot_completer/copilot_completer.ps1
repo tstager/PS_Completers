@@ -103,21 +103,47 @@ function New-CopilotOptionSpec {
     }
 }
 
-function ConvertTo-CopilotQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-CopilotTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + ($Value.Replace('`', '``').Replace('"', '`"')) + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-CopilotQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-CopilotTokenText {
@@ -785,11 +811,19 @@ function Get-CopilotPathCompletions {
     param(
         [string]$InputPath,
         [string]$Prefix = '',
-        [switch]$DirectoriesOnly
+        [switch]$DirectoriesOnly,
+        # The value is an @file reference: the '@' stays inside the quotes, or it would splat.
+        [switch]$AtFile
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    # $InputPath is the word as typed; a typed opening quote is kept for the candidates.
+    $cleanInput = ConvertFrom-CopilotTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+    $valuePrefix = ''
+    if ($AtFile) {
+        $cleanInput = $cleanInput.Substring(1)
+        $valuePrefix = '@'
+    }
 
     # Normalise before splitting: a trailing separator, '.', '..' and '~' all
     # name the parent directory; Split-Path would resolve '.\' to the cwd name.
@@ -818,23 +852,31 @@ function Get-CopilotPathCompletions {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
+    # The directory part exactly as typed, so a typed '.\' or '../' and its separator are kept.
+    $typedDirectory = if ($cleanInput -eq '.' -or $cleanInput -eq '..') {
+        $cleanInput + [System.IO.Path]::DirectorySeparatorChar
+    } else {
+        $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/') + 1)
+    }
+
     foreach ($item in $items) {
-        $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
+        $completionText = if ($cleanInput -and [System.IO.Path]::IsPathRooted($cleanInput)) {
             $item.FullName
+        } else {
+            $typedDirectory + $item.Name
+        }
+
+        # A whole word starting with a dash would reach copilot as an option; like PowerShell's
+        # own file completion, a bare name gets the current-directory prefix.
+        if (-not $Prefix -and -not $AtFile -and $completionText -match '^[-\u2013-\u2015]') {
+            $completionText = '.' + [System.IO.Path]::DirectorySeparatorChar + $completionText
         }
 
         if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-CopilotQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
-        $completionText = $Prefix + $completionText
+        $completionText = $Prefix + (ConvertTo-CopilotQuotedValue -Value ($valuePrefix + $completionText) -QuoteChar $quoteChar)
 
         New-CopilotCompletionResult -CompletionText $completionText -ToolTip $item.FullName -ListItemText $item.Name
     }
@@ -869,7 +911,38 @@ function Get-CopilotValueResults {
         [hashtable]$State
     )
 
-    $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    # A candidate replaces the whole typed word, so after a typed opening quote a value picked
+    # from a list is quoted the same way; paths and echoed values arrive quoted already.
+    $results = @(Get-CopilotValueCandidates @PSBoundParameters)
+    if ($CurrentValue -notmatch '^[''"\u2018-\u201E]') {
+        return $results
+    }
+
+    $quoteChar = $CurrentValue.Substring(0, 1)
+    foreach ($result in $results) {
+        $value = $result.CompletionText.Substring($Prefix.Length)
+        if ($value -match '^[''"\u2018-\u201E]') {
+            $result
+            continue
+        }
+
+        New-CopilotCompletionResult -CompletionText ($Prefix + (ConvertTo-CopilotQuotedValue -Value $value -QuoteChar $quoteChar)) -ResultType $result.ResultType -ToolTip $result.ToolTip -ListItemText $result.ListItemText
+    }
+}
+
+function Get-CopilotValueCandidates {
+    param(
+        [string]$ValueKind,
+        [string]$CurrentValue,
+        [string]$Prefix = '',
+        [hashtable]$State
+    )
+
+    # $CurrentValue is the word as typed: path kinds take it whole so a typed quote is kept,
+    # matching uses its value, and an echoed value is re-quoted in the quote the user typed.
+    $typedText = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    $typedValue = ConvertFrom-CopilotTypedWord -Value $typedText
+    $typedWord = if ($typedText -match '^[''"\u2018-\u201E]') { ConvertTo-CopilotQuotedValue -Value $typedValue -QuoteChar $typedText.Substring(0, 1) } else { $typedText }
 
     switch ($ValueKind) {
         'ConfigKey' {
@@ -886,7 +959,7 @@ function Get-CopilotValueResults {
             }
 
             if (@($keys).Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<key>' -ToolTip 'Setting key in dot notation (see `copilot help config`).'
+                return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<key>' -ToolTip 'Setting key in dot notation (see `copilot help config`).'
             }
 
             return @($keys) |
@@ -908,14 +981,14 @@ function Get-CopilotValueResults {
             }
 
             if ($entry -and $entry.Path -eq 'directory') {
-                return Get-CopilotValueResults -ValueKind 'DirectoryPath' -CurrentValue $typedValue -Prefix $Prefix
+                return Get-CopilotValueResults -ValueKind 'DirectoryPath' -CurrentValue $typedText -Prefix $Prefix
             }
 
             if ($entry -and $entry.Path -eq 'file') {
-                return Get-CopilotValueResults -ValueKind 'FilePath' -CurrentValue $typedValue -Prefix $Prefix
+                return Get-CopilotValueResults -ValueKind 'FilePath' -CurrentValue $typedText -Prefix $Prefix
             }
 
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<value>' -ToolTip 'Setting value (put -- before a value that starts with -).'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<value>' -ToolTip 'Setting value (put -- before a value that starts with -).'
         }
         'AutoTier' {
             return @('efficiency', 'balance', 'intelligence') |
@@ -938,16 +1011,16 @@ function Get-CopilotValueResults {
                 ForEach-Object { New-CopilotCompletionResult -CompletionText ($Prefix + $_) -ToolTip 'Memory import conflict behavior.' }
         }
         'McpGithubAuth' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<server>=<origin>' -ToolTip 'An --additional-mcp-config server and the approved HTTPS origin.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<server>=<origin>' -ToolTip 'An --additional-mcp-config server and the approved HTTPS origin.'
         }
         'WorkflowName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<workflow>' -ToolTip 'Registered dynamic workflow name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<workflow>' -ToolTip 'Registered dynamic workflow name.'
         }
         'SkillName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<skill-name>' -ToolTip 'Skill name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<skill-name>' -ToolTip 'Skill name.'
         }
         'HostName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<host>' -ToolTip 'Credential host the certificate may be constrained to.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<host>' -ToolTip 'Credential host the certificate may be constrained to.'
         }
         'Model' {
             # 'auto' lets Copilot pick the model and is documented on --model but never listed
@@ -986,17 +1059,17 @@ function Get-CopilotValueResults {
         'DirectoryPath' {
             # A directory with no subdirectories must still yield something, or PowerShell's
             # filename fallback offers files in a directory-only slot.
-            $paths = @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix -DirectoriesOnly)
+            $paths = @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix -DirectoriesOnly)
             if ($paths.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<directory>' -ToolTip 'Directory path.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<directory>' -ToolTip 'Directory path.'
             }
 
             return $paths
         }
         'FilePath' {
-            $paths = @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+            $paths = @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix)
             if ($paths.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<file>' -ToolTip 'File path.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<file>' -ToolTip 'File path.'
             }
 
             return $paths
@@ -1028,23 +1101,23 @@ function Get-CopilotValueResults {
         }
         'SkillSource' {
             if (Test-CopilotLooksLikePath -Token $typedValue) {
-                return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+                return @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix)
             }
 
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<skill-name-or-path>') -ToolTip 'Skill name, SKILL.md path, URL, or skill directory.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('<skill-name-or-path>') -ToolTip 'Skill name, SKILL.md path, URL, or skill directory.'
         }
         'SessionName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"<session name>"') -ToolTip 'Display name for the new session.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('"<session name>"') -ToolTip 'Display name for the new session.'
         }
         'EnvAssignment' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('KEY=VALUE') -ToolTip 'Environment variable assignment.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('KEY=VALUE') -ToolTip 'Environment variable assignment.'
         }
         'HttpHeader' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"Name: value"') -ToolTip 'HTTP header for remote servers.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('"Name: value"') -ToolTip 'HTTP header for remote servers.'
         }
         'SharePath' {
             $results = New-Object System.Collections.Generic.List[object]
-            foreach ($result in @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)) {
+            foreach ($result in @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix)) {
                 [void]$results.Add($result)
             }
 
@@ -1056,7 +1129,7 @@ function Get-CopilotValueResults {
         }
         'JsonOrFile' {
             if ($typedValue.StartsWith('@')) {
-                return @(Get-CopilotPathCompletions -InputPath $typedValue.Substring(1) -Prefix ($Prefix + '@'))
+                return @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix -AtFile)
             }
 
             $results = New-Object System.Collections.Generic.List[object]
@@ -1064,7 +1137,7 @@ function Get-CopilotValueResults {
                 [void]$results.Add((New-CopilotCompletionResult -CompletionText ($Prefix + '@') -ToolTip 'Prefix a file path with @ to load JSON from disk.'))
             }
 
-            foreach ($result in @(New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<json-or-@file>' -ToolTip 'Inline JSON string or @file path.')) {
+            foreach ($result in @(New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<json-or-@file>' -ToolTip 'Inline JSON string or @file path.')) {
                 [void]$results.Add($result)
             }
 
@@ -1078,7 +1151,7 @@ function Get-CopilotValueResults {
         'InstalledPlugin' {
             $plugins = @(Get-CopilotInstalledPluginNames)
             if ($plugins.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<plugin-name>' -ToolTip 'Installed plugin name.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<plugin-name>' -ToolTip 'Installed plugin name.'
             }
 
             return $plugins |
@@ -1088,7 +1161,7 @@ function Get-CopilotValueResults {
         'MarketplaceName' {
             $marketplaces = @(Get-CopilotMarketplaceNames)
             if ($marketplaces.Count -eq 0) {
-                return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder '<marketplace-name>' -ToolTip 'Registered marketplace name.'
+                return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder '<marketplace-name>' -ToolTip 'Registered marketplace name.'
             }
 
             return $marketplaces |
@@ -1097,7 +1170,7 @@ function Get-CopilotValueResults {
         }
         'PluginSource' {
             if (Test-CopilotLooksLikePath -Token $typedValue) {
-                return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+                return @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix)
             }
 
             return @(
@@ -1109,7 +1182,7 @@ function Get-CopilotValueResults {
         }
         'MarketplaceSource' {
             if (Test-CopilotLooksLikePath -Token $typedValue) {
-                return @(Get-CopilotPathCompletions -InputPath $typedValue -Prefix $Prefix)
+                return @(Get-CopilotPathCompletions -InputPath $typedText -Prefix $Prefix)
             }
 
             return @(
@@ -1128,37 +1201,37 @@ function Get-CopilotValueResults {
                 return $results
             }
 
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('https://example.ghe.com') -ToolTip 'GitHub host URL.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('https://example.ghe.com') -ToolTip 'GitHub host URL.'
         }
         'ResumeSession' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<session-id>') -ToolTip 'Session ID or task ID.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('<session-id>') -ToolTip 'Session ID or task ID.'
         }
         'AgentName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<agent>') -ToolTip 'Custom agent name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('<agent>') -ToolTip 'Custom agent name.'
         }
         'PromptText' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('"<prompt>"') -ToolTip 'Prompt text.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('"<prompt>"') -ToolTip 'Prompt text.'
         }
         'ToolPattern' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('shell(git:*)') -ToolTip 'Tool name or permission pattern.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('shell(git:*)') -ToolTip 'Tool name or permission pattern.'
         }
         'UrlPattern' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('github.com') -ToolTip 'URL, domain, or wildcard domain.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('github.com') -ToolTip 'URL, domain, or wildcard domain.'
         }
         'ServerName' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<server-name>') -ToolTip 'MCP server name.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('<server-name>') -ToolTip 'MCP server name.'
         }
         'EnvVarList' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('MY_KEY,OTHER_KEY') -ToolTip 'Comma-separated environment variable names.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('MY_KEY,OTHER_KEY') -ToolTip 'Comma-separated environment variable names.'
         }
         'GithubMcpTool' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('*') -ToolTip 'GitHub MCP tool name or "*".'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('*') -ToolTip 'GitHub MCP tool name or "*".'
         }
         'GithubMcpToolset' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('all') -ToolTip 'GitHub MCP toolset name or "all".'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('all') -ToolTip 'GitHub MCP toolset name or "all".'
         }
         'Count' {
-            return New-CopilotLiteralValueResults -CurrentValue $typedValue -Prefix $Prefix -Placeholder ('<count>') -ToolTip 'Numeric count.'
+            return New-CopilotLiteralValueResults -CurrentValue $typedWord -Prefix $Prefix -Placeholder ('<count>') -ToolTip 'Numeric count.'
         }
         default {
             return @()
@@ -1281,12 +1354,13 @@ function Get-CopilotSuggestions {
         Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
         Select-Object -First 1
 
+    # PowerShell hands a quoted word over re-quoted ("'it" arrives as "'it'") and drops the
+    # quote inside an attached "--opt='it", while it replaces the whole word as typed; so
+    # the word is read from the element text up to the cursor.
     $currentWord = if ($null -eq $currentElement) {
         ''
-    } elseif (-not [string]::IsNullOrEmpty($WordToComplete)) {
-        $WordToComplete
     } else {
-        Get-CopilotTokenText -Element $currentElement
+        $currentElement.Extent.Text.Substring(0, $CursorPosition - $currentElement.Extent.StartOffset)
     }
 
     $state = Resolve-CopilotParseState -Tokens $tokensBeforeCurrent
