@@ -281,6 +281,63 @@ function Get-DscPendingValueOption {
     $null
 }
 
+function ConvertTo-DscQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed, otherwise
+    # in the quote the user typed (single by default). PowerShell reads ' and U+2018-U+201B as
+    # single quotes and " and U+201C-U+201E as double quotes.
+    param([string]$Value, [string]$QuoteChar = '')
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-DscPathCompletion {
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (tick``x.txt). dsc takes literal paths, so each result is unwrapped by the parser and
+    # unescaped, then quoted once in the style the user typed.
+    param([string]$ValueWord, [string]$ValuePrefix)
+
+    $quoteChar = if ($ValueWord -match '^[''"\u2018-\u201E]') { $ValueWord.Substring(0, 1) } else { '' }
+    if ($quoteChar) {
+        # The tokenizer reads the typed quote as PowerShell would ('it''s is it's).
+        $tokens = $null
+        $null = [Parser]::ParseInput($ValueWord, [ref]$tokens, [ref]$null)
+        $ValueWord = $tokens[0].Value
+    }
+
+    # CompleteFilename writes '\' separators; keep a typed directory such as './' exactly as typed.
+    $typedDirectory = if ($ValueWord -match '^(?<dir>.*[\\/])') { $Matches.dir } else { '' }
+    foreach ($result in [CompletionCompleters]::CompleteFilename($ValueWord)) {
+        $path = $result.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
+        }
+
+        $path = [WildcardPattern]::Unescape($path)
+        if ($typedDirectory -and $path.Length -ge $typedDirectory.Length -and
+            ($path.Substring(0, $typedDirectory.Length) -replace '/', '\') -eq ($typedDirectory -replace '/', '\')) {
+            $path = $typedDirectory + $path.Substring($typedDirectory.Length)
+        }
+
+        [CompletionResult]::new($ValuePrefix + (ConvertTo-DscQuotedValue -Value $path -QuoteChar $quoteChar), $result.ListItemText, $result.ResultType, $result.ToolTip)
+    }
+}
+
 Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
@@ -429,9 +486,7 @@ Register-ArgumentCompleter -Native -CommandName 'dsc' -ScriptBlock {
                     # A separate word returns nothing so PowerShell completes the path itself; the
                     # attached '--file=' form completes it here and keeps the prefix.
                     if ($valuePrefix) {
-                        return @(foreach ($result in [CompletionCompleters]::CompleteFilename($valueWord)) {
-                            [CompletionResult]::new($valuePrefix + $result.CompletionText, $result.ListItemText, $result.ResultType, $result.ToolTip)
-                        })
+                        return @(Get-DscPathCompletion -ValueWord $valueWord -ValuePrefix $valuePrefix)
                     }
                     return
                 }
