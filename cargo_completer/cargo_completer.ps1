@@ -145,79 +145,118 @@ function Remove-CargoOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
+function ConvertFrom-CargoTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+
+    # Text after the closing quote ('dir sp'\in) is not part of the token; return nothing
+    # rather than a value whose replacement would delete that typed tail.
+    if ($tokens[0].Extent.EndOffset -lt $Value.Length) {
+        return $null
+    }
+
+    $tokens[0].Value
+}
+
 function ConvertFrom-CargoQuotedPath {
     param([string]$Value)
 
-    # CompleteFilename already quotes paths it considers unsafe; undo that so the
-    # path is quoted exactly once, with the quote character the user typed.
-    if ($Value.Length -ge 2 -and $Value.StartsWith("'") -and $Value.EndsWith("'")) {
-        return $Value.Substring(1, $Value.Length - 2).Replace("''", "'")
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (tick``x.txt). cargo takes literal paths, so the result is unwrapped by the parser,
+    # which undoes every doubled quote, typographic ones included, and then unescaped.
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$null, [ref]$null)
+        $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+        if ($constant) {
+            $Value = $constant.Value
+        }
     }
 
-    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
-        return [regex]::Replace($Value.Substring(1, $Value.Length - 2), '`(.)', '$1')
-    }
-
-    $Value
+    [System.Management.Automation.WildcardPattern]::Unescape($Value)
 }
 
 function ConvertTo-CargoQuotedPath {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteChar
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (-not $QuoteChar -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
-        return $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    if ($QuoteChar -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-CargoPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-CargoOuterQuotes -Value $InputPath
-    $quoteChar = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))) { $InputPath.Substring(0, 1) } else { '' }
+    $cleanInput = ConvertFrom-CargoTypedWord -Value $InputPath
+    if ($null -eq $cleanInput) {
+        return
+    }
+
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+
+    # CompleteFilename rewrites a typed .\ ./ ..\ ../ directory as .\ relative to the current
+    # location; keep the directory exactly as typed and take only the leaf from the candidate.
+    $typedDirectory = if ($cleanInput -match '^\.\.?[\\/]' -and -not $cleanInput.Contains('`')) {
+        $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]@('\', '/')) + 1)
+    } else {
+        ''
+    }
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            $completionText = ConvertTo-CargoQuotedPath -Value (ConvertFrom-CargoQuotedPath -Value $_.CompletionText) -QuoteChar $quoteChar
+            $path = ConvertFrom-CargoQuotedPath -Value $_.CompletionText
+            if ($typedDirectory) {
+                $path = $typedDirectory + $path.Substring($path.LastIndexOfAny([char[]]@('\', '/')) + 1)
+            }
+
+            $completionText = ConvertTo-CargoQuotedPath -Value $path -QuoteChar $quoteChar
             New-CargoCompletionResult -CompletionText $completionText -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
         }
 }
 
 function Get-CargoCurrentWord {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word ('sp a) as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-CargoArgumentTokens {
@@ -1223,11 +1262,7 @@ function Complete-Cargo {
 
     Initialize-CargoCompletionCache
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-CargoCurrentWord -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-CargoCurrentWord -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $state = Get-CargoState -TokensBeforeCurrent @(Get-CargoArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition)
 
