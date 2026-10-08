@@ -208,7 +208,8 @@ function Remove-CksumOuterQuotes {
 function ConvertTo-CksumQuotedValue {
     # Bare when safe and no quote was typed; otherwise in the typed quote style (single by
     # default). Whitespace and argument-mode metacharacters (typographic quotes included)
-    # end or split a bare word, and a leading '@' or '#' starts a splat or a comment.
+    # end or split a bare word, a leading '@' or '#' starts a splat or a comment, and a
+    # leading dash starts a parameter.
     param(
         [string]$Value,
         [string]$Quote = ''
@@ -219,7 +220,7 @@ function ConvertTo-CksumQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#\u2013-\u2015-]') {
             return $Value
         }
 
@@ -278,13 +279,19 @@ function Get-CksumPathCompletions {
     $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # The directory part is kept exactly as typed ('.\', './', 'sub/'), so no typed text is lost.
+    $typedDirectory = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/') + 1)
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
+        $pathText = if ($typedDirectory) {
+            $typedDirectory + $item.Name
+        } elseif ($parent -ne '.') {
             Join-Path -Path $parent -ChildPath $item.Name
+        } elseif ($item.Name -match '^[\u2013-\u2015-]') {
+            # A bare leading dash would parse as a parameter, so name it from the current directory.
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
