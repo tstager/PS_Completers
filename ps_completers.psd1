@@ -1386,7 +1386,7 @@
         @{
             Path    = 'unexpand_completer/unexpand_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:D2A1FB244B7C2A8FD3B9DCFD2A6D81AA03F5752D48CADBAD724577C1F1094D95'
+            Hash    = 'SHA256:80E28E9CC1AEE0651E053DF8E0F72C817542BA77B5DAE2CA701BD4027A9B7B5F'
             Targets = @(
                 @{ CommandName = 'unexpand'; Native = $true }
                 @{ CommandName = 'unexpand.exe'; Native = $true }
