@@ -130,10 +130,10 @@ function Remove-CargoClippyOuterQuotes {
 }
 
 function Get-CargoClippyTypedQuote {
-    # The quote character the user opened the word with ('' when bare).
+    # The quote character (ASCII or typographic) the user opened the word with ('' when bare).
     param([string]$Value)
 
-    if ($Value -match '^[''"]') {
+    if ($Value -match '^[''"\u2018-\u201E]') {
         return $Value.Substring(0, 1)
     }
 
@@ -141,27 +141,30 @@ function Get-CargoClippyTypedQuote {
 }
 
 function ConvertFrom-CargoClippyTypedWord {
-    # The value of a typed word without its quotes and that quote style's escapes.
+    # The value of a typed word. A word holding a quote (leading or mid-word, as in it's) is read
+    # by the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    $quote = Get-CargoClippyTypedQuote -Value $Value
-    $clean = Remove-CargoClippyOuterQuotes -Value $Value
-    if ($quote -eq "'") {
-        return $clean.Replace("''", "'")
+    if ($Value -notmatch '[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    if ($quote) {
-        return $clean -replace '`(.)', '$1'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0] -is [System.Management.Automation.Language.StringToken]) {
+        return $tokens[0].Value
     }
 
-    $clean
+    $Value
 }
 
 function ConvertTo-CargoClippyQuotedValue {
     # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
     # otherwise in the typed quote style (single by default). Whitespace and argument-mode
-    # metacharacters (including the typographic quotes) end or split a bare word, and a
-    # leading '@' or '#' would start a splat or a comment.
+    # metacharacters (including the typographic quotes, '@' and '#') end, split or reinterpret
+    # a bare word. PowerShell reads ' and U+2018-U+201B as single quotes and " and
+    # U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$Quote
@@ -172,18 +175,18 @@ function ConvertTo-CargoClippyQuotedValue {
     }
 
     if (-not $Quote) {
-        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
             return $Value
         }
 
         $Quote = "'"
     }
 
-    if ($Quote -eq "'") {
-        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
     }
 
-    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-CargoClippyPathCompletions {
@@ -194,16 +197,23 @@ function Get-CargoClippyPathCompletions {
 
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput) |
         ForEach-Object {
-            # CompleteFilename already single-quotes a path that needs it; unwrap it so the path
-            # is quoted exactly once, in the style the user typed.
+            # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+            # (tick``x.txt); cargo takes literal paths, so unwrap with the parser (which undoes
+            # every doubled quote, typographic ones included), unescape, and quote exactly once
+            # in the style the user typed.
             $path = $_.CompletionText
-            # The parser undoes every doubled quote, typographic ones included.
-            if ($path.Length -ge 2 -and $path.StartsWith("'") -and $path.EndsWith("'")) {
+            if ($path -match '^[''"]') {
                 $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
                 $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
                 if ($constant) {
                     $path = $constant.Value
                 }
+            }
+
+            $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+            # CompleteFilename turns a typed ./ or ../ into the native separator; keep the one typed.
+            if ($cleanInput -match '^\.{1,2}/') {
+                $path = $path.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
             }
 
             $completionText = ConvertTo-CargoClippyQuotedValue -Value $path -Quote $quote
