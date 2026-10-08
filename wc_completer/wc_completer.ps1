@@ -90,22 +90,47 @@ function Remove-WcOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-WcQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-WcTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-WcQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-WcTokenText {
@@ -124,27 +149,20 @@ function Get-WcTokenText {
 
 function Get-WcCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The word as typed, cut from the element under the cursor: PowerShell hands a quoted
+    # word over unescaped, and the parser keeps an unterminated quoted word as one element.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-WcArgumentTokens {
@@ -356,48 +374,37 @@ function Get-WcPathCompletions {
         [switch]$DirectoriesOnly
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
+    $cleanInput = ConvertFrom-WcTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # Keep the directory part exactly as typed (.\, ./, ..\, C:\ ...) and complete the leaf.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
+    $items = @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
     foreach ($item in $items) {
-        $completionText = if (-not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                # A bare name that starts with '-', '@' or '#' would read as an option,
-                # a splat or a comment, so anchor it to the current directory.
-                if ($item.Name -match '^[-@#]') { '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name } else { $item.Name }
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
+        $completionText = if ($typedDirectory) {
+            $typedDirectory + $item.Name
+        } elseif ($item.Name -match '^[-@#\u2013-\u2015]') {
+            # A bare name that starts with a dash, '@' or '#' would read as a parameter,
+            # a splat or a comment, so anchor it to the current directory.
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            $item.FullName
+            $item.Name
         }
 
         if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-WcQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
-        $completionText = $Prefix + $completionText
+        $completionText = $Prefix + (ConvertTo-WcQuotedValue -Value $completionText -QuoteChar $quoteChar)
 
         New-WcCompletionResult -CompletionText $completionText -ListItemText $item.Name -ResultType 'ParameterValue' -ToolTip $item.FullName
     }
@@ -497,7 +504,7 @@ function Get-WcValueCompletions {
 
     switch ($OptionSpec.ValueKind) {
         'Total' {
-            return @(Get-WcEnumOrLiteralValueResults -Values $catalog.TotalValues -CurrentValue $typedValue -Placeholder '<when>' -ToolTip $toolTip -Prefix $Prefix)
+            return @(Get-WcEnumOrLiteralValueResults -Values $catalog.TotalValues -CurrentValue (ConvertFrom-WcTypedWord -Value $typedValue) -Placeholder '<when>' -ToolTip $toolTip -Prefix $Prefix)
         }
         'FilesFrom' {
             return @(Get-WcPathValueResults -CurrentValue $typedValue -Placeholder '<F>' -ToolTip $toolTip -Prefix $Prefix -AllowStdinSentinel)
@@ -632,15 +639,9 @@ Register-ArgumentCompleter -Native -CommandName 'wc', 'wc.exe' -ScriptBlock {
     Initialize-WcCompletionCatalog
     $catalog = Get-WcCompletionCatalog
 
-    # When the cursor sits past the parsed command extent the user is on a fresh
-    # token after trailing whitespace, which $commandAst.Extent.Text has trimmed
-    # away. Treat that as an empty current token so terminal/positional routing
-    # runs instead of falling through to the option-name branch.
-    $currentToken = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-WcCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    # A cursor on a fresh token after trailing whitespace sits in no element, so the
+    # current token is empty and terminal/positional routing runs.
+    $currentToken = Get-WcCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     $tokensBeforeCurrent = Get-WcArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
     $context = Get-WcCompletionContext -TokensBeforeCurrent $tokensBeforeCurrent
 
@@ -656,12 +657,12 @@ Register-ArgumentCompleter -Native -CommandName 'wc', 'wc.exe' -ScriptBlock {
     }
 
     if ($context.PendingOption) {
-        return @(Get-WcValueCompletions -OptionSpec $context.PendingOption -CurrentValue $wordToComplete)
+        return @(Get-WcValueCompletions -OptionSpec $context.PendingOption -CurrentValue $currentToken)
     }
 
     if ($currentToken.StartsWith('-')) {
         return @(Get-WcOptionCompletions -CurrentWord $wordToComplete)
     }
 
-    @(Get-WcPositionalCompletions -CurrentWord $wordToComplete)
+    @(Get-WcPositionalCompletions -CurrentWord $currentToken)
 }

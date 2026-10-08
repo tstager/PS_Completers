@@ -1442,7 +1442,7 @@
         @{
             Path    = 'wc_completer/wc_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:668088B0BFC85579F23550D7059639EC608671501E12776D648D6394B2D70E63'
+            Hash    = 'SHA256:4AE051B1B47641D656ED28E71521D52A4C6F2391DDA494EBFE4E452EE1F76682'
             Targets = @(
                 @{ CommandName = 'wc'; Native = $true }
                 @{ CommandName = 'wc.exe'; Native = $true }
