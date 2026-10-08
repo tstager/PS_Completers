@@ -186,21 +186,49 @@ function New-RustupCompletionResult {
     )
 }
 
+function ConvertFrom-RustupTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
 function ConvertTo-RustupQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = '',
+        [bool]$AllowLeadingDash = $false
     )
 
     if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"') + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and
+            ($AllowLeadingDash -or $Value -notmatch '^[-\u2013-\u2015]')) {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Remove-RustupOuterQuotes {
@@ -215,27 +243,20 @@ function Remove-RustupOuterQuotes {
 
 function Get-RustupCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The word as typed up to the cursor, which is what PowerShell replaces. The parser
+    # keeps a quoted word (even unterminated, or with spaces) as one element.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-RustupTokensBeforeCursor {
@@ -398,43 +419,50 @@ function Get-RustupHostTriples {
 }
 
 function Get-RustupPathCompletions {
-    param([string]$InputPath)
+    # -Attached: the value follows '--opt=' in the same word, so a leading dash cannot be
+    # read as a parameter there.
+    param(
+        [string]$InputPath,
+        [switch]$Attached
+    )
 
-    $cleanInput = Remove-RustupOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-RustupTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
+    # The typed directory part (kept exactly as typed, '.\' and './' included) and the leaf.
+    $directoryPart = ''
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanInput)) {
+        $directoryPart = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/') + 1)
+        if (-not $directoryPart -and $cleanInput -match '^[A-Za-z]:') {
+            $directoryPart = $cleanInput.Substring(0, 2)
         }
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $leaf = $cleanInput.Substring($directoryPart.Length)
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $parent = if ($directoryPart) { $directoryPart } else { '.' }
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
+        return @()
+    }
+
+    $separator = if ($directoryPart -match '[\\/]$') { $directoryPart.Substring($directoryPart.Length - 1) } else { [string][System.IO.Path]::DirectorySeparatorChar }
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryPart + $item.Name
+
+        # A bare name starting with a dash would be read as a parameter: anchor it to the
+        # current directory the way PowerShell's own file completion does.
+        if (-not $Attached -and -not $directoryPart -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + $separator + $pathText
         }
 
-        if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
-            $pathText += '\'
+        if ($item.PSIsContainer) {
+            $pathText += $separator
         }
 
-        $quoted = ConvertTo-RustupQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quoted = ConvertTo-RustupQuotedValue -Value $pathText -QuoteChar $quoteChar -AllowLeadingDash $Attached.IsPresent
         $type = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
         New-RustupCompletionResult -CompletionText $quoted -ListItemText $pathText -ResultType $type -ToolTip $item.FullName
     }
@@ -675,11 +703,7 @@ function Complete-Rustup {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-RustupCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-RustupCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $tokensBeforeCurrent = @(Get-RustupTokensBeforeCursor -CommandAst $commandAst -CursorPosition $cursorPosition)
     if (($tokensBeforeCurrent.Count -eq 0) -and ($currentWord -match '^(?i)rustup(?:\.exe)?$')) {
@@ -726,7 +750,7 @@ function Complete-Rustup {
 
     if (-not [string]::IsNullOrEmpty($currentWord) -and ($currentWord.StartsWith('-') -or $currentWord -eq '/')) {
         $cleanCurrent = Remove-RustupOuterQuotes -Value $currentWord
-        $attached = [regex]::Match($cleanCurrent, '^(?<name>--[^=]+)=(?<value>.*)$')
+        $attached = [regex]::Match($currentWord, '^(?<name>--[^=]+)=(?<value>.*)$')
         if ($attached.Success) {
             # Attached form: complete the value while keeping the '--opt=' prefix.
             $attachedName = $attached.Groups['name'].Value
@@ -738,7 +762,7 @@ function Complete-Rustup {
 
             $primaryName = $definition.OptionMap[$attachedName].PrimaryName
             if ($primaryName -eq '--path') {
-                return @(Get-RustupPathCompletions -InputPath $attachedValue | ForEach-Object {
+                return @(Get-RustupPathCompletions -InputPath $attachedValue -Attached | ForEach-Object {
                         New-RustupCompletionResult -CompletionText ($attachedPrefix + $_.CompletionText) -ListItemText $_.ListItemText -ResultType $_.ResultType -ToolTip $_.ToolTip
                     })
             }

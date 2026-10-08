@@ -1052,7 +1052,7 @@
         @{
             Path    = 'rustup_completer/rustup_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:479C99E78F6F63CF78A43EABAD5820AC7832B48668DAB8F1B27F102623AB80CE'
+            Hash    = 'SHA256:FDBC2452A5CF2400CDEE19892CD25A7FBC49C4AD8CC1973395796EB8C4DB6230'
             Targets = @(
                 @{ CommandName = 'rustup'; Native = $true }
                 @{ CommandName = 'rustup.exe'; Native = $true }
