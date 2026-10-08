@@ -136,8 +136,10 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Option matching is case-sensitive, so case-distinct short options such as `-d` and `-D` are both offered.
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the parser's command element under the cursor, cut at the cursor, so completion works mid-line and when the command is not the first statement on the line. An unterminated quote (`vdir "C:\Program Fi`) is one word running to the cursor.
+- The typed word is read the way PowerShell reads it: the tokenizer strips its quotes and undoes doubled quotes and backtick escapes, and the typographic quotes U+2018-U+201B and U+201C-U+201E count as `'` and `"`.
+- Path completions keep the quote style the user typed: a single-quoted word completes in single quotes with every single-quote character (`'` and U+2018-U+201B) doubled, a double-quoted word in double quotes with `` ` ``, `"`, `$` and U+201C-U+201E backtick-escaped. An unquoted path that contains whitespace, one of `` { } ( ) ; , | & < > ' " ` $ @ # `` or a typographic quote is single-quoted.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe, the tool lookup and the directory listing use `-ErrorAction Ignore`, so a missing tool or an unreadable folder adds nothing to `$Error`.
 
 ## Option values
 

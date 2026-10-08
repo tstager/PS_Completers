@@ -12,7 +12,7 @@ function Get-VdirCompletionOptions {
     $fallbackOptions = @('-a', '--all', '-A', '--almost-all', '--author', '-b', '--escape', '-B', '--ignore-backups', '-c', '-C', '--color', '-d', '--directory', '-f', '-F', '--classify', '--file-type', '--format', '-g', '-G', '-h', '--human-readable', '-i', '--inode', '-l', '-m', '-n', '-N', '--literal', '-o', '-p', '-q', '--hide-control-chars', '-Q', '--quote-name', '-r', '--reverse', '-R', '--recursive', '-s', '--size', '-S', '--sort=size', '-t', '--sort=time', '-u', '--sort=access', '-U', '--sort=none', '-X', '--sort=extension', '-1', '--format=single-column', '--help', '--version')
     $commandCandidates = @('vdir.exe', 'vdir')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,64 +84,89 @@ function New-VdirCompletionResult {
     )
 }
 
-function Remove-VdirOuterQuotes {
+function Get-VdirTypedQuote {
+    # The quote style the user opened the word with ('' when bare). PowerShell reads the
+    # typographic quotes U+2018-U+201B as ' and U+201C-U+201E as ".
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-VdirTypedWord {
+    # The value of a typed word. For a quoted word the tokenizer drops the quotes and undoes
+    # that style's escapes (doubled quotes of every kind, backticks), even while it is unterminated.
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value) -or -not (Get-VdirTypedQuote -Value $Value)) {
+        return [string]$Value
+    }
+
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$errors)
+    if ($tokens.Count -gt 0 -and $tokens[0] -is [System.Management.Automation.Language.StringToken]) {
+        return $tokens[0].Value
+    }
+
+    $Value.Substring(1)
 }
 
 function ConvertTo-VdirQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    # Keep the quote style the user typed; a bare value that needs quoting gets single quotes.
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    $Value
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
 }
 
 function Get-VdirCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser's element under the cursor, cut at the cursor; an unterminated quote is one element running to the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-VdirPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-VdirOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-VdirTypedWord -Value $InputPath
+    $quote = Get-VdirTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -162,7 +187,7 @@ function Get-VdirPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -178,7 +203,7 @@ function Get-VdirPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-VdirQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-VdirQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-VdirCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -339,17 +364,14 @@ function Get-VdirOptionDescription {
 }
 
 function Complete-Vdir {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-VdirCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-VdirCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-VdirOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {
