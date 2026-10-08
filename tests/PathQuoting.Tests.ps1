@@ -23,6 +23,10 @@ Prefixes that end in './' or '@' are for completers that only list files once a 
 word (or an @file list) has been typed. No row is skipped on Linux: Windows-only completers
 either run their path code there too or return nothing and leave the engine fallback.
 
+A bare word that starts with - or an en/em dash is a parameter to PowerShell ('tool -dash.txt'
+reaches the tool as -dash and .txt), so a candidate for -dash.txt fails unless it is quoted;
+PowerShell's own completion writes '.\-dash.txt'.
+
 [System.Management.Automation.CompletionCompleters]::CompleteFilename doubles a backtick
 inside single quotes ('.\tick``x.txt' names tick``x.txt), so a completer that hands its
 results through unchanged fails here on the tick`x.txt fixture.
@@ -190,32 +194,13 @@ BeforeDiscovery {
         'zip'              = 'zip '
     }
 
-    # Ratchet: completers that failed this gate when it was added (2026-10-07). Each one is still
-    # probed; while it fails it is reported as skipped, and once it passes the test fails until
-    # its name is removed here, so this list only ever shrinks. Never add a name to it.
-    $knownFailures = @(
-        'accesschk', 'agy', 'autorunsc', 'base32', 'base64', 'basename', 'bun', 'cargo',
-        'cargo_binstall', 'cargo_clippy', 'claude', 'code_insiders', 'comfy_cli', 'comm', 'compact', 'contig',
-        'copilot', 'csplit', 'curl', 'cut', 'date', 'dd', 'df', 'dirname',
-        'docker', 'DSC', 'env', 'fd', 'findstr', 'fmt', 'fsutil', 'gawk',
-        'Git', 'go', 'groff', 'grok', 'head', 'icacls', 'join', 'jq',
-        'link', 'ln', 'nl', 'od', 'OhMyPosh', 'ollama', 'onemd', 'opencode',
-        'pi', 'pip', 'playwright_cli', 'pnpm', 'pr', 'psgetsid', 'psinfo', 'psmux',
-        'pspasswd', 'psshutdown', 'ptx', 'pwsh', 'py', 'python', 'qwen', 'realpath',
-        'rtk', 'rustup', 'sc', 'scoop', 'sdelete', 'sed', 'sha224sum', 'sha256sum',
-        'sha512sum', 'shuf', 'stat', 'stdbuf', 'strings', 'sum', 'tail', 'tar',
-        'test', 'tr', 'truncate', 'tsort', 'unexpand', 'uniq', 'unlink', 'uptime',
-        'wc', 'winapp', 'wpr', 'wslc', 'xargs', 'xcopy', 'zip'
-    )
-
     $script:pathProbes = @(
         foreach ($name in $probes.Keys) {
             @{
-                Name         = $name
-                Path         = Join-Path -Path $repoRoot -ChildPath "${name}_completer/${name}_completer.ps1"
-                Prefixes     = @($probes[$name])
-                Label        = (@($probes[$name] | ForEach-Object { "[$_]" }) -join ' ')
-                KnownFailure = $knownFailures -ccontains $name
+                Name     = $name
+                Path     = Join-Path -Path $repoRoot -ChildPath "${name}_completer/${name}_completer.ps1"
+                Prefixes = @($probes[$name])
+                Label    = (@($probes[$name] | ForEach-Object { "[$_]" }) -join ' ')
             }
         }
     )
@@ -235,6 +220,8 @@ Describe 'Path completions survive hostile file names' {
             'br{a}.txt'
             'tick`x.txt'
             'comma,x.txt'
+            '-dash.txt'
+            "$([char]0x2013)dash.txt"
             'sub dir&x'
         )
 
@@ -354,20 +341,8 @@ Describe 'Path completions survive hostile file names' {
         }
     }
 
-    It '<Name> quotes every candidate at <Label>' -ForEach ($pathProbes | Where-Object { -not $_.KnownFailure }) {
+    It '<Name> quotes every candidate at <Label>' -ForEach $pathProbes {
         $problems = Get-ProbeProblem -Path $Path -Prefixes $Prefixes
         $problems.Count | Should -Be 0 -Because ("every accepted candidate must parse to its own argument:`n" + ($problems -join "`n") + "`n")
-    }
-
-    It '<Name> is still a known path-quoting failure at <Label>' -ForEach ($pathProbes | Where-Object { $_.KnownFailure }) {
-        $problems = Get-ProbeProblem -Path $Path -Prefixes $Prefixes
-        if ($problems.Count -eq 0 -and -not $IsWindows) {
-            # Off Windows some listed completers never reach their path code (no native tool), so a
-            # pass here proves nothing; the list is ratcheted by the Windows run.
-            Set-ItResult -Skipped -Because 'passes off Windows only because the path code is not reached'
-            return
-        }
-        $problems.Count | Should -BeGreaterThan 0 -Because "$Name now passes: remove it from `$knownFailures in this file so the gate enforces it"
-        Set-ItResult -Skipped -Because "known path-quoting failure ($($problems.Count) broken candidates): $($problems[0])"
     }
 }
