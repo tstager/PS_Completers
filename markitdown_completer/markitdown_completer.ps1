@@ -312,14 +312,16 @@ function Get-MarkItDownExpectedValueSpec {
 function Get-MarkItDownPathCompletions {
     param(
         [string]$InputPath,
-        [string]$ToolTipPrefix = 'Path'
+        [string]$ToolTipPrefix = 'Path',
+        [switch]$Attached
     )
 
     $typed = ConvertFrom-MarkItDownTypedWord -Text $InputPath
     $typedValue = $typed.Value
 
     # An empty $parent means the current directory with no typed folder part,
-    # so candidates stay bare names; a typed folder part (even '.\') is kept.
+    # so candidates stay bare names; a typed folder part (even '.\') is kept
+    # exactly as typed, separators included.
     if ([string]::IsNullOrWhiteSpace($typedValue)) {
         $parent = ''
         $leaf = ''
@@ -328,8 +330,11 @@ function Get-MarkItDownPathCompletions {
         $leaf = ''
     } else {
         $parent = Split-Path -Path $typedValue -Parent
-        $leaf = if ($parent) { Split-Path -Path $typedValue -Leaf } else { $typedValue }
+        $leaf = if ($parent) { $typedValue -replace '^.*[\\/]' } else { $typedValue }
     }
+
+    $typedFolder = if ($parent) { $typedValue.Substring(0, $typedValue.Length - $leaf.Length) } else { '' }
+    $separator = if ($typedFolder -match '[\\/]$') { $Matches[0] } else { [string][System.IO.Path]::DirectorySeparatorChar }
 
     # Enumerate lazily through .NET so a 30k-entry directory is not
     # materialized: directories first, then files markitdown can convert,
@@ -376,9 +381,12 @@ function Get-MarkItDownPathCompletions {
 
     foreach ($item in $items) {
         $isContainer = $item -is [System.IO.DirectoryInfo]
-        $pathText = if ($parent) { Join-Path -Path $parent -ChildPath $item.Name } else { $item.Name }
-        if ($isContainer -and -not $pathText.EndsWith('\')) {
-            $pathText += '\'
+        # A whole-word name starting with a dash would parse as a parameter, so
+        # it gets the current-directory prefix, as PowerShell's own completion
+        # does; after an attached '--opt=' the word starts with the option.
+        $pathText = if ($typedFolder) { $typedFolder + $item.Name } elseif (-not $Attached -and $item.Name -match '^[-\u2013-\u2015]') { '.' + $separator + $item.Name } else { $item.Name }
+        if ($isContainer) {
+            $pathText += $separator
         }
 
         $completionText = ConvertTo-MarkItDownArgument -Value $pathText -Quote $typed.Quote
@@ -418,11 +426,12 @@ function Complete-MarkItDownCommaList {
 function Get-MarkItDownValueCompletions {
     param(
         [object]$Spec,
-        [string]$CurrentWord
+        [string]$CurrentWord,
+        [switch]$Attached
     )
 
     if ($Spec.ValueKind -eq 'Output') {
-        $results = @(Get-MarkItDownPathCompletions -InputPath $CurrentWord -ToolTipPrefix 'Output')
+        $results = @(Get-MarkItDownPathCompletions -InputPath $CurrentWord -ToolTipPrefix 'Output' -Attached:$Attached)
         if ([string]::IsNullOrWhiteSpace($CurrentWord)) {
             $results += New-MarkItDownCompletionResult -CompletionText 'output.md' -ToolTip 'Write markdown output to output.md.'
         }
@@ -583,7 +592,7 @@ function Get-MarkItDownWordCompletion {
     if ($attached) {
         $prefix = $attached.Name + '='
         return @(
-            foreach ($item in @(Get-MarkItDownValueCompletions -Spec $attached.Spec -CurrentWord $attached.Value)) {
+            foreach ($item in @(Get-MarkItDownValueCompletions -Spec $attached.Spec -CurrentWord $attached.Value -Attached)) {
                 New-MarkItDownCompletionResult -CompletionText ($prefix + $item.CompletionText) -ResultType $item.ResultType -ToolTip $item.ToolTip -ListItemText $item.ListItemText
             }
         )
