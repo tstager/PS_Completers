@@ -12,7 +12,7 @@ function Get-UniqCompletionOptions {
     $fallbackOptions = @('-D', '--all-repeated', '-m', '--group', '-w', '--check-chars', '-c', '--count', '-i', '--ignore-case', '-d', '--repeated', '-s', '--skip-chars', '-f', '--skip-fields', '-u', '--unique', '-z', '--zero-terminated', '-h', '--help', '-V', '--version')
     $commandCandidates = @('uniq.exe', 'uniq')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -98,51 +98,49 @@ function Remove-UniqOuterQuotes {
 function ConvertTo-UniqQuotedValue {
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if ([string]::IsNullOrEmpty($Quote)) {
+        if ($Value -notmatch '\s') {
+            return $Value
+        }
+        $Quote = '"'
     }
 
-    $Value
+    if ($Quote -eq "'") {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    '"' + ($Value -replace '([`"$])', '`$1') + '"'
 }
 
 function Get-UniqCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($CursorPosition -gt $extent.StartOffset -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-UniqPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-UniqOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quote = if (-not [string]::IsNullOrEmpty($InputPath) -and ($InputPath[0] -eq '"' -or $InputPath[0] -eq "'")) { [string]$InputPath[0] } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -179,7 +177,7 @@ function Get-UniqPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-UniqQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-UniqQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-UniqCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -287,17 +285,14 @@ function Get-UniqOptionDescription {
 }
 
 function Complete-Uniq {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-UniqCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-UniqCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-UniqOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {

@@ -71,8 +71,9 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 - Value-bearing options complete their documented values in the separate form (`--opt value`), the attached form (`--opt=value`) and for a partially typed value. Path-valued options use the script's own path completion. See the table below.
 - `--group` and `--all-repeated` take an optional METHOD that uniq accepts only attached (`--group=both`); `uniq --group separate` reads `separate` as the INPUT file. Their values are offered only after `=`, and the word after a space completes as an operand.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
-- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
+- The current word is the command element that contains the cursor, cut at the cursor, so completion works when the command is not the first statement on the line. An unterminated quote (`uniq "C:\Program Fi`) is one element running to the cursor, so the whole quoted path is completed rather than its last space-separated fragment.
+- Path candidates keep the quote the user typed: after `'` they are single-quoted with embedded `'` doubled; after `"` they are double-quoted with `` ` ``, `"` and `$` escaped by a backtick. Unquoted input is double-quoted (with the same escaping) only when the path contains whitespace.
+- The help invocation pipes `$null` into the tool so it cannot wait on standard input, and the cache probe and the tool lookup use `-ErrorAction Ignore` so a cold load adds nothing to `$Error`, even when uniq is not installed.
 
 ## Option values
 
@@ -87,6 +88,8 @@ uniq -
 uniq --
 uniq --all-repeated 
 uniq --all-repeated=
+uniq "C:\Program Fi
+uniq 'C:\Program Fi
 ```
 
 Expected behavior:
@@ -94,6 +97,7 @@ Expected behavior:
 - `-` and `--` prefixes show matching option suggestions with descriptions taken from the tool's help
 - `--all-repeated=` shows its documented values; `--all-repeated ` (space) falls through to operand completion
 - operand slots offer filesystem completion
+- `"C:\Program Fi` offers `"C:\Program Files\"` and `"C:\Program Files (x86)\"`; `'C:\Program Fi` offers the same paths in single quotes
 - the completer remains importable through `Import-CompleterScript`
 
 ## Notes
