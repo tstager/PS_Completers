@@ -424,14 +424,41 @@ function Get-GrokCurrentToken {
 function Split-GrokQuotedWord {
     param([string]$Word)
 
-    # Returns the user's opening quote character ('' when none) and the word
-    # without its surrounding quotes.
-    $quoteChar = ''
-    if ($Word.Length -gt 0 -and ($Word[0] -eq [char]34 -or $Word[0] -eq [char]39)) {
-        $quoteChar = [string]$Word[0]
+    # Returns the user's opening quote character ('' when none) and the word's
+    # value. A word opened with a quote (ASCII or typographic) is read by the
+    # PowerShell tokenizer, which drops the quotes and undoes that quote's escapes.
+    if ($Word -notmatch '^[''"\u2018-\u201E]') {
+        return @('', $Word)
     }
 
-    return @($quoteChar, $Word.Trim([char[]]@([char]34, [char]39)))
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Word, [ref]$tokens, [ref]$parseErrors)
+    return @($Word.Substring(0, 1), $tokens[0].Value)
+}
+
+function ConvertTo-GrokQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    return $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-GrokCommandTokens {
@@ -487,6 +514,15 @@ function Get-GrokPathCompletions {
         return @()
     }
 
+    # Candidates keep the directory part exactly as typed (.\, ./, ..\, C:).
+    $typedDirectory = ''
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+    } elseif ($cleanInput -match '^[A-Za-z]:') {
+        $typedDirectory = $cleanInput.Substring(0, 2)
+    }
+
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
@@ -495,10 +531,11 @@ function Get-GrokPathCompletions {
             continue
         }
 
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        if (-not $typedDirectory -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash parses as a parameter; anchor it
+            # to the current directory the way PowerShell's own file completion does.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
@@ -506,13 +543,8 @@ function Get-GrokPathCompletions {
         }
 
         # Keep the quote the user opened; otherwise single-quote paths that
-        # hold whitespace or an argument-mode metacharacter, as the engine does.
-        $quotedPath = $pathText
-        if ($QuoteChar -eq '"') {
-            $quotedPath = '"' + $pathText.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
-        } elseif ($QuoteChar -eq "'" -or $pathText -match '[\s{}();,|&<>''"`$]' -or $pathText -match '^[@#]') {
-            $quotedPath = "'" + $pathText.Replace("'", "''") + "'"
-        }
+        # hold whitespace or an argument-mode metacharacter.
+        $quotedPath = ConvertTo-GrokQuotedValue -Value $pathText -QuoteChar $QuoteChar
 
         if ($item.PSIsContainer) {
             New-GrokCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
