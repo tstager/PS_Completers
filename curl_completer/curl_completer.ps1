@@ -135,36 +135,47 @@ function Remove-CurlOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-CurlQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-CurlTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
-    }
-
-    $Value
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-CurlQuotedArgument {
-    # Renders a value as one quoted PowerShell argument in the given quote style.
+    # Renders a value as one PowerShell argument: bare when safe and no quote is given,
+    # otherwise in the given quote (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
-        [string]$Quote
+        [string]$Quote = ''
     )
 
-    if ($Quote -eq '"') {
-        return '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
+    }
+
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Test-CurlPathLikeInput {
@@ -174,7 +185,7 @@ function Test-CurlPathLikeInput {
         return $false
     }
 
-    $cleanValue = Remove-CurlOuterQuotes -Value $Value
+    $cleanValue = ConvertFrom-CurlTypedWord -Value $Value
     $cleanValue -match '^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:|\\\\)'
 }
 
@@ -193,28 +204,28 @@ function Get-CurlTokenText {
 }
 
 function Get-CurlCurrentToken {
+    # The word under the cursor as typed. PowerShell re-quotes $wordToComplete ("'it''s"
+    # arrives as "'it's'") and drops the quote inside "--opt='x", so the word is read from
+    # the element under the cursor; the parser keeps an unterminated quoted word as one
+    # element. A comma list is replaced one segment at a time, so it keeps $Fallback.
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            if ($element -is [System.Management.Automation.Language.ArrayLiteralAst] -or $element -is [System.Management.Automation.Language.ErrorExpressionAst]) {
+                return $Fallback
+            }
+
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-CurlArgumentTokens {
@@ -252,14 +263,9 @@ function Get-CurlAtFileWord {
         $text = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
         $quote = ''
         $splitAt = $false
-        if ($text -match '^[''"]') {
+        if ($text -match '^[''"\u2018-\u201E]') {
             $quote = $text.Substring(0, 1)
-            $text = $text.Substring(1)
-            if ($text.EndsWith($quote)) {
-                $text = $text.Substring(0, $text.Length - 1)
-            }
-
-            $text = if ($quote -eq "'") { $text.Replace("''", "'") } else { $text -replace '`(.)', '$1' }
+            $text = ConvertFrom-CurlTypedWord -Value $text
         } elseif ($index -gt 0 -and $elements[$index - 1].Extent.Text -eq '@' -and $elements[$index - 1].Extent.EndOffset -eq $extent.StartOffset) {
             $text = '@' + $text
             $splitAt = $true
@@ -463,60 +469,53 @@ function Initialize-CurlCompletionCatalog {
 }
 
 function Get-CurlPathCompletions {
+    # $Prefix stays in front of the quoted value ('--output='); $ValuePrefix goes inside it
+    # ('@' in '@file'). $Quote is the quote typed before an already decoded $InputPath.
     param(
         [string]$InputPath,
         [string]$Prefix = '',
         [switch]$DirectoriesOnly,
+        [string]$ValuePrefix = '',
         [string]$Quote = ''
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput.EndsWith('\') -or $cleanInput.EndsWith('/')) {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
+    $cleanInput = $InputPath
+    if (-not $Quote) {
+        $cleanInput = ConvertFrom-CurlTypedWord -Value $InputPath
+        if ($InputPath -match '^[''"\u2018-\u201E]') {
+            $Quote = $InputPath.Substring(0, 1)
         }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
+    # The directory part is kept exactly as typed ('.\', '../sub/'), so no typed text is lost.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/', ':'))
+    $directory = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directory) { $directory } else { '.' }
+
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction Ignore)
+    $items = @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
     foreach ($item in $items) {
-        $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
-            if ($parent -eq '.') {
-                $item.Name
-            } else {
-                Join-Path -Path $parent -ChildPath $item.Name
-            }
-        } else {
+        $completionText = if (-not $cleanInput -or [System.IO.Path]::IsPathRooted($cleanInput)) {
             $item.FullName
+        } elseif ($directory) {
+            $directory + $item.Name
+        } elseif (-not ($Prefix + $ValuePrefix) -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A word starting with a dash is read as a parameter; anchor it as PowerShell does.
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
+        } else {
+            $item.Name
         }
 
         if ($item.PSIsContainer -and -not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        if ($Quote) {
-            # The prefix and path form one argument quoted as a whole.
-            $completionText = ConvertTo-CurlQuotedArgument -Value ($Prefix + $completionText) -Quote $Quote
-        } else {
-            $completionText = ConvertTo-CurlQuotedValue -Value $completionText -AlwaysQuote $alwaysQuote
-            $completionText = $Prefix + $completionText
-        }
-
+        $completionText = $Prefix + (ConvertTo-CurlQuotedArgument -Value ($ValuePrefix + $completionText) -Quote $Quote)
         New-CurlCompletionResult -CompletionText $completionText -ListItemText $item.Name -ResultType 'ParameterValue' -ToolTip $item.FullName
     }
 }
@@ -710,11 +709,18 @@ function Get-CurlVariableValueResults {
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    $quote = if ($typedValue -match '^[''"\u2018-\u201E]') { $typedValue.Substring(0, 1) } else { '' }
+    $value = ConvertFrom-CurlTypedWord -Value $typedValue
 
-    if ($typedValue -match '^(.*@)([^@]*)$') {
+    if ($value -match '^(.*@)([^@]*)$') {
         $variablePrefix = $matches[1]
         $pathPrefix = $matches[2]
-        $results = @(Get-CurlPathCompletions -InputPath $pathPrefix -Prefix ($Prefix + $variablePrefix))
+        # A typed quote wraps the whole 'name@file' value; otherwise only the path is quoted.
+        $results = @(if ($quote) {
+                Get-CurlPathCompletions -InputPath $pathPrefix -Prefix $Prefix -ValuePrefix $variablePrefix -Quote $quote
+            } else {
+                Get-CurlPathCompletions -InputPath $pathPrefix -Prefix ($Prefix + $variablePrefix)
+            })
         if ($results.Count -gt 0) {
             return $results
         }
@@ -752,17 +758,23 @@ function Get-CurlAtFileValueResults {
     )
 
     $typedValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
+    if (-not $Quote -and $typedValue -match '^[''"\u2018-\u201E]' -and (ConvertFrom-CurlTypedWord -Value $typedValue).StartsWith('@')) {
+        # An attached '@file' value typed with a quote: --data="@file
+        $Quote = $typedValue.Substring(0, 1)
+        $typedValue = ConvertFrom-CurlTypedWord -Value $typedValue
+    }
+
     if ($typedValue.StartsWith('@')) {
         $pathInput = $typedValue.Substring(1)
+        # A leading '@' would start a splat, so a separate value is emitted quoted as a whole.
+        $valueQuote = if ($Quote) { $Quote } else { "'" }
         $results = @(if ($SplitAt) {
             # The '@' already sits in the buffer as a token of its own; complete the path after it.
             Get-CurlPathCompletions -InputPath $pathInput
-        } elseif ($Prefix) {
+        } elseif ($Prefix -and -not $Quote) {
             Get-CurlPathCompletions -InputPath $pathInput -Prefix ($Prefix + '@')
         } else {
-            # A leading '@' would start a splat, so the whole value is emitted quoted.
-            $valueQuote = if ($Quote) { $Quote } else { "'" }
-            Get-CurlPathCompletions -InputPath $pathInput -Prefix '@' -Quote $valueQuote
+            Get-CurlPathCompletions -InputPath $pathInput -Prefix $Prefix -ValuePrefix '@' -Quote $valueQuote
         })
 
         if ($results.Count -gt 0) {
@@ -773,8 +785,8 @@ function Get-CurlAtFileValueResults {
             return New-CurlLiteralValueResults -CurrentValue $pathInput -Placeholder $Placeholder -ToolTip $ToolTip
         }
 
-        if (-not $Prefix) {
-            return @(New-CurlCompletionResult -CompletionText (ConvertTo-CurlQuotedArgument -Value $typedValue -Quote $valueQuote) -ListItemText $typedValue -ResultType 'ParameterValue' -ToolTip $ToolTip)
+        if ($Quote -or -not $Prefix) {
+            return @(New-CurlCompletionResult -CompletionText ($Prefix + (ConvertTo-CurlQuotedArgument -Value $typedValue -Quote $valueQuote)) -ListItemText $typedValue -ResultType 'ParameterValue' -ToolTip $ToolTip)
         }
     }
 
@@ -974,7 +986,7 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
 
     Initialize-CurlCompletionCatalog
 
-    $currentToken = Get-CurlCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $currentToken = Get-CurlCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     $tokensBeforeCurrent = Get-CurlArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ($currentToken -match '^(--[^=]+)=(.*)$') {
@@ -998,7 +1010,7 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
 
     $pendingOption = Get-CurlPendingOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($pendingOption) {
-        return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $wordToComplete)
+        return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $currentToken)
     }
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]

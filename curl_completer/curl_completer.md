@@ -27,7 +27,7 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
 
     Initialize-CurlCompletionCatalog
 
-    $currentToken = Get-CurlCurrentToken -Line $commandAst.Extent.Text -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+    $currentToken = Get-CurlCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
     $tokensBeforeCurrent = Get-CurlArgumentTokens -CommandAst $commandAst -CursorPosition $cursorPosition
 
     if ($currentToken -match '^(--[^=]+)=(.*)$') {
@@ -51,7 +51,7 @@ Register-ArgumentCompleter -Native -CommandName 'curl', 'curl.exe' -ScriptBlock 
 
     $pendingOption = Get-CurlPendingOption -TokensBeforeCurrent $tokensBeforeCurrent
     if ($pendingOption) {
-        return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $wordToComplete)
+        return @(Get-CurlValueCompletions -OptionSpec $pendingOption -CurrentValue $currentToken)
     }
 
     $results = New-Object System.Collections.Generic.List[System.Management.Automation.CompletionResult]
@@ -103,7 +103,7 @@ The completer uses the placeholder text from curl help plus a small static overl
 - offer enum values such as `DER`, `PEM`, `P12`, `multicwd`, `singlecwd`, `active`, `passive`, TLS version hints, and the `--krb` levels `clear`, `safe`, `confidential`, `private`
 - complete `--upload-flags` as a comma list of `answered`, `deleted`, `draft`, `flagged`, `seen`, each optionally negated with a leading `-` (curl's own spelling; the names are case-sensitive)
 - complete protocol-bearing values like `http://`, `https://`, or protocol lists for `--proto`
-- complete file paths for options like `--config`, `--output`, `--trace`, `--key`, `--cacert`, and `--output-dir`
+- complete file paths for options like `--config`, `--output`, `--trace`, `--key`, `--cacert`, and `--output-dir`; a path that PowerShell would split or expand (spaces, `$`, `&`, `;`, `,`, parentheses, braces, backticks, quotes) is single-quoted, or kept in the quote you typed (`'`, `"`, or a typographic quote), and an attached `--output=` value is quoted after the `=` (`--output='a b.txt'`); a typed directory such as `.\` or `../` is kept as typed, and a name starting with a dash completes as `.\-name` so PowerShell does not read it as a parameter
 - treat `-d`, `--data`, `-H`, `--header`, `--proxy-header`, and `--variable` specially when the value uses `@file`-style syntax
 - read a separate `@file` value for `-d`/`-H` and their long forms from the parsed command elements: a leading `@` would start a PowerShell splat, so `'@.\` and `"@.\` complete to whole quoted values in the typed quote style (`'@.\data.json'`), and a bare `@` completes to single-quoted values
 - emit the documented `<placeholder>` for any other value-taking option, so a value slot never falls back to the option list
