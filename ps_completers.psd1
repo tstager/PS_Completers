@@ -971,7 +971,7 @@
         @{
             Path    = 'reg_completer/reg_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7C8E219465707A9137691E8AD201D3C47FCA8361ED6F8D30202729CB90ED1412'
+            Hash    = 'SHA256:1C50D2EBC40A4EADE0024081F74AF92FA2C91FD47CBBFC060D6E7A36D82E37E3'
             Targets = @(
                 @{ CommandName = 'reg'; Native = $true }
                 @{ CommandName = 'reg.exe'; Native = $true }

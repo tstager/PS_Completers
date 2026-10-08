@@ -147,7 +147,7 @@ function ConvertTo-RegQuotedValue {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
+    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]|^[-\u2013-\u2015]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
         $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
         return '"' + $escaped + '"'
     }
@@ -678,6 +678,19 @@ function Get-RegHintCompletions {
     }
 }
 
+function Add-RegDashPathPrefix {
+    param([string]$Path)
+
+    # PowerShell reads a word starting with a dash as a parameter, so a dash-led
+    # relative path gets the current-directory prefix, as PowerShell's own file
+    # completion does.
+    if ($Path -match '^[-\u2013-\u2015]') {
+        return '.' + [System.IO.Path]::DirectorySeparatorChar + $Path
+    }
+
+    $Path
+}
+
 function Get-RegFileCompletions {
     param(
         [string]$InputPath,
@@ -688,22 +701,17 @@ function Get-RegFileCompletions {
     $cleanInput = Remove-RegOuterQuotes -Value $InputPath
     $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The typed directory part (separators, .\ and drive prefix included) is kept
+    # verbatim on every candidate so no typed text is lost.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -lt 0 -and $cleanInput -match '^[A-Za-z]:') {
+        $separatorIndex = 1
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
+    $typedDirectory = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
+
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
@@ -714,14 +722,7 @@ function Get-RegFileCompletions {
     }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        }
-
+        $pathText = Add-RegDashPathPrefix -Path ($typedDirectory + $item.Name)
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
@@ -735,8 +736,9 @@ function Get-RegFileCompletions {
         -not ($cleanInput -match '[\\/]$') -and
         -not ($cleanInput -match '[\*\?]') -and
         -not [System.IO.Path]::HasExtension($cleanInput)) {
-        $suggested = ConvertTo-RegQuotedValue -Value ($cleanInput + $SuggestedExtension) -AlwaysQuote $alwaysQuote
-        New-RegCompletionResult -CompletionText $suggested -ListItemText ($cleanInput + $SuggestedExtension) -ResultType 'ParameterValue' -ToolTip 'Suggested file path'
+        $suggestedPath = Add-RegDashPathPrefix -Path ($cleanInput + $SuggestedExtension)
+        $suggested = ConvertTo-RegQuotedValue -Value $suggestedPath -AlwaysQuote $alwaysQuote
+        New-RegCompletionResult -CompletionText $suggested -ListItemText $suggestedPath -ResultType 'ParameterValue' -ToolTip 'Suggested file path'
     }
 }
 
