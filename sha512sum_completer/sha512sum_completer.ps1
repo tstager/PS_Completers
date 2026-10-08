@@ -12,7 +12,7 @@ function Get-Sha512sumCompletionOptions {
     $fallbackOptions = @('-b', '--binary', '-c', '--check', '-w', '--warn', '--status', '--quiet', '--strict', '--ignore-missing', '--tag', '-t', '--text', '-z', '--zero', '-h', '--help', '-V', '--version')
     $commandCandidates = @('sha512sum.exe', 'sha512sum')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -84,64 +84,71 @@ function New-Sha512sumCompletionResult {
     )
 }
 
-function Remove-Sha512sumOuterQuotes {
+function ConvertFrom-Sha512sumTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-Sha512sumQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-Sha512sumQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-Sha512sumCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-Sha512sumPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-Sha512sumOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-Sha512sumTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -158,27 +165,30 @@ function Get-Sha512sumPathCompletions {
         $leaf = Split-Path -Path $cleanInput -Leaf
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
+    # Candidates keep the directory part exactly as typed (including a leading .\ or ./).
+    $typedDirectory = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/:') + 1)
+    $separator = if ($typedDirectory -match '[\\/]$') { $typedDirectory[-1] } else { [System.IO.Path]::DirectorySeparatorChar }
+
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+
+        # A bare word starting with a dash parses as a parameter; anchor it to the current directory.
+        if (-not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + $separator + $pathText
         }
 
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer -and -not $pathText.EndsWith($separator)) {
+            $pathText += $separator
         }
 
-        $quotedPath = ConvertTo-Sha512sumQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-Sha512sumQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-Sha512sumCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -198,15 +208,15 @@ function Complete-Sha512sumOperand {
     # directory exists, and emit only the piece PowerShell will replace.
     $head = ''
     $inputPath = $CurrentWord
-    if (-not ($CurrentWord.StartsWith('"') -or $CurrentWord.StartsWith("'"))) {
-        $operands = @($TokensBeforeCurrent | Where-Object { -not $_.StartsWith('-') -and -not $_.Contains('"') -and -not $_.Contains("'") })
+    if ($CurrentWord -notmatch '^[''"\u2018-\u201E]') {
+        $operands = @($TokensBeforeCurrent | Where-Object { -not $_.StartsWith('-') -and $_ -notmatch '[''"\u2018-\u201E]' })
         $joined = $CurrentWord
         $joinedHead = ''
         for ($i = $operands.Count - 1; $i -ge [Math]::Max(0, $operands.Count - 3); $i--) {
             $joinedHead = $operands[$i] + ' ' + $joinedHead
             $joined = $operands[$i] + ' ' + $joined
             $parent = if ($joined -match '[\\/]+$') { $joined } else { Split-Path -Path $joined -Parent }
-            if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path -LiteralPath $parent -PathType Container)) {
+            if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
                 $head = $joinedHead
                 $inputPath = $joined
                 break
@@ -216,11 +226,11 @@ function Complete-Sha512sumOperand {
 
     $results = @(Get-Sha512sumPathCompletions -InputPath $inputPath)
     if ($head) {
-        # The line is unquoted, so the emitted piece stays unquoted too (ListItemText is the bare path).
+        # Only the last piece is replaced, so it is quoted on its own (ListItemText is the bare path).
         $results = @(
             foreach ($result in $results) {
                 if ($result.ListItemText.StartsWith($head, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    New-Sha512sumCompletionResult -CompletionText $result.ListItemText.Substring($head.Length) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
+                    New-Sha512sumCompletionResult -CompletionText (ConvertTo-Sha512sumQuotedValue -Value $result.ListItemText.Substring($head.Length)) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
                 }
             }
         )
@@ -294,17 +304,14 @@ function Get-Sha512sumOptionDescription {
 }
 
 function Complete-Sha512sum {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete spans past the cursor and unescapes quotes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-Sha512sumCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-Sha512sumCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $tokensBeforeCurrent = @(
         foreach ($element in ($commandAst.CommandElements | Select-Object -Skip 1)) {
