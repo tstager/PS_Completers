@@ -94,31 +94,52 @@ function Remove-RuOuterQuotes {
         return ''
     }
 
-    # An open quote has no closing partner yet. Single-quoted text is literal
-    # apart from a doubled quote; elsewhere a backtick escapes the next character.
-    if ($Value.StartsWith("'")) {
-        return ($Value -replace "^'|'$", '').Replace("''", "'")
+    # A word opened with a quote (ASCII or typographic) is read by the PowerShell
+    # tokenizer, which drops the quotes and undoes that quote style's escapes, even
+    # when the quote has no closing partner yet. Elsewhere a backtick escapes the
+    # next character.
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        $tokens = $null
+        $parseErrors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+        return $tokens[0].Value
     }
 
-    [regex]::Replace(($Value -replace '^"', ''), '`(.)|"$', { param($match) $match.Groups[1].Value })
+    [regex]::Replace($Value, '`(.)|"$', { param($match) $match.Groups[1].Value })
+}
+
+function Get-RuTypedQuote {
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') { $Value.Substring(0, 1) } else { '' }
 }
 
 function ConvertTo-RuQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '[\s{}();,|&<>''"`$]') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Initialize-RuCompletionCatalog {
@@ -310,41 +331,38 @@ function Get-RuFileCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-RuOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quoteChar = Get-RuTypedQuote -Value $InputPath
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
+    # The typed directory part (through the last separator) is kept verbatim, so a typed
+    # .\ or ./ prefix and the typed separator style survive.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -ge 0) {
+        $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+        $parent = $directoryText
+    } elseif ($cleanInput -match '^[A-Za-z]:') {
+        $directoryText = $cleanInput.Substring(0, 2)
+        $parent = $directoryText
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $directoryText = ''
+        $parent = '.'
     }
+    $leaf = $cleanInput.Substring($directoryText.Length)
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+        if (-not $directoryText -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A bare word starting with a dash parses as a parameter; anchor it to the current directory.
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quoted = ConvertTo-RuQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quoted = ConvertTo-RuQuotedValue -Value $pathText -QuoteChar $quoteChar
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
         New-RuCompletionResult -CompletionText $quoted -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
@@ -374,7 +392,10 @@ function Get-RuLevelCompletions {
 }
 
 function Get-RuRootSuggestions {
-    param([string]$CurrentValue)
+    param(
+        [string]$CurrentValue,
+        [string]$QuoteChar = ''
+    )
 
     $cleanCurrent = Remove-RuOuterQuotes -Value $CurrentValue
     $preferLongNames = $cleanCurrent.StartsWith('HKEY_', [System.StringComparison]::OrdinalIgnoreCase)
@@ -382,7 +403,7 @@ function Get-RuRootSuggestions {
         $displayRoot = if ($preferLongNames) { $script:RuCompletionCatalog.RootLongNames[$root] } else { $root }
         $candidate = $displayRoot + '\'
         if ($candidate.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase) -or $displayRoot.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-RuCompletionResult -CompletionText $candidate -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Absolute registry path for ru: ' + $displayRoot)
+            New-RuCompletionResult -CompletionText (ConvertTo-RuQuotedValue -Value $candidate -QuoteChar $QuoteChar) -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Absolute registry path for ru: ' + $displayRoot)
         }
     }
 }
@@ -462,20 +483,20 @@ function Get-RuRegistryPathCompletions {
     param([string]$CurrentValue)
 
     $cleanCurrent = Remove-RuOuterQuotes -Value $CurrentValue
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentValue) -and ($CurrentValue.StartsWith('"') -or $CurrentValue.StartsWith("'"))
+    $quoteChar = Get-RuTypedQuote -Value $CurrentValue
 
     if ([string]::IsNullOrWhiteSpace($cleanCurrent)) {
-        return @(Get-RuRootSuggestions -CurrentValue '')
+        return @(Get-RuRootSuggestions -CurrentValue '' -QuoteChar $quoteChar)
     }
 
     if ($cleanCurrent -notmatch '\\') {
-        return @(Get-RuRootSuggestions -CurrentValue $cleanCurrent)
+        return @(Get-RuRootSuggestions -CurrentValue $cleanCurrent -QuoteChar $quoteChar)
     }
 
     $segments = $cleanCurrent -split '\\', 2
     $typedRoot = $segments[0].ToUpperInvariant()
     if (-not $script:RuCompletionCatalog.RootCanonicalByAlias.ContainsKey($typedRoot)) {
-        return @(Get-RuRootSuggestions -CurrentValue $cleanCurrent)
+        return @(Get-RuRootSuggestions -CurrentValue $cleanCurrent -QuoteChar $quoteChar)
     }
 
     $canonicalRoot = $script:RuCompletionCatalog.RootCanonicalByAlias[$typedRoot]
@@ -528,7 +549,7 @@ function Get-RuRegistryPathCompletions {
             $displayRoot + '\' + $prefixPath + '\' + $childName + '\'
         }
 
-        $quoted = ConvertTo-RuQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        $quoted = ConvertTo-RuQuotedValue -Value $candidate -QuoteChar $quoteChar
         New-RuCompletionResult -CompletionText $quoted -ListItemText $candidate -ResultType 'ParameterValue' -ToolTip ('Absolute registry path for ru: ' + $candidate.TrimEnd('\'))
     }
 }
