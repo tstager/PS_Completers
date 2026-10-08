@@ -85,64 +85,106 @@ function New-SplitCompletionResult {
     )
 }
 
-function Remove-SplitOuterQuotes {
+function Get-SplitTypedQuote {
+    # The quote family the user opened the word with: ' (also U+2018-U+201B), " (also U+201C-U+201E), or '' when bare.
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ($Value -match '^[''\u2018-\u201B]') {
+        return "'"
+    }
+
+    if ($Value -match '^["\u201C-\u201E]') {
+        return '"'
+    }
+
+    ''
+}
+
+function ConvertFrom-SplitTypedWord {
+    # The value of a typed word as the PowerShell parser reads it; an unterminated quote still yields its text.
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-SplitQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Value
-    }
-
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$null, [ref]$null)
+    $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    if ($null -ne $command -and $command.CommandElements.Count -eq 2 -and $command.CommandElements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        return $command.CommandElements[1].Value
     }
 
     $Value
 }
 
+function Get-SplitClosedWord {
+    # The typed word as one finished argument: kept verbatim, with an unterminated quote closed in its own family.
+    param([string]$Value)
+
+    $errors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$null, [ref]$errors)
+    if (-not @($errors | Where-Object { $_.ErrorId -eq 'TerminatorExpectedAtEndOfString' })) {
+        return $Value
+    }
+
+    if ([regex]::Match($Value, '[''"\u2018-\u201E]').Value -match '[''\u2018-\u201B]') {
+        return $Value + "'"
+    }
+
+    $Value + '"'
+}
+
+function ConvertTo-SplitQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default).
+    param(
+        [string]$Value,
+        [string]$Quote
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -eq "'") {
+        return "'" + ($Value -replace '([''\u2018-\u201B])', '$1$1') + "'"
+    }
+
+    '"' + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + '"'
+}
+
 function Get-SplitCurrentToken {
     param(
-        [string]$Line,
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
         [int]$CursorPosition,
         [string]$Fallback
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word as one element running past the cursor, so
+    # the element under the cursor is the whole typed word even when it holds spaces.
+    foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            return $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
+    # Between words, where PowerShell's own word is empty too.
     $Fallback
 }
 
 function Get-SplitPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-SplitOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-SplitTypedWord -Value $InputPath
+    $quote = Get-SplitTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -163,7 +205,7 @@ function Get-SplitPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -179,7 +221,7 @@ function Get-SplitPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-SplitQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-SplitQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-SplitCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -290,6 +332,11 @@ function Get-SplitOptionValueCompletions {
         return @()
     }
 
+    # --numeric-suffixes and --hex-suffixes take FROM only in the attached form; a separate word is the INPUT operand.
+    if ($attached -eq '' -and $option -cin @('--numeric-suffixes', '--hex-suffixes')) {
+        return @()
+    }
+
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
@@ -299,14 +346,32 @@ function Get-SplitOptionValueCompletions {
         )
     }
 
+    # PowerShell replaces the whole word under the cursor, so the typed text after the cursor
+    # belongs to the value too: candidates must start with all of it, and the echo keeps it.
+    foreach ($element in $commandAst.CommandElements) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -lt $element.Extent.EndOffset) {
+            $prefix += $element.Extent.Text.Substring($CursorPosition - $element.Extent.StartOffset)
+        }
+    }
+
+    $quote = Get-SplitTypedQuote -Value $prefix
+    $value = ConvertFrom-SplitTypedWord -Value $prefix
     $values = if ($spec -is [scriptblock]) { @(& $spec) } else { @($spec) }
-    @(
+    $results = @(
         foreach ($entry in $values) {
-            if ($entry.Text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-                New-SplitCompletionResult -CompletionText ($attached + $entry.Text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
+            if ($entry.Text.StartsWith($value, [System.StringComparison]::Ordinal)) {
+                $text = if ($quote) { ConvertTo-SplitQuotedValue -Value $entry.Text -Quote $quote } else { $entry.Text }
+                New-SplitCompletionResult -CompletionText ($attached + $text) -ListItemText $entry.Text -ResultType 'ParameterValue' -ToolTip $entry.Tip
             }
         }
     )
+    if ($results.Count -gt 0) {
+        return $results
+    }
+
+    # A free-form value keeps what the user typed: an empty result would hand the slot to
+    # PowerShell's filename fallback, which lists paths for a SIZE or separator.
+    @(New-SplitCompletionResult -CompletionText ($attached + (Get-SplitClosedWord -Value $prefix)) -ListItemText $value -ResultType 'ParameterValue' -ToolTip "$option value")
 }
 
 function Get-SplitOptionDescription {
@@ -327,11 +392,7 @@ function Complete-Split {
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-SplitCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-SplitCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -Fallback $wordToComplete
 
     $optionValues = @(Get-SplitOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord -CursorPosition $cursorPosition)
     if ($optionValues.Count -gt 0) {

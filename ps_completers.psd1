@@ -1206,7 +1206,7 @@
         @{
             Path    = 'split_completer/split_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:90B7459556D4253EC593C2FF78C13A5C908F2C5E488688EF3CAC96DEF38E4FE0'
+            Hash    = 'SHA256:1988BC59662D47F3B8A58E8DFCBF655B71BA5458D5B0B24424F13691DB6F80BD'
             Targets = @(
                 @{ CommandName = 'split'; Native = $true }
                 @{ CommandName = 'split.exe'; Native = $true }
