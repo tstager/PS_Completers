@@ -12,7 +12,7 @@ function Get-TouchCompletionOptions {
     $fallbackOptions = @('-a', '-t', '-d', '--date', '-f', '-m', '-c', '--no-create', '-h', '--no-dereference', '-r', '--reference', '--time', '-V', '--version', '--help')
     $commandCandidates = @('touch.exe', 'touch')
     foreach ($candidate in $commandCandidates) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $command = Get-Command -Name $candidate -ErrorAction Ignore
         if ($null -eq $command) {
             continue
         }
@@ -85,64 +85,97 @@ function New-TouchCompletionResult {
     )
 }
 
-function Remove-TouchOuterQuotes {
+function Get-TouchTypedQuote {
+    # The quote character the user opened the word with, typographic ones included ('' when bare).
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        return $Value.Substring(0, 1)
+    }
+
+    ''
+}
+
+function Remove-TouchOuterQuotes {
+    # The argument value of a typed word. The parser drops the quotes and undoes that quote
+    # style's escapes (every doubled single-quote character, backticks); an open quote is closed first.
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $quote = Get-TouchTypedQuote -Value $Value
+    foreach ($text in @($Value, ($Value + $quote))) {
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput('touch ' + $text, [ref]$null, [ref]$parseErrors)
+        $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+        if (@($parseErrors).Count -gt 0 -or $null -eq $command -or $command.CommandElements.Count -ne 2) {
+            continue
+        }
+
+        $element = $command.CommandElements[1]
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+            return $element.Value
+        }
+
+        return $element.Extent.Text
+    }
+
+    $Value.Substring($quote.Length)
 }
 
 function ConvertTo-TouchQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote character (single by default). Whitespace and argument-mode
+    # metacharacters (including the typographic quotes) end or split a bare word, and a
+    # leading '@' or '#' would start a splat or a comment.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$Quote
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $Quote) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$\u2018-\u201E]' -and $Value -notmatch '^[@#]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    $Value
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
+    }
+
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-TouchCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quote as one element running to the cursor.
+    foreach ($element in $CommandAst.CommandElements) {
+        $extent = $element.Extent
+        if ($CursorPosition -gt $extent.StartOffset -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-TouchPathCompletions {
     param([string]$InputPath)
 
     $cleanInput = Remove-TouchOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $quote = Get-TouchTypedQuote -Value $InputPath
 
     if ([string]::IsNullOrWhiteSpace($cleanInput)) {
         $parent = '.'
@@ -163,7 +196,7 @@ function Get-TouchPathCompletions {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
@@ -179,7 +212,7 @@ function Get-TouchPathCompletions {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-TouchQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-TouchQuotedValue -Value $pathText -Quote $quote
         if ($item.PSIsContainer) {
             New-TouchCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -276,17 +309,14 @@ function Get-TouchOptionDescription {
 }
 
 function Complete-Touch {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete closes an open quote and spans past the cursor.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
         [int]$cursorPosition
     )
 
-    $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
-        ''
-    } else {
-        Get-TouchCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    $currentWord = Get-TouchCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
 
     $optionValues = @(Get-TouchOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
     if ($optionValues.Count -gt 0) {

@@ -1323,7 +1323,7 @@
         @{
             Path    = 'touch_completer/touch_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7230B7F4DF0ED5B8EB4A30B554C7405B15DFCA53276923DC41736DC52ECDD688'
+            Hash    = 'SHA256:6F66C0E0F2393A725853D3107D10928EF3D5CB8DCDB3BC9AA8E06355B6ABCBF4'
             Targets = @(
                 @{ CommandName = 'touch'; Native = $true }
                 @{ CommandName = 'touch.exe'; Native = $true }
