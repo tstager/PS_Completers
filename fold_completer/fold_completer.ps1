@@ -148,8 +148,8 @@ function ConvertTo-FoldQuotedValue {
         return $Value
     }
 
-    # Whitespace, argument-mode metacharacters and the typographic quotes split or change a bare word.
-    if (-not $AlwaysQuote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+    # Whitespace, argument-mode metacharacters, the typographic quotes and a leading dash split or change a bare word.
+    if (-not $AlwaysQuote -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
         return $Value
     }
 
@@ -183,21 +183,15 @@ function Get-FoldPathCompletions {
     $cleanInput = ConvertFrom-FoldTypedWord -Value $InputPath
     $alwaysQuote = [bool]$quoteChar
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The directory part is kept exactly as typed (a leading .\ or ./ included), so no typed text is lost.
+    $typedDirectory = ''
+    $leaf = $cleanInput
+    if ($cleanInput -match '^(?<dir>.*[\\/]|[A-Za-z]:)(?<leaf>[^\\/]*)$') {
+        $typedDirectory = $Matches['dir']
+        $leaf = $Matches['leaf']
     }
 
+    $parent = if ($typedDirectory) { $typedDirectory } else { '.' }
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
     }
@@ -206,10 +200,10 @@ function Get-FoldPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $typedDirectory + $item.Name
+        # A bare word starting with a dash is read as a parameter; PowerShell's own completion adds .\ here.
+        if (-not $typedDirectory -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {

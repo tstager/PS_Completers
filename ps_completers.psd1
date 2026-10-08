@@ -399,7 +399,7 @@
         @{
             Path    = 'fold_completer/fold_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:7C673D9952BF64B4442A36924EABA7F6B3BFB873B575C1728D02249D6D0FFEC1'
+            Hash    = 'SHA256:0F1B18B886741AFD4C2ADBB147C9055A17D46A7F8FD207DCEFEB0840E6DCC854'
             Targets = @(
                 @{ CommandName = 'fold'; Native = $true }
                 @{ CommandName = 'fold.exe'; Native = $true }
