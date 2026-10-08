@@ -1305,7 +1305,7 @@
         @{
             Path    = 'test_completer/test_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:83461A33F6E75F3B1A358336A09451D49C77DAA541D3EA63DC13DA09787C85D9'
+            Hash    = 'SHA256:B91015CDDD4F6571079527191AFCD830F4937EE47DB869B42B900715FD7F072F'
             Targets = @(
                 @{ CommandName = 'test'; Native = $true }
                 @{ CommandName = 'test.exe'; Native = $true }

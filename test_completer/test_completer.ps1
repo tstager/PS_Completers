@@ -97,60 +97,71 @@ function New-TestCompletionResult {
     )
 }
 
-function Remove-TestOuterQuotes {
+function ConvertFrom-TestTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-TestQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-TestQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-TestLineState {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [string]$WordToComplete,
         [int]$CursorPosition
     )
 
-    $line = $CommandAst.Extent.Text
-    $relative = $CursorPosition - $CommandAst.Extent.StartOffset
-    $safeCursor = [Math]::Min([Math]::Max($relative, 0), $line.Length)
-    $prefix = $line.Substring(0, $safeCursor)
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value })
-
+    # Words come from the parser, so a quoted word with spaces (even an unterminated
+    # one, which runs to the cursor) is one word.
     $currentWord = ''
-    if ($CursorPosition -le $CommandAst.Extent.EndOffset -and $prefix -notmatch '\s$') {
-        if ($parts.Count -gt 0) {
-            $currentWord = $parts[-1]
-            $parts = @($parts | Select-Object -First ($parts.Count - 1))
-        } else {
-            $currentWord = $WordToComplete
-        }
-    }
-
     $operands = @()
-    if ($parts.Count -gt 1) {
-        $operands = @($parts | Select-Object -Skip 1)
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.EndOffset -lt $CursorPosition) {
+            $operands += $extent.Text
+            continue
+        }
+
+        if ($extent.StartOffset -lt $CursorPosition) {
+            $currentWord = $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
+
+        break
     }
 
     [pscustomobject]@{
@@ -159,102 +170,46 @@ function Get-TestLineState {
     }
 }
 
-function Get-TestPathParent {
-    param([string]$Candidate)
-
-    if ([string]::IsNullOrWhiteSpace($Candidate)) {
-        return '.'
-    }
-
-    if ($Candidate -match '[\\/]+$') {
-        return $Candidate
-    }
-
-    $parent = Split-Path -Path $Candidate -Parent
-    if ([string]::IsNullOrWhiteSpace($parent)) {
-        return '.'
-    }
-
-    $parent
-}
-
-function Test-TestPathContainer {
-    param([string]$Candidate)
-
-    if ([string]::IsNullOrWhiteSpace($Candidate)) {
-        return $false
-    }
-
-    Test-Path -LiteralPath $Candidate -PathType Container
-}
-
 function Get-TestPathCompletions {
-    param(
-        [string]$InputPath,
-        [string[]]$Operands = @()
-    )
+    param([string]$InputPath)
 
-    $cleanInput = Remove-TestOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-TestTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    # An unquoted path containing a space arrives split across several words.
-    # Walk left over the plain operands already on the line, rejoining them
-    # until the candidate resolves to a real directory; the line prefix that
-    # was rejoined is then stripped back off every completion, because the
-    # engine only replaces the last whitespace-delimited fragment.
-    $linePrefix = ''
-    if (-not $alwaysQuote -and -not (Test-TestPathContainer -Candidate (Get-TestPathParent -Candidate $cleanInput))) {
-        for ($i = $Operands.Count - 1; $i -ge 0; $i--) {
-            $fragment = $Operands[$i]
-            if ($fragment.StartsWith('-') -or $null -ne (Get-TestOperatorSpec -Token $fragment)) { break }
-            $candidatePrefix = ((@($Operands | Select-Object -Skip $i)) -join ' ') + ' '
-            $candidate = $candidatePrefix + $cleanInput
-            if (Test-TestPathContainer -Candidate (Get-TestPathParent -Candidate $candidate)) {
-                $linePrefix = $candidatePrefix
-                $cleanInput = $candidate
-                break
-            }
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
+    # The typed directory part (up to the last separator) is kept exactly as typed,
+    # so a typed .\ or ./ prefix survives.
+    $lastSeparator = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($lastSeparator -ge 0) {
+        $directoryText = $cleanInput.Substring(0, $lastSeparator + 1)
+        $parent = $directoryText
+        $leaf = $cleanInput.Substring($lastSeparator + 1)
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $directoryText = ''
+        $parent = '.'
+        $leaf = $cleanInput
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = @($items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
+        # A bare relative name starting with a dash would parse as a parameter, so it
+        # gets the current-directory prefix, as PowerShell's own file completion does.
+        $pathText = if ($directoryText -eq '' -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $directoryText + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = if ($linePrefix) {
-            $pathText.Substring($linePrefix.Length)
-        } else {
-            ConvertTo-TestQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        }
+        $completionText = ConvertTo-TestQuotedValue -Value $pathText -QuoteChar $quoteChar
 
         if ($item.PSIsContainer) {
             New-TestCompletionResult -CompletionText $completionText -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
@@ -301,7 +256,7 @@ function Complete-Test {
         [int]$cursorPosition
     )
 
-    $state = Get-TestLineState -CommandAst $commandAst -WordToComplete $wordToComplete -CursorPosition $cursorPosition
+    $state = Get-TestLineState -CommandAst $commandAst -CursorPosition $cursorPosition
     $currentWord = $state.CurrentWord
     $operands = @($state.Operands)
 
@@ -331,14 +286,14 @@ function Complete-Test {
     # '(' and ')' only reach a native completer in their quoted form, because
     # PowerShell parses a bare parenthesis as a sub-expression, so the quoted
     # spelling is echoed back when the typed word is quoted.
-    $bareWord = Remove-TestOuterQuotes -Value $currentWord
+    $bareWord = ConvertFrom-TestTypedWord -Value $currentWord
     if (-not [string]::IsNullOrEmpty($bareWord)) {
-        $quoted = $bareWord -ne $currentWord
+        $quoteChar = if ($currentWord -match '^[''"\u2018-\u201E]') { $currentWord.Substring(0, 1) } else { '' }
         $operatorMatches = @(
             foreach ($spec in Get-TestOperatorCatalog) {
                 if ($spec.Token.StartsWith('-')) { continue }
                 if (-not $spec.Token.StartsWith($bareWord, [System.StringComparison]::Ordinal)) { continue }
-                $text = if ($quoted) { "'" + $spec.Token + "'" } else { $spec.Token }
+                $text = ConvertTo-TestQuotedValue -Value $spec.Token -QuoteChar $quoteChar
                 New-TestCompletionResult -CompletionText $text -ListItemText $spec.Token -ResultType 'ParameterName' -ToolTip $spec.Description
             }
         )
@@ -347,7 +302,7 @@ function Complete-Test {
         }
     }
 
-    Get-TestPathCompletions -InputPath $currentWord -Operands $operands
+    Get-TestPathCompletions -InputPath $currentWord
 }
 
 Register-ArgumentCompleter -Native -CommandName 'test', 'test.exe' -ScriptBlock {

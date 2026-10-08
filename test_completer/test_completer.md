@@ -73,11 +73,16 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
   a native completer for it, so those two are reachable in their quoted form (`test '('`), and
   the completer echoes the quoted spelling back.
 - Operand slots use filesystem path completion, with wildcard characters in the typed text escaped.
-- An unquoted path containing a space arrives split across several words. The completer walks
-  left over the plain operands already on the line, rejoining them until the candidate resolves
-  to a real directory, and then strips that rejoined prefix from every completion because the
-  engine only replaces the last whitespace-delimited fragment.
-- The current word is located by rebasing the cursor to the command's start offset, so completion works when the command is not the first statement on the line.
+- Path candidates are returned as one constant PowerShell argument. A name is left bare only when
+  no quote was typed and it holds no whitespace or PowerShell metacharacter (`{ } ( ) ; , | & < >`,
+  quotes, backtick, `$`, `@`, `#`); otherwise it is quoted in the quote the user typed (single by
+  default), doubling single quotes or backtick-escaping backtick, `"` and `$` inside double quotes.
+  Typographic quotes count as the quotes PowerShell reads them as. The list entry stays the plain name.
+- The current word is the command element under the cursor as the PowerShell parser read it, so a
+  quoted path with spaces (even an unterminated one) is one word, and a word opened with a quote is
+  read by the tokenizer. Completion works when the command is not the first statement on the line.
+- An unquoted path containing a space is several arguments to PowerShell and a completer can only
+  replace the last one, so it gets no completions; quote it (`test -e 'C:\Program Files\`).
 - The catalog probe uses `-ErrorAction Ignore` so a cold load adds nothing to `$Error`.
 
 ## Representative validation scenarios
@@ -85,7 +90,7 @@ There are no top-level assignments, loops, helper invocations, or runtime setup 
 ```powershell
 test -
 test -t
-test -e C:\Program Files\
+test -e 'C:\Program Files\
 test '('
 ```
 
@@ -93,7 +98,7 @@ Expected behavior:
 
 - `-` shows every hyphen operator with its GNU description
 - `test -t ` offers the file descriptors `0`, `1`, `2` and `<fd>` instead of filenames
-- `test -e C:\Program Files\` offers `Files\<child>` completions instead of nothing
+- `test -e 'C:\Program Files\` offers `'C:\Program Files\<child>'` completions
 - `test '('` offers the quoted grouping operators
 - the completer remains importable through `Import-CompleterScript`
 
