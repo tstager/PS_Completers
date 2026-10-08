@@ -696,11 +696,9 @@ function Get-NpmCanonicalSubcommands {
         return
     }
 
-    $staticCommands = if ((Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
-        @((Get-NpmCompletionCache).StaticTree[$cacheKey])
-    } else {
-        @()
-    }
+    $staticCommands = @(if ((Get-NpmCompletionCache).StaticTree.ContainsKey($cacheKey)) {
+        (Get-NpmCompletionCache).StaticTree[$cacheKey]
+    })
 
     $helpData = Get-NpmHelpData -Path $Path
     Get-NpmUniqueStrings -Items ($staticCommands + $helpData.Commands)
