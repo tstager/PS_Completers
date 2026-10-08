@@ -808,7 +808,7 @@
         @{
             Path    = 'psgetsid_completer/psgetsid_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:3B269BFFBCB60A4221AF63A8FB4E180FFE7DBC887F3DC508A34C1152AFFE4583'
+            Hash    = 'SHA256:061AD670C62955DF6CF525D6D517CF70A1BF1BA7C773CFB768B91A0180AFE956'
             Targets = @(
                 @{ CommandName = 'psgetsid'; Native = $true }
                 @{ CommandName = 'PsGetsid.exe'; Native = $true }

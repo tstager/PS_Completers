@@ -72,36 +72,51 @@ function Initialize-PsGetsidCompletionCatalog {
     $script:PsGetsidCompletionCatalog.Initialized = $true
 }
 
-function Remove-PsGetsidOuterQuotes {
+function ConvertFrom-PsGetsidTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
     if ([string]::IsNullOrEmpty($Value)) {
         return ''
     }
 
-    if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
-        return $Value.Substring(1, $Value.Length - 2)
-    }
-
-    $Value.TrimStart('"')
-}
-
-function ConvertTo-PsGetsidQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-PsGetsidQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function ConvertTo-PsGetsidSwitchKey {
@@ -137,7 +152,7 @@ function Test-PsGetsidRemoteTargetToken {
         return $false
     }
 
-    $unquoted = Remove-PsGetsidOuterQuotes -Value $Token
+    $unquoted = ConvertFrom-PsGetsidTypedWord -Value $Token
     $unquoted.StartsWith('\\') -or $unquoted.StartsWith('@')
 }
 
@@ -180,7 +195,7 @@ function Get-PsGetsidPlaceholderValueCompletions {
         [string]$GenericToolTip
     )
 
-    $typedValue = Remove-PsGetsidOuterQuotes -Value $CurrentWord
+    $typedValue = ConvertFrom-PsGetsidTypedWord -Value $CurrentWord
     $results = New-Object System.Collections.Generic.List[object]
 
     foreach ($candidate in $Candidates) {
@@ -202,7 +217,7 @@ function Get-PsGetsidPlaceholderValueCompletions {
 function Get-PsGetsidAtFileCompletions {
     param([string]$CurrentWord)
 
-    $trimmedCurrentWord = Remove-PsGetsidOuterQuotes -Value $CurrentWord
+    $trimmedCurrentWord = ConvertFrom-PsGetsidTypedWord -Value $CurrentWord
     $pathPortion = if ($trimmedCurrentWord.StartsWith('@')) {
         $trimmedCurrentWord.Substring(1)
     } else {
@@ -211,6 +226,9 @@ function Get-PsGetsidAtFileCompletions {
 
     if ([string]::IsNullOrWhiteSpace($pathPortion)) {
         $parent = '.'
+        $leaf = ''
+    } elseif ($pathPortion -match '[\\/]$') {
+        $parent = $pathPortion
         $leaf = ''
     } else {
         $parent = Split-Path -Path $pathPortion -Parent
@@ -222,12 +240,15 @@ function Get-PsGetsidAtFileCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($CurrentWord) -and $CurrentWord.StartsWith('"')
-    $items = @(Get-ChildItem -Path $parent -Filter $filter -ErrorAction SilentlyContinue)
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+    $items = @(Get-ChildItem -LiteralPath $parent -Filter $filter -ErrorAction Ignore)
+
+    # A typed directory (.\, ./, ..\, sub\, C:/x/) is kept exactly as typed, separators included.
+    $typedDirectory = if ($pathPortion -match '^(.*[\\/])') { $Matches[1] } else { '' }
 
     $results = @(foreach ($item in $items) {
-        $completionPath = if ($pathPortion -and -not [System.IO.Path]::IsPathRooted($pathPortion) -and $parent -ne '.') {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $completionPath = if ($typedDirectory) {
+            $typedDirectory + $item.Name
         } else {
             $item.FullName
         }
@@ -236,9 +257,10 @@ function Get-PsGetsidAtFileCompletions {
             $completionPath += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-PsGetsidQuotedValue -Value ('@' + $completionPath) -AlwaysQuote:$alwaysQuote
+        # The whole '@path' word is quoted so it stays one constant argument.
+        $completionText = ConvertTo-PsGetsidQuotedValue -Value ('@' + $completionPath) -QuoteChar $quoteChar
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
-        New-PsGetsidCompletionResult -CompletionText $completionText -ResultType $resultType -ToolTip $item.FullName
+        New-PsGetsidCompletionResult -CompletionText $completionText -ListItemText ('@' + $item.Name) -ResultType $resultType -ToolTip $item.FullName
     })
 
     if ($results.Count -gt 0) {
@@ -262,7 +284,7 @@ function Get-PsGetsidAtFileCompletions {
 function Get-PsGetsidRemoteTargetCompletions {
     param([string]$CurrentWord)
 
-    $trimmedCurrentWord = Remove-PsGetsidOuterQuotes -Value $CurrentWord
+    $trimmedCurrentWord = ConvertFrom-PsGetsidTypedWord -Value $CurrentWord
 
     if ($trimmedCurrentWord.StartsWith('@')) {
         return @(Get-PsGetsidAtFileCompletions -CurrentWord $CurrentWord)
@@ -452,6 +474,47 @@ function Get-PsGetsidCommandState {
     }
 }
 
+function Get-PsGetsidCurrentToken {
+    param(
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
+    )
+
+    # The parser keeps an unterminated quoted word as one element running to the cursor; in a
+    # remote list ('\\a,\\b') the engine completes the list element under the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $parts = if ($element -is [System.Management.Automation.Language.ArrayLiteralAst]) { $element.Elements } else { @($element) }
+        foreach ($part in $parts) {
+            $extent = $part.Extent
+            if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+                return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+            }
+        }
+    }
+
+    ''
+}
+
+function ConvertTo-PsGetsidQuotedResult {
+    # Re-renders results computed from a quoted word's value inside the quote the user typed.
+    param(
+        [string]$QuoteChar,
+        [object[]]$Result
+    )
+
+    if (-not $QuoteChar) {
+        return $Result
+    }
+
+    @(foreach ($item in $Result) {
+        New-PsGetsidCompletionResult `
+            -CompletionText (ConvertTo-PsGetsidQuotedValue -Value $item.CompletionText -QuoteChar $QuoteChar) `
+            -ListItemText $item.ListItemText `
+            -ResultType $item.ResultType `
+            -ToolTip $item.ToolTip
+    })
+}
+
 function Complete-PsGetsid {
     param(
         [string]$wordToComplete,
@@ -466,8 +529,12 @@ function Complete-PsGetsid {
     $line = $commandAst.Extent.Text
     $relativeCursor = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $relativeCursor)
-    $hasTrailingSpace = ($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length -or $linePrefix -match '\s$'
-    $prefixTokens = @([regex]::Matches($linePrefix, '"[^"]*"?|\S+') | ForEach-Object { $_.Value })
+    # A token is a run of quoted segments (ASCII or typographic, open to the cursor) and bare
+    # characters, so a quoted word keeps its spaces; whitespace after the last token is a new word.
+    $prefixMatches = @([regex]::Matches($linePrefix, '(?:["\u201C-\u201E](?:`.|[^`"\u201C-\u201E])*["\u201C-\u201E]?|[''\u2018-\u201B](?:[''\u2018-\u201B]{2}|[^''\u2018-\u201B])*[''\u2018-\u201B]?|[^\s''"\u2018-\u201E])+'))
+    $prefixTokens = @($prefixMatches | ForEach-Object { $_.Value })
+    $tokensEnd = if ($prefixMatches.Count -gt 0) { $prefixMatches[-1].Index + $prefixMatches[-1].Length } else { 0 }
+    $hasTrailingSpace = ($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length -or $tokensEnd -lt $linePrefix.Length
     $argumentTokens = @($prefixTokens | Select-Object -Skip 1)
 
     $rawCurrentWord = ''
@@ -477,10 +544,20 @@ function Complete-PsGetsid {
         $tokensBeforeCurrent = @($argumentTokens | Select-Object -First ($argumentTokens.Count - 1))
     }
 
-    # The engine's word is preferred (it resolves $env: references and closes an open quote);
-    # a comma-separated remote list such as a trailing '\\a,' is an array literal to the
-    # parser and reaches us as an empty word, so fall back to the raw token then.
-    $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) { $rawCurrentWord } else { $wordToComplete }
+    # The word is the typed text of the parser element the engine replaces: the engine's own
+    # word is a quoted value re-wrapped in a plain quote with its escapes undone, which no longer
+    # reads back as what was typed. A trailing '\\a,' is an incomplete remote list and reaches
+    # us as an empty word, so fall back to the raw token then. A word that is no argument
+    # element (a redirection target) keeps the engine's word.
+    $currentWord = if ([string]::IsNullOrEmpty($wordToComplete)) {
+        $rawCurrentWord
+    } else {
+        Get-PsGetsidCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
+    }
+    if (-not $currentWord) {
+        $currentWord = $wordToComplete
+    }
+    $typedValue = ConvertFrom-PsGetsidTypedWord -Value $currentWord
 
     $state = Get-PsGetsidCommandState -TokensBeforeCurrent $tokensBeforeCurrent
     $usedSwitchLookup = $state.UsedSwitchLookup
@@ -506,13 +583,19 @@ function Complete-PsGetsid {
 
     $switchOrder = @(Get-PsGetsidAvailableSwitchOrder -State $state)
 
-    if ($currentWord.StartsWith('-') -or $currentWord.StartsWith('/')) {
-        return @(Get-PsGetsidSwitchCompletions -CurrentWord $currentWord -SwitchOrder $switchOrder)
+    $quoteChar = if ($currentWord -match '^[''"\u2018-\u201E]') { $currentWord.Substring(0, 1) } else { '' }
+
+    if ($typedValue.StartsWith('-') -or $typedValue.StartsWith('/')) {
+        return @(ConvertTo-PsGetsidQuotedResult -QuoteChar $quoteChar -Result @(Get-PsGetsidSwitchCompletions -CurrentWord $typedValue -SwitchOrder $switchOrder))
     }
 
     if (-not $state.RemoteTarget -and -not $state.Identity) {
-        if ($currentWord.StartsWith('\') -or $currentWord.StartsWith('@') -or $currentWord.StartsWith('"@')) {
+        if ($typedValue.StartsWith('@')) {
             return @(Get-PsGetsidRemoteTargetCompletions -CurrentWord $currentWord)
+        }
+
+        if ($typedValue.StartsWith('\')) {
+            return @(ConvertTo-PsGetsidQuotedResult -QuoteChar $quoteChar -Result @(Get-PsGetsidRemoteTargetCompletions -CurrentWord $typedValue))
         }
 
         $results = New-Object System.Collections.Generic.List[object]
