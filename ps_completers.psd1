@@ -722,7 +722,7 @@
         @{
             Path    = 'pip_completer/pip_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:4E735A10378A2E2A4C411928AAEB722E0621285A50EC6D16086EB80B0185D277'
+            Hash    = 'SHA256:DC3C2BFD8573040F6FE508C4B1E50B9F693C4403F4EAC0052F11CC47FD15DB56'
             Targets = @(
                 @{ CommandName = 'pip'; Native = $true }
                 @{ CommandName = 'pip.exe'; Native = $true }

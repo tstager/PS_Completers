@@ -414,29 +414,22 @@ function Get-PipOptionValues {
 function Get-PipPathValues {
     param([string]$InputPath)
 
-    if ([string]::IsNullOrWhiteSpace($InputPath)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($InputPath -match '[\\/]$') {
-        $parent = $InputPath
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $InputPath -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-        $leaf = Split-Path -Path $InputPath -Leaf
-    }
+    # Candidates keep the typed directory text (.\, ./, ..\, C:\...) exactly as typed.
+    $separator = $InputPath.LastIndexOfAny([char[]]'\/')
+    $directory = $InputPath.Substring(0, $separator + 1)
+    $leaf = $InputPath.Substring($separator + 1)
+    $parent = if ($directory) { $directory } else { '.' }
+    $separatorChar = if ($separator -ge 0) { $InputPath[$separator] } else { [System.IO.Path]::DirectorySeparatorChar }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
     $pattern = [System.Management.Automation.WildcardPattern]::Escape($leaf) + '*'
     foreach ($item in @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Ignore | Where-Object { $_.Name -like $pattern } | Sort-Object -Property Name)) {
-        $text = if ($parent -eq '.' -and -not $InputPath.StartsWith('.')) { $item.Name } else { Join-Path -Path $parent -ChildPath $item.Name }
+        $text = $directory + $item.Name
         if ($item.PSIsContainer) {
-            $text += [System.IO.Path]::DirectorySeparatorChar
+            $text += $separatorChar
         }
         New-PipItem $text $item.FullName
     }
@@ -494,11 +487,66 @@ function Get-PipConfigValues {
     Get-PipOptionValues -Executable $Executable -Command $section -Option $option
 }
 
+function ConvertFrom-PipTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    # A bare word with backtick escapes (sp` ace) is read the same way, as a command argument.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        if ($Value -notmatch '`' -or $Value -match '[''"\u2018-\u201E]') {
+            return $Value
+        }
+
+        $elements = @([System.Management.Automation.Language.Parser]::ParseInput("pip $Value", [ref]$null, [ref]$null).EndBlock.Statements[0].PipelineElements[0].CommandElements)
+        if ($elements.Count -eq 2 -and $elements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            return $elements[1].Value
+        }
+
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-PipQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function New-PipCompletionResults {
     param(
         [object[]]$Items,
         [string]$Word,
         [string]$Prefix = '',
+        [string]$QuoteChar = '',
+        [string]$ValueQuoteChar = '',
         [System.Management.Automation.CompletionResultType]$ResultType = [System.Management.Automation.CompletionResultType]::ParameterValue,
         [switch]$CaseSensitive
     )
@@ -511,11 +559,13 @@ function New-PipCompletionResults {
             continue
         }
 
-        $text = $Prefix + $value
-        $completion = if ($text -match '[\s''"`$&(){};,|<>@#]' -and $ResultType -ne [System.Management.Automation.CompletionResultType]::ParameterName -and -not $value.StartsWith('<')) {
-            "'" + $text.Replace("'", "''") + "'"
+        # A quote typed after '--opt=' stays there; otherwise the whole word is quoted.
+        $completion = if ($value.StartsWith('<')) {
+            $Prefix + $value
+        } elseif ($ValueQuoteChar) {
+            $Prefix + (ConvertTo-PipQuotedValue -Value $value -QuoteChar $ValueQuoteChar)
         } else {
-            $text
+            ConvertTo-PipQuotedValue -Value ($Prefix + $value) -QuoteChar $QuoteChar
         }
         $tooltip = if ([string]::IsNullOrWhiteSpace($item.Tooltip)) { $value } else { $item.Tooltip }
         [System.Management.Automation.CompletionResult]::new($completion, $value, $ResultType, $tooltip)
@@ -577,7 +627,16 @@ function Complete-Pip {
         $operands.Add($token)
     }
 
-    $word = $WordToComplete
+    # PowerShell hands a quoted word over re-quoted or with its quotes dropped, so read the
+    # typed text itself: the quote that opens it is kept on the candidates.
+    $typed = ''
+    foreach ($element in @($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        if ($element.Extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $element.Extent.EndOffset) {
+            $typed = $element.Extent.Text.Substring(0, $CursorPosition - $element.Extent.StartOffset)
+        }
+    }
+    $quoteChar = if ($typed -match '^[''"\u2018-\u201E]') { $typed.Substring(0, 1) } else { '' }
+    $word = ConvertFrom-PipTypedWord -Value $typed
     $valueType = [System.Management.Automation.CompletionResultType]::ParameterValue
 
     if ($pending) {
@@ -585,15 +644,23 @@ function Complete-Pip {
             # Path slot: PowerShell's own filesystem completion is the intended answer.
             return
         }
-        New-PipCompletionResults -Items (Get-PipOptionValues -Executable $executable -Command $command -Option $pending) -Word $word
+        New-PipCompletionResults -Items (Get-PipOptionValues -Executable $executable -Command $command -Option $pending) -Word $word -QuoteChar $quoteChar
         return
     }
 
     if ($word -match '^(--[A-Za-z0-9][A-Za-z0-9-]*)=(.*)$') {
-        $option = Resolve-PipOption -Help $help -Token $Matches[1]
+        $optionName = $Matches[1]
         $valuePrefix = $Matches[2]
+        $option = Resolve-PipOption -Help $help -Token $optionName
         if (-not $option -or -not $option.Metavar) {
             return
+        }
+
+        # A quote typed after '=' opens the value alone.
+        $valueQuote = ''
+        if (-not $quoteChar -and $valuePrefix -match '^[''"\u2018-\u201E]') {
+            $valueQuote = $valuePrefix.Substring(0, 1)
+            $valuePrefix = ConvertFrom-PipTypedWord -Value $valuePrefix
         }
 
         $prefix = $option.Long + '='
@@ -602,7 +669,7 @@ function Complete-Pip {
         } else {
             Get-PipOptionValues -Executable $executable -Command $command -Option $option
         }
-        New-PipCompletionResults -Items $values -Word $valuePrefix -Prefix $prefix
+        New-PipCompletionResults -Items $values -Word $valuePrefix -Prefix $prefix -QuoteChar $quoteChar -ValueQuoteChar $valueQuote
         return
     }
 
@@ -612,12 +679,12 @@ function Complete-Pip {
     })
 
     if ($word.StartsWith('-')) {
-        New-PipCompletionResults -Items $optionItems -Word $word -ResultType ParameterName -CaseSensitive
+        New-PipCompletionResults -Items $optionItems -Word $word -QuoteChar $quoteChar -ResultType ParameterName -CaseSensitive
         return
     }
 
     if (-not $command) {
-        New-PipCompletionResults -Items @($root.Commands.GetEnumerator() | ForEach-Object { New-PipItem $_.Key $_.Value }) -Word $word
+        New-PipCompletionResults -Items @($root.Commands.GetEnumerator() | ForEach-Object { New-PipItem $_.Key $_.Value }) -Word $word -QuoteChar $quoteChar
         return
     }
 
@@ -661,12 +728,12 @@ function Complete-Pip {
     }
 
     if ($null -ne $operandItems) {
-        New-PipCompletionResults -Items $operandItems -Word $word -ResultType $valueType
+        New-PipCompletionResults -Items $operandItems -Word $word -QuoteChar $quoteChar -ResultType $valueType
         return
     }
 
     if ([string]::IsNullOrEmpty($word)) {
-        New-PipCompletionResults -Items $optionItems -Word $word -ResultType ParameterName -CaseSensitive
+        New-PipCompletionResults -Items $optionItems -Word $word -QuoteChar $quoteChar -ResultType ParameterName -CaseSensitive
     }
 }
 
