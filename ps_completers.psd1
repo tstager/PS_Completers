@@ -772,7 +772,7 @@
         @{
             Path    = 'printf_completer/printf_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:466B0DA0F2E57478D0FFB56E158BB324C1A1C4A89E4FD2D7185C0E20F05D7D6F'
+            Hash    = 'SHA256:BB766397B199CF0C225AF9F2C2B457F9BC181B21BC5E819D499CC29FE98C77E0'
             Targets = @(
                 @{ CommandName = 'printf'; Native = $true }
                 @{ CommandName = 'printf.exe'; Native = $true }

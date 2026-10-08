@@ -280,20 +280,11 @@ function Get-PrintfPathCompletions {
         default { '' }
     }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
+    # The typed directory part (through the last separator) is kept verbatim, so a
+    # typed .\ or ./ prefix and the user's separator style survive.
+    $prefix = $cleanInput.Substring(0, $cleanInput.LastIndexOfAny([char[]]'\/:') + 1)
+    $leaf = $cleanInput.Substring($prefix.Length)
+    $parent = if ($prefix) { $prefix } else { '.' }
 
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         return @()
@@ -303,12 +294,12 @@ function Get-PrintfPathCompletions {
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        # A bare name starting with a dash would be read as a parameter, so it gets the
+        # current-directory prefix, as PowerShell's own file completion does.
+        $pathText = if (-not $prefix -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $prefix + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
