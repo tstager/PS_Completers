@@ -1541,7 +1541,7 @@
         @{
             Path    = 'wt_completer/wt_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E5513772AA7C7CF61820C834134720173BE389A9651C7FB3F397CA2062D5DFED'
+            Hash    = 'SHA256:C445B625C266A2A099FDD13D07AF1E7DA79FA705548A89B26D7024DC2DC62B88'
             Targets = @(
                 @{ CommandName = 'wt'; Native = $true }
                 @{ CommandName = 'wt.exe'; Native = $true }

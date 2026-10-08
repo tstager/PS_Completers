@@ -335,7 +335,7 @@ function Complete-WtNative {
         }
 
         if (-not $selectedSubcommand) {
-            if (($topLevelValueOptions + $newTerminalValueOptions) -contains $token) {
+            if (($topLevelValueOptions + $newTerminalValueOptions) -ccontains $token) {
                 $expectingValueOption = $token
                 continue
             }
@@ -355,7 +355,7 @@ function Complete-WtNative {
         $isNewTerminal = $selectedSubcommand -in 'new-tab', 'split-pane'
         # A top-level value option repeated after new-tab/split-pane still consumes its value,
         # so '1,1' in 'nt --pos 1,1' is not the start of the child commandline.
-        if ($subcommandValueOptions[$selectedSubcommand] -contains $token -or ($isNewTerminal -and $topLevelValueOptions -contains $token)) {
+        if ($subcommandValueOptions[$selectedSubcommand] -ccontains $token -or ($isNewTerminal -and $topLevelValueOptions -ccontains $token)) {
             $expectingValueOption = $token
         }
         elseif ($isNewTerminal -and -not $token.StartsWith('-')) {
@@ -381,7 +381,7 @@ function Complete-WtNative {
 
     [object[]]$completionData = @()
     if (-not $selectedSubcommand) {
-        if (($topLevelValueOptions + $newTerminalValueOptions) -contains $previousToken) {
+        if (($topLevelValueOptions + $newTerminalValueOptions) -ccontains $previousToken) {
             $completionData = Get-WtValueCompletionData -Option $previousToken
         }
         elseif ($matchPrefix -like '-*') {
@@ -410,7 +410,7 @@ function Complete-WtNative {
                 }
             }
             default {
-                if ($subcommandValueOptions[$selectedSubcommand] -contains $previousToken) {
+                if ($subcommandValueOptions[$selectedSubcommand] -ccontains $previousToken) {
                     $completionData = Get-WtValueCompletionData -Option $previousToken
                 }
                 elseif ($matchPrefix -like '-*') {
