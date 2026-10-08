@@ -481,9 +481,13 @@ function Get-SevenZipLineTokens {
     $safeCursor = [Math]::Max($CursorPosition, 0)
     $tokens = New-Object System.Collections.Generic.List[string]
     $current = ''
+    $currentStart = $safeCursor
     $afterWhitespace = $true
 
-    foreach ($match in [regex]::Matches($Line, '(?:[^\s"]+|"[^"]*"?)+')) {
+    # A quoted run of either kind (even unterminated, typographic quotes included) stays inside
+    # its word, as PowerShell reads it; so does a backtick-escaped character.
+    $wordPattern = '(?:`.?|[^\s`"''\u2018-\u201E]|["\u201C-\u201E](?:`.?|[^`"\u201C-\u201E])*["\u201C-\u201E]?|[''\u2018-\u201B][^''\u2018-\u201B]*[''\u2018-\u201B]?)+'
+    foreach ($match in [regex]::Matches($Line, $wordPattern)) {
         if ($match.Index -ge $safeCursor) {
             break
         }
@@ -491,6 +495,7 @@ function Get-SevenZipLineTokens {
         $end = $match.Index + $match.Length
         if ($end -ge $safeCursor) {
             $current = $match.Value
+            $currentStart = $match.Index
             $afterWhitespace = $false
             break
         }
@@ -501,8 +506,36 @@ function Get-SevenZipLineTokens {
     @{
         Before          = @($tokens.ToArray())
         Current         = $current
+        CurrentStart    = $currentStart
         AfterWhitespace = $afterWhitespace
     }
+}
+
+function Get-SevenZipReplacementStart {
+    param(
+        [string]$Line,
+        [int]$CursorPosition
+    )
+
+    # PowerShell replaces only its own token under the cursor, and it ends a parameter token at a
+    # colon ('-oC:' then '\Users') and a word at a leading '@'. Right after such a colon it
+    # inserts at the cursor instead.
+    $parseTokens = $null
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput($Line, [ref]$parseTokens, [ref]$parseErrors)
+    foreach ($token in $parseTokens) {
+        $extent = $token.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            if ($token.Kind -eq [System.Management.Automation.Language.TokenKind]::Parameter -and
+                $token.Text.EndsWith(':') -and $CursorPosition -eq $extent.EndOffset) {
+                return $CursorPosition
+            }
+
+            return $extent.StartOffset
+        }
+    }
+
+    $CursorPosition
 }
 
 function Test-SevenZipHasOptionTerminator {
@@ -562,13 +595,108 @@ function Get-SevenZipInlineValueSwitch {
     $null
 }
 
+function Get-SevenZipTypedQuote {
+    # The quote character the user opened the word with ('' when bare); PowerShell reads the
+    # typographic quotes as quotes too.
+    param([string]$Value)
+
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        return $Value.Substring(0, 1)
+    }
+
+    ''
+}
+
+function ConvertFrom-SevenZipTypedWord {
+    # The value of typed text without its quotes and that quote style's escapes.
+    param([string]$Value)
+
+    $quote = Get-SevenZipTypedQuote -Value $Value
+    if (-not $quote) {
+        return $Value -replace '`(.)', '$1'
+    }
+
+    $body = $Value.Substring(1)
+    if ($quote -match '[''\u2018-\u201B]') {
+        $inner = ([regex]::Match($body, '^(?:[^''\u2018-\u201B]|[''\u2018-\u201B]{2})*')).Value
+        return $inner -replace '([''\u2018-\u201B])[''\u2018-\u201B]', '$1'
+    }
+
+    $inner = ([regex]::Match($body, '^(?:`.?|[^`"\u201C-\u201E]|["\u201C-\u201E]{2})*')).Value
+    ($inner -replace '(["\u201C-\u201E])["\u201C-\u201E]', '$1') -replace '`(.)', '$1'
+}
+
+function ConvertTo-SevenZipQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the typed quote style (single by default). Whitespace and argument-mode
+    # metacharacters (the typographic quotes included) end, split or expand a bare word. Right
+    # after switch text ('-o', '-i!') a '.' or '[' also ends PowerShell's parameter token, which
+    # hands 7-Zip the switch and the path as two arguments.
+    param(
+        [string]$Value,
+        [string]$Quote,
+        [switch]$AfterSwitch
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $Quote) {
+        if (-not ($AfterSwitch -and $Value -match '[.\[]') -and $Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
+    }
+
+    if ($Quote -match '[''\u2018-\u201B]') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
+    }
+
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
+}
+
+function ConvertFrom-SevenZipCompletedPath {
+    # CompleteFilename answers with a path already quoted or escaped for PowerShell; the parser
+    # recovers the text (it undoes every doubled quote, typographic ones included). A quoted
+    # answer is also wildcard-escaped for a cmdlet's -Path ('tick``dir', 'br`[1`]'), which a
+    # native command would receive literally.
+    param([string]$CompletionText)
+
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput('x ' + $CompletionText, [ref]$null, [ref]$null)
+    $command = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    if ($command -and $command.CommandElements.Count -eq 2 -and
+        $command.CommandElements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        $constant = $command.CommandElements[1]
+        if ($constant.StringConstantType -eq [System.Management.Automation.Language.StringConstantType]::BareWord) {
+            return $constant.Value
+        }
+
+        return [System.Management.Automation.WildcardPattern]::Unescape($constant.Value)
+    }
+
+    $CompletionText
+}
+
 function Get-SevenZipDirectoryCompletions {
     param(
         [string]$InputPath,
-        [string]$SwitchPrefix = ''
+        [string]$SwitchPrefix = '',
+        [int]$KeptLength = 0
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
+    # PowerShell keeps the first $KeptLength characters of the value (it ends a parameter token
+    # at a drive colon, as in '-oC:' then '\Users') and replaces the rest, which keeps the quote
+    # the user opened it with.
+    $keptText = $InputPath.Substring(0, [Math]::Min([Math]::Max($KeptLength, 0), $InputPath.Length))
+    $typedText = $InputPath.Substring($keptText.Length)
+    $typedQuote = Get-SevenZipTypedQuote -Value $typedText
+    $keptValue = ConvertFrom-SevenZipTypedWord -Value $keptText
+    $cleanInput = $keptValue + (ConvertFrom-SevenZipTypedWord -Value $typedText)
+    # After a kept drive colon the path is a word of its own; otherwise it continues the switch.
+    $head = $SwitchPrefix + $keptText
+    $afterSwitch = $head.StartsWith('-') -and -not $head.EndsWith(':')
     # A bare drive ('D:') means that drive's root, and a trailing separator means "list the
     # children of this directory"; Split-Path would hand either one back as the leaf.
     if ($cleanInput -match '^[A-Za-z]:$') {
@@ -591,11 +719,10 @@ function Get-SevenZipDirectoryCompletions {
     }
 
     $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and $InputPath.StartsWith('"')
 
-    Get-ChildItem -Path $parent -Filter $filter -Directory -ErrorAction Ignore |
+    Get-ChildItem -LiteralPath $parent -Filter $filter -Directory -ErrorAction Ignore |
         ForEach-Object {
-            $completionText = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
+            $path = if ($cleanInput -and -not [System.IO.Path]::IsPathRooted($cleanInput)) {
                 if ($parent -eq '.') {
                     $_.Name
                 } else {
@@ -605,19 +732,15 @@ function Get-SevenZipDirectoryCompletions {
                 $_.FullName
             }
 
-            if (-not $completionText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-                $completionText += [System.IO.Path]::DirectorySeparatorChar
+            if (-not $path.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+                $path += [System.IO.Path]::DirectorySeparatorChar
             }
 
-            if (($alwaysQuote -or $completionText -match '\s') -and
-                -not ($completionText.StartsWith('"') -and $completionText.EndsWith('"'))) {
-                $completionText = '"' + $completionText + '"'
+            if (-not $path.StartsWith($keptValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return
             }
 
-            if ($SwitchPrefix) {
-                $completionText = $SwitchPrefix + $completionText
-            }
-
+            $completionText = $head + (ConvertTo-SevenZipQuotedValue -Value $path.Substring($keptValue.Length) -Quote $typedQuote -AfterSwitch:$afterSwitch)
             New-SevenZipCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $_.FullName
         }
 }
@@ -625,24 +748,44 @@ function Get-SevenZipDirectoryCompletions {
 function Get-SevenZipFileCompletionList {
     param(
         [string]$InputPath,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [int]$KeptLength = 0
     )
 
-    $cleanInput = if ([string]::IsNullOrWhiteSpace($InputPath)) { '' } else { $InputPath.Trim('"') }
-    $items = @([System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput))
-    if ([string]::IsNullOrEmpty($Prefix)) {
-        return $items
-    }
+    # CompleteFilename quotes for a cmdlet's -Path, and its quotes would cover only the path, not
+    # a prefix ('-i@', '-ir!') that must sit outside them so PowerShell hands 7-Zip one argument
+    # with the switch text intact. So it gets the plain typed path, and its answer is unwrapped
+    # and quoted here, once, in the quote typed. PowerShell keeps the first $KeptLength
+    # characters of the path ('-i@C:' ends its parameter token) and replaces only the rest.
+    $keptText = $InputPath.Substring(0, [Math]::Min([Math]::Max($KeptLength, 0), $InputPath.Length))
+    $typedText = $InputPath.Substring($keptText.Length)
+    $typedQuote = Get-SevenZipTypedQuote -Value $typedText
+    $keptValue = ConvertFrom-SevenZipTypedWord -Value $keptText
+    $cleanInput = $keptValue + (ConvertFrom-SevenZipTypedWord -Value $typedText)
+    $head = $Prefix + $keptText
+    $afterSwitch = $head.StartsWith('-') -and -not $head.EndsWith(':')
 
-    # The prefix ('-i@', '@', '-ir!') must sit outside the quotes so PowerShell hands 7-Zip one
-    # argument with the switch text intact.
-    foreach ($item in $items) {
-        $path = $item.CompletionText.Trim([char[]]@([char]39, [char]34))
-        if ($path -match '\s') {
-            $path = '"' + $path + '"'
+    foreach ($item in @([System.Management.Automation.CompletionCompleters]::CompleteFilename($cleanInput))) {
+        $path = ConvertFrom-SevenZipCompletedPath -CompletionText $item.CompletionText
+        if (-not $path.StartsWith($keptValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
         }
 
-        New-SevenZipCompletionResult -CompletionText ($Prefix + $path) -ResultType 'ParameterValue' -ToolTip $item.ToolTip
+        if ([string]::IsNullOrEmpty($Prefix)) {
+            $completionText = $keptText + (ConvertTo-SevenZipQuotedValue -Value $path.Substring($keptValue.Length) -Quote $typedQuote -AfterSwitch:$afterSwitch)
+            [System.Management.Automation.CompletionResult]::new($completionText, $item.ListItemText, $item.ResultType, $item.ToolTip)
+            continue
+        }
+
+        $completionText = if ($Prefix -eq '@') {
+            # A bare word cannot start with '@' (PowerShell reads a splat), so the '@' of a list
+            # file goes inside the quotes.
+            ConvertTo-SevenZipQuotedValue -Value ($Prefix + $path) -Quote $typedQuote
+        } else {
+            $head + (ConvertTo-SevenZipQuotedValue -Value $path.Substring($keptValue.Length) -Quote $typedQuote -AfterSwitch:$afterSwitch)
+        }
+
+        New-SevenZipCompletionResult -CompletionText $completionText -ResultType 'ParameterValue' -ToolTip $item.ToolTip
     }
 }
 
@@ -726,7 +869,8 @@ function Get-SevenZipMethodValueCompletionList {
 function Get-SevenZipValueHintCompletionList {
     param(
         [string]$SwitchToken,
-        [string]$TypedValue
+        [string]$TypedValue,
+        [int]$KeptLength = 0
     )
 
     $switchKey = $SwitchToken.ToLowerInvariant()
@@ -753,7 +897,8 @@ function Get-SevenZipValueHintCompletionList {
     $seen = @{}
     foreach ($candidate in $candidates) {
         if ($candidate.Kind -eq 'File') {
-            foreach ($item in @(Get-SevenZipFileCompletionList -InputPath $candidate.Typed -Prefix ($SwitchToken + $candidate.Prefix))) {
+            $filePrefix = $SwitchToken + $candidate.Prefix
+            foreach ($item in @(Get-SevenZipFileCompletionList -InputPath $candidate.Typed -Prefix $filePrefix -KeptLength ($KeptLength - $filePrefix.Length))) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {
                     $seen[$item.CompletionText] = $true
                     $item
@@ -793,27 +938,12 @@ function Get-SevenZipCommandCompletionList {
         }
 }
 
-function Complete-SevenZip {
+function Get-SevenZipCompletionResultList {
     param(
-        [string]$wordToComplete,
-        [System.Management.Automation.Language.CommandAst]$commandAst,
-        [int]$cursorPosition
+        [string]$currentWord,
+        [string[]]$tokensBeforeCurrent,
+        [int]$keptLength
     )
-
-    Initialize-SevenZipCompletionCatalog
-
-    # $cursorPosition indexes the whole input line; the command text is command-relative.
-    $line = $commandAst.Extent.Text
-    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
-    $lineTokens = Get-SevenZipLineTokens -Line $line -CursorPosition $relativeCursor
-    $tokensBeforeCurrent = @($lineTokens.Before | Select-Object -Skip 1)
-    $currentWord = if ($lineTokens.AfterWhitespace) {
-        ''
-    } elseif (-not [string]::IsNullOrEmpty($lineTokens.Current)) {
-        $lineTokens.Current
-    } else {
-        $wordToComplete
-    }
 
     $hasOptionTerminator = Test-SevenZipHasOptionTerminator -TokensBeforeCurrent $tokensBeforeCurrent
     $activeCommand = Get-SevenZipActiveCommand -Tokens $tokensBeforeCurrent -KnownCommands $script:SevenZipCompletionCatalog.Commands
@@ -825,7 +955,7 @@ function Complete-SevenZip {
             $switchKey = $inlineValueSwitch.ToLowerInvariant()
 
             if ($script:SevenZipCompletionCatalog.PathLikeSwitches -contains $switchKey) {
-                return Get-SevenZipDirectoryCompletions -InputPath $typedValue -SwitchPrefix $inlineValueSwitch
+                return Get-SevenZipDirectoryCompletions -InputPath $typedValue -SwitchPrefix $inlineValueSwitch -KeptLength ($keptLength - $inlineValueSwitch.Length)
             }
 
             if ($script:SevenZipCompletionCatalog.ArchiveTypeSwitches -contains $switchKey) {
@@ -842,7 +972,7 @@ function Complete-SevenZip {
                     [void]$valueResults.Add($result)
                 }
             } else {
-                foreach ($result in @(Get-SevenZipValueHintCompletionList -SwitchToken $inlineValueSwitch -TypedValue $typedValue)) {
+                foreach ($result in @(Get-SevenZipValueHintCompletionList -SwitchToken $inlineValueSwitch -TypedValue $typedValue -KeptLength $keptLength)) {
                     [void]$valueResults.Add($result)
                 }
             }
@@ -872,7 +1002,7 @@ function Complete-SevenZip {
         }
 
         if (-not $hasOptionTerminator -and $currentWord.StartsWith('@')) {
-            return Get-SevenZipFileCompletionList -InputPath $currentWord.Substring(1) -Prefix '@'
+            return Get-SevenZipFileCompletionList -InputPath $currentWord.Substring(1) -Prefix '@' -KeptLength ($keptLength - 1)
         }
 
         return Get-SevenZipCommandCompletionList -CurrentWord $currentWord
@@ -885,16 +1015,60 @@ function Complete-SevenZip {
     # Everything after the command is <archive_name> then <file_names>, so this is a path slot;
     # '@listfile' names a file holding the file list.
     if (-not $hasOptionTerminator -and $currentWord.StartsWith('@')) {
-        return Get-SevenZipFileCompletionList -InputPath $currentWord.Substring(1) -Prefix '@'
+        return Get-SevenZipFileCompletionList -InputPath $currentWord.Substring(1) -Prefix '@' -KeptLength ($keptLength - 1)
     }
 
-    $fileResults = @(Get-SevenZipFileCompletionList -InputPath $currentWord)
+    $fileResults = @(Get-SevenZipFileCompletionList -InputPath $currentWord -KeptLength $keptLength)
     if (-not $hasOptionTerminator -and [string]::IsNullOrWhiteSpace($currentWord)) {
         $switchResults = @(Get-SevenZipSwitchCompletionList -CurrentWord '')
         return @($switchResults + $fileResults)
     }
 
     $fileResults
+}
+
+function Complete-SevenZip {
+    param(
+        [string]$wordToComplete,
+        [System.Management.Automation.Language.CommandAst]$commandAst,
+        [int]$cursorPosition
+    )
+
+    Initialize-SevenZipCompletionCatalog
+
+    # $cursorPosition indexes the whole input line; the command text is command-relative.
+    $line = $commandAst.Extent.Text
+    $relativeCursor = $cursorPosition - $commandAst.Extent.StartOffset
+    $lineTokens = Get-SevenZipLineTokens -Line $line -CursorPosition $relativeCursor
+    $tokensBeforeCurrent = @($lineTokens.Before | Select-Object -Skip 1)
+    $currentWord = if ($lineTokens.AfterWhitespace) {
+        ''
+    } elseif (-not [string]::IsNullOrEmpty($lineTokens.Current)) {
+        $lineTokens.Current
+    } else {
+        $wordToComplete
+    }
+
+    # PowerShell replaces only the tail of a word it splits ('-oC:' then '\Users\Tr'); that kept
+    # head comes off every completion so it is not typed twice.
+    $keptLength = 0
+    if (-not $lineTokens.AfterWhitespace) {
+        $replacementStart = Get-SevenZipReplacementStart -Line $line -CursorPosition $relativeCursor
+        $keptLength = [Math]::Min([Math]::Max($replacementStart - $lineTokens.CurrentStart, 0), $currentWord.Length)
+    }
+
+    $results = @(Get-SevenZipCompletionResultList -currentWord $currentWord -tokensBeforeCurrent $tokensBeforeCurrent -keptLength $keptLength)
+    if ($keptLength -eq 0) {
+        return $results
+    }
+
+    $keptText = $currentWord.Substring(0, $keptLength)
+    foreach ($result in $results) {
+        $text = $result.CompletionText
+        if ($text.Length -gt $keptLength -and $text.StartsWith($keptText, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [System.Management.Automation.CompletionResult]::new($text.Substring($keptLength), $result.ListItemText, $result.ResultType, $result.ToolTip)
+        }
+    }
 }
 
 Register-ArgumentCompleter -Native -CommandName '7z', '7z.exe' -ScriptBlock {
