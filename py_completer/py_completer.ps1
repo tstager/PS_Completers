@@ -378,10 +378,19 @@ function Get-PyCommandLineState {
     $quoteChar = [char]0
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
+        # PowerShell reads U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
+        $quoteClass = if ($character -eq [char]39 -or ($character -ge [char]0x2018 -and $character -le [char]0x201B)) {
+            [char]39
+        } elseif ($character -eq [char]34 -or ($character -ge [char]0x201C -and $character -le [char]0x201E)) {
+            [char]34
+        } else {
+            [char]0
+        }
+
+        if ($quoteClass -ne [char]0) {
             if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
+                $quoteChar = $quoteClass
+            } elseif ($quoteChar -eq $quoteClass) {
                 $quoteChar = [char]0
             }
 
@@ -620,14 +629,38 @@ function Get-PyPathCompletions {
     )
 
     $results = New-Object System.Collections.Generic.List[object]
+    $quote = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
+    # CompleteFilename rewrites a typed ./ or ../ as .\ or ..\; keep the prefix exactly as typed.
+    $typedPrefix = if ($CurrentWord.Substring($quote.Length) -match '^\.{1,2}[\\/]') { $Matches[0] } else { '' }
 
+    # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+    # (br`[1`].txt, tick``x.txt). py takes literal paths, so each result is unwrapped by the
+    # parser, unescaped, and quoted once in the style the user typed.
     foreach ($item in [System.Management.Automation.CompletionCompleters]::CompleteFilename($CurrentWord)) {
-        if ($ContainersOnly -and $item.ResultType -ne [System.Management.Automation.CompletionResultType]::ProviderContainer) {
+        $isContainer = $item.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
+        if ($ContainersOnly -and -not $isContainer) {
             continue
         }
 
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$tokens, [ref]$parseErrors)
+            $path = $tokens[0].Value
+        }
+
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
+        if ($typedPrefix -and $path -match '^\.{1,2}[\\/]' -and $Matches[0].Length -eq $typedPrefix.Length) {
+            $path = $typedPrefix + $path.Substring($typedPrefix.Length)
+        }
+
+        if ($isContainer -and $path -notmatch '[\\/]$') {
+            $path += [System.IO.Path]::DirectorySeparatorChar
+        }
+
         [void]$results.Add([System.Management.Automation.CompletionResult]::new(
-                ($AttachedPrefix + $item.CompletionText),
+                ($AttachedPrefix + (ConvertTo-PyQuotedText -Value $path -Quote $quote)),
                 $item.ListItemText,
                 $item.ResultType,
                 $item.ToolTip
@@ -654,7 +687,8 @@ function Get-PyOptionCompletionList {
         foreach ($token in $spec.Tokens) {
             # Ordinal: py's options are case-sensitive (-v is --verbose, -V: is the runtime selector).
             if ([string]::IsNullOrEmpty($CurrentWord) -or $token.StartsWith($CurrentWord, [System.StringComparison]::Ordinal)) {
-                $completionText = if (-not [string]::IsNullOrWhiteSpace($spec.ValueKind) -and $token.StartsWith('--')) { $token + '=' } else { $token }
+                # PowerShell rejects a bare '-V:' as a parameter missing its argument, so offer the selector placeholder.
+                $completionText = if (-not [string]::IsNullOrWhiteSpace($spec.ValueKind) -and $token.StartsWith('--')) { $token + '=' } elseif ($token.EndsWith(':', [System.StringComparison]::Ordinal)) { $token + '<TAG>' } else { $token }
                 [void]$results.Add((New-PyCompletionResult -CompletionText $completionText -ResultType 'ParameterName' -ToolTip $spec.Description -ListItemText $token))
             }
         }
@@ -756,15 +790,20 @@ function ConvertTo-PyQuotedText {
     )
 
     # Keep the quote the user opened; quote a bare value only when it would end or split the word.
-    if ([string]::IsNullOrEmpty($Quote) -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
-        return $Value
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    if ([string]::IsNullOrEmpty($Quote)) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $Quote = "'"
     }
 
-    if ($Quote -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    if ($Quote -match '^[''\u2018-\u201B]$') {
+        return $Quote + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $Quote
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $Quote + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $Quote
 }
 
 function Get-PyTagCompletionList {
@@ -779,10 +818,12 @@ function Get-PyTagCompletionList {
     # A '<'/'>' list filter only reaches py quoted, so match on the operand inside an opening quote.
     $quote = ''
     $operand = $CurrentWord
-    if ($CurrentWord -match '^(?<q>[''"])(?<body>.*)$') {
+    # PowerShell reads ' and U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    if ($CurrentWord -match '^(?<q>[''"\u2018-\u201E])(?<body>.*)$') {
         $quote = $Matches.q
         $operand = $Matches.body
-        if ($operand.EndsWith($quote, [System.StringComparison]::Ordinal)) {
+        $closing = if ($quote -match '^[''\u2018-\u201B]$') { '[''\u2018-\u201B]$' } else { '["\u201C-\u201E]$' }
+        if ($operand -match $closing) {
             $operand = $operand.Substring(0, $operand.Length - 1)
         }
     }
@@ -919,7 +960,7 @@ function Get-PyLaunchSlotCompletionList {
     }
 
     if ([string]::Equals($CurrentWord, '-V', [System.StringComparison]::Ordinal)) {
-        return @(New-PyCompletionResult -CompletionText '-V:' -ResultType 'ParameterName' -ToolTip 'Select a runtime by tag or by COMPANY\TAG.')
+        return @(Get-PyVCompletions -CurrentWord '-V:')
     }
 
     if ($RuntimeSelected) {
