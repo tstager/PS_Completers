@@ -249,7 +249,7 @@
         @{
             Path    = 'date_completer/date_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:4D4F1FA5417A5F1AA3ACC56540F2E1368150F270749B111F2F16EF406E52A4F9'
+            Hash    = 'SHA256:9DCF0A5E78A739A6423C7264CB4A50E3CA6D5A91396F203A2544F5EAC09DEDEF'
             Targets = @(
                 @{ CommandName = 'date'; Native = $true }
                 @{ CommandName = 'date.exe'; Native = $true }

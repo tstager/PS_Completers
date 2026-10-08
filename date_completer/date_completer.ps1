@@ -95,108 +95,114 @@ function New-DateCompletionResult {
     )
 }
 
-function Remove-DateOuterQuotes {
+function ConvertFrom-DateTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $Value.Trim([char[]]@([char]34, [char]39))
-}
-
-function ConvertTo-DateQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-DateQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-DateCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The parser keeps an unterminated quoted word (spaces, doubled quotes and
+    # all) as one element running to the cursor.
+    foreach ($element in ($CommandAst.CommandElements | Select-Object -Skip 1)) {
+        $extent = $element.Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            return $extent.Text.Substring(0, $CursorPosition - $extent.StartOffset)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    # The closing quote is optional so an in-progress quoted path containing a
-    # space stays one token instead of degrading to its last \S+ fragment.
-    $parts = @([regex]::Matches($prefix, '"[^"]*"?|''[^'']*''?|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-DatePathCompletions {
-    param([string]$InputPath)
+    param(
+        [string]$InputPath,
+        [bool]$WholeWord = $true
+    )
 
-    $cleanInput = Remove-DateOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
+    $cleanInput = ConvertFrom-DateTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    $forceJoin = $false
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
+    # The directory part is kept exactly as typed ('.\', './', '..\', 'sub/'), so a
+    # candidate never deletes typed text. '.' and '..' list that directory.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($cleanInput -match '^\.{1,2}$') {
+        $dirText = $cleanInput + [System.IO.Path]::DirectorySeparatorChar
         $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } elseif ($cleanInput -match '^\.{1,2}$') {
-        # Split-Path -Leaf resolves '.' and '..' to a real directory name, which
-        # would filter the listing by that name instead of listing the directory.
-        $parent = $cleanInput
-        $leaf = ''
-        $forceJoin = $true
+    } elseif ($separatorIndex -ge 0) {
+        $dirText = $cleanInput.Substring(0, $separatorIndex + 1)
+        $leaf = $cleanInput.Substring($separatorIndex + 1)
+    } elseif ($cleanInput -match '^[A-Za-z]:') {
+        $dirText = $cleanInput.Substring(0, 2)
+        $leaf = $cleanInput.Substring(2)
     } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        $dirText = ''
+        $leaf = $cleanInput
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    $parent = if ($dirText) { $dirText } else { '.' }
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = @($items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)
 
     foreach ($item in $items) {
-        $pathText = if (-not $forceJoin -and ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput))) {
-            $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
-        }
-
+        $pathText = $dirText + $item.Name
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $pathText += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $quotedPath = ConvertTo-DateQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        # A whole word starting with a dash parses as a parameter, so a bare relative
+        # name gets the current-directory prefix, as PowerShell's own file completion does.
+        if ($WholeWord -and -not $dirText -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
+        }
+
+        $quotedPath = ConvertTo-DateQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-DateCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
@@ -294,7 +300,7 @@ function Get-DateOptionValueCompletions {
     $spec = $table[$option]
     if ($spec -is [string] -and $spec -eq 'path') {
         return @(
-            foreach ($result in Get-DatePathCompletions -InputPath $prefix) {
+            foreach ($result in Get-DatePathCompletions -InputPath $prefix -WholeWord (-not $attached)) {
                 New-DateCompletionResult -CompletionText ($attached + $result.CompletionText) -ListItemText $result.ListItemText -ResultType $result.ResultType -ToolTip $result.ToolTip
             }
         )
@@ -464,7 +470,7 @@ function Complete-Date {
     $currentWord = if ($cursorPosition -gt $commandAst.Extent.EndOffset) {
         ''
     } else {
-        Get-DateCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
+        Get-DateCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
     }
 
     $optionValues = @(Get-DateOptionValueCompletions -commandAst $commandAst -CurrentWord $currentWord)
