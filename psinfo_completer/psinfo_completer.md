@@ -31,9 +31,9 @@ The completer covers the validated help surface:
   - `\\localhost`
   - `\\*`
   - `@file`
-- `@file` completion is local-only and path-aware
+- `@file` completion is local-only and path-aware, and keeps a typed directory such as `.\` or `./` in every candidate
 - `-u` and `-p` return placeholder values for an empty word and echo a partially typed value otherwise, rather than falling back to the filesystem
-- `-t` suggests the delimiters `,`, `;`, `|`, `:` and `\t`; all but `\t` are emitted double-quoted because they are PowerShell syntax when bare
+- `-t` suggests the delimiters `,`, `;`, `|`, `:` and `\t`; all but `\t` are emitted double-quoted because they are PowerShell syntax when bare; a typed quote is kept (and then wraps `\t` too), and a typed delimiter that no hint extends is left as typed
 - the optional `filter` slot suggests the field-label prefixes PsInfo v1.79 actually prints (`uptime`, `kernel version`, `product type`, `product version`, `service pack`, `kernel build number`, `registered organization`, `registered owner`, `ie version`, `system root`, `processors`, `processor speed`, `processor type`, `physical memory`, `video driver`); multi-word labels are quoted
 - only tokens that end before the cursor count as consumed, so editing an earlier token on the line completes that token
 

@@ -817,7 +817,7 @@
         @{
             Path    = 'psinfo_completer/psinfo_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:6693C4FAF45E599969B2A742542760C4999A5AB2EA95E911E08DB8327DC96D23'
+            Hash    = 'SHA256:9D084A303A7F0A35C61E0D1A2E8D461CA4DDFEFD1FB2D24F741EC4158D654A7B'
             Targets = @(
                 @{ CommandName = 'psinfo'; Native = $true }
                 @{ CommandName = 'psinfo.exe'; Native = $true }
