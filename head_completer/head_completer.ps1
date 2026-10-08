@@ -85,53 +85,47 @@ function New-HeadCompletionResult {
     )
 }
 
-function Remove-HeadOuterQuotes {
+function ConvertFrom-HeadTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
     param([string]$Value)
 
-    if ($null -eq $Value) {
-        return ''
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
     }
 
-    # The word may be an unterminated quote running to the cursor: strip the
-    # opening quote, a matching closing one if present, and undo its escaping.
-    if ($Value.StartsWith("'")) {
-        $inner = $Value.Substring(1)
-        if ($inner.EndsWith("'") -and -not $inner.EndsWith("''")) {
-            $inner = $inner.Substring(0, $inner.Length - 1)
-        }
-        return $inner.Replace("''", "'")
-    }
-
-    if ($Value.StartsWith('"')) {
-        $inner = $Value.Substring(1)
-        if ($inner.EndsWith('"') -and -not $inner.EndsWith('`"')) {
-            $inner = $inner.Substring(0, $inner.Length - 1)
-        }
-        return [regex]::Replace($inner, '`(.)', '$1')
-    }
-
-    $Value
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-HeadQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
         [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (-not $QuoteChar -and $Value -notmatch '[\s{}();,|&<>''"`$]|^[@#]') {
-        return $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
     }
 
-    if ($QuoteChar -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('"', '`"').Replace('$', '`$') + '"'
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-HeadCurrentToken {
@@ -156,38 +150,32 @@ function Get-HeadCurrentToken {
 function Get-HeadPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-HeadOuterQuotes -Value $InputPath
-    $quoteChar = if ($InputPath.StartsWith('"')) { '"' } elseif ($InputPath.StartsWith("'")) { "'" } else { '' }
+    $cleanInput = ConvertFrom-HeadTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    # The typed directory part (.\ and ./ included) is kept exactly as typed.
+    $directory = ''
+    $leaf = ''
+    if (-not [string]::IsNullOrWhiteSpace($cleanInput) -and $cleanInput -match '^(?<dir>.*[\\/]|[A-Za-z]:)?(?<leaf>[^\\/]*)$') {
+        $directory = $Matches['dir']
+        $leaf = $Matches['leaf']
     }
 
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    $parent = if ($directory) { $directory } else { '.' }
+
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
 
     foreach ($item in $items) {
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } elseif ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parent -ChildPath $item.Name
+        # A bare word starting with a dash parses as a parameter: anchor it to the current directory.
+        $pathText = if (-not $directory -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+            $directory + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
