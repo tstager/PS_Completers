@@ -1505,7 +1505,7 @@
         @{
             Path    = 'wsb_completer/wsb_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:EA913114B550146C6C67D92E1A75206DEB3CAF84540BC7886E7ADBF610469640'
+            Hash    = 'SHA256:BBA1CE2449192A26D95CB9161C618EC543A7C6AC42A9A51BC1874FA5B278AF86'
             Targets = @(
                 @{ CommandName = 'wsb'; Native = $true }
                 @{ CommandName = 'wsb.exe'; Native = $true }

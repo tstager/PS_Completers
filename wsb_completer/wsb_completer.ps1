@@ -308,22 +308,47 @@ function Remove-WsbOuterQuotes {
     $Value.TrimStart('"', "'")
 }
 
-function ConvertTo-WsbQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-WsbTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-WsbQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-WsbOptionLookup {
@@ -493,40 +518,17 @@ function Get-WsbDirectoryPathCompletions {
         [string]$Prefix = ''
     )
 
-    $typedValue = Remove-WsbOuterQuotes -Value $CurrentWord
-    $alwaysQuote = $CurrentWord.StartsWith('"')
+    $typedValue = ConvertFrom-WsbTypedWord -Value $CurrentWord
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     $results = New-Object System.Collections.Generic.List[object]
 
-    $parentPath = '.'
-    $leaf = ''
-    if (-not [string]::IsNullOrWhiteSpace($typedValue)) {
-        if ($typedValue.EndsWith('\') -or $typedValue.EndsWith('/')) {
-            $parentPath = $typedValue
-        } else {
-            try {
-                $candidateParent = Split-Path -Path $typedValue -Parent
-            } catch {
-                $candidateParent = ''
-            }
+    # The directory part is kept exactly as typed ('.\', '../', 'C:\x/'), so no typed text is lost.
+    $separatorIndex = $typedValue.LastIndexOfAny([char[]]@('\', '/'))
+    $typedDirectory = $typedValue.Substring(0, $separatorIndex + 1)
+    $leaf = $typedValue.Substring($separatorIndex + 1)
+    $parentPath = if ($typedDirectory) { $typedDirectory } else { '.' }
 
-            if ([string]::IsNullOrWhiteSpace($candidateParent)) {
-                $leaf = $typedValue
-            } else {
-                $parentPath = $candidateParent
-                try {
-                    $leaf = Split-Path -Path $typedValue -Leaf
-                } catch {
-                    $leaf = $typedValue
-                }
-            }
-        }
-    }
-
-    try {
-        $items = @(Get-ChildItem -LiteralPath $parentPath -Directory -ErrorAction Stop)
-    } catch {
-        $items = @()
-    }
+    $items = @(Get-ChildItem -LiteralPath $parentPath -Directory -ErrorAction Ignore)
 
     foreach ($item in $items) {
         if (-not [string]::IsNullOrWhiteSpace($leaf) -and
@@ -534,12 +536,13 @@ function Get-WsbDirectoryPathCompletions {
             continue
         }
 
-        $candidate = if ($parentPath -eq '.') { $item.Name } else { Join-Path -Path $parentPath -ChildPath $item.Name }
-        if (-not ($candidate.EndsWith('\') -or $candidate.EndsWith('/'))) {
-            $candidate += '\'
+        $candidate = $typedDirectory + $item.Name + '\'
+        # A bare word led by a dash parses as a parameter; lead it with '.\' as PowerShell does.
+        if (-not $Prefix -and -not $typedDirectory -and $candidate -match '^[-\u2013-\u2015]') {
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
         }
 
-        $completionText = ConvertTo-WsbQuotedValue -Value $candidate -AlwaysQuote $alwaysQuote
+        $completionText = ConvertTo-WsbQuotedValue -Value $candidate -QuoteChar $quoteChar
         [void]$results.Add((New-WsbCompletionResult -CompletionText ($Prefix + $completionText) -ResultType 'ParameterValue' -ToolTip $item.FullName))
     }
 
