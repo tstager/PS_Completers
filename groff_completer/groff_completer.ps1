@@ -190,30 +190,47 @@ function Remove-GroffOuterQuotes {
     $unquoted.Replace('`"', '"')
 }
 
-function ConvertTo-GroffQuotedValue {
-    param(
-        [string]$Value,
-        [string]$QuoteCharacter
-    )
+function ConvertFrom-GroffTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    $effectiveQuote = $QuoteCharacter
-    if ([string]::IsNullOrEmpty($effectiveQuote)) {
-        $effectiveQuote = '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-GroffQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteCharacter = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    if (($effectiveQuote -eq "'") -and $Value.Contains("'")) {
-        $effectiveQuote = '"'
+    if (-not $QuoteCharacter) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteCharacter = "'"
     }
 
-    if ($effectiveQuote -eq '"') {
-        return '"' + $Value.Replace('`', '``').Replace('$', '`$').Replace('"', '`"') + '"'
+    if ($QuoteCharacter -match '^[''\u2018-\u201B]$') {
+        return $QuoteCharacter + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteCharacter
     }
 
-    "'" + $Value.Replace("'", "''") + "'"
+    $QuoteCharacter + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteCharacter
 }
 
 function Get-GroffExecutablePath {
@@ -374,7 +391,7 @@ function Get-GroffOutputDevices {
             continue
         }
 
-        foreach ($directory in @(Get-ChildItem -LiteralPath $fontRoot -Directory -Filter 'dev*' -ErrorAction SilentlyContinue)) {
+        foreach ($directory in @(Get-ChildItem -LiteralPath $fontRoot -Directory -Filter 'dev*' -ErrorAction Ignore)) {
             if ($directory.Name.Length -gt 3) {
                 [void]$devices.Add($directory.Name.Substring(3))
             }
@@ -397,7 +414,7 @@ function Get-GroffMacroPackages {
                 continue
             }
 
-            foreach ($file in @(Get-ChildItem -LiteralPath $tmacRoot -File -ErrorAction SilentlyContinue)) {
+            foreach ($file in @(Get-ChildItem -LiteralPath $tmacRoot -File -ErrorAction Ignore)) {
                 $name = $null
                 if ($file.Name.StartsWith('tmac.', [System.StringComparison]::OrdinalIgnoreCase)) {
                     $name = $file.Name.Substring(5)
@@ -439,7 +456,7 @@ function Get-GroffFontFamilyList {
 
         $styles = @()
         $candidates = New-Object System.Collections.Generic.List[string]
-        foreach ($line in @(Get-Content -LiteralPath $descPath -ErrorAction SilentlyContinue)) {
+        foreach ($line in @(Get-Content -LiteralPath $descPath -ErrorAction Ignore)) {
             if ($line -match '^styles\s+(?<styles>.+)$') {
                 $styles = @($Matches['styles'].Trim() -split '\s+')
             } elseif ($line -match '^family\s+(?<family>\S+)') {
@@ -452,7 +469,7 @@ function Get-GroffFontFamilyList {
         }
 
         $fontNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-        foreach ($file in @(Get-ChildItem -LiteralPath $deviceDirectory -File -ErrorAction SilentlyContinue)) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $deviceDirectory -File -ErrorAction Ignore)) {
             $name = $file.Name
             if ($name -eq 'DESC' -or $name.Contains('.')) {
                 continue
@@ -648,61 +665,52 @@ function Update-GroffParseState {
 function Get-GroffPathCompletions {
     param(
         [string]$InputPath,
+        [string]$TokenPrefix = '',
         [switch]$DirectoriesOnly
     )
 
-    $quoteCharacter = Get-GroffQuoteCharacter -InputText $InputPath
-    $cleanInput = Remove-GroffOuterQuotes -InputText $InputPath
+    $quoteCharacter = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+    $cleanInput = ConvertFrom-GroffTypedWord -Value $InputPath
     $pathSeparatorChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-    $inputEndsWithSeparator = $false
-    if (-not [string]::IsNullOrEmpty($cleanInput)) {
-        foreach ($separator in $pathSeparatorChars) {
-            if ($cleanInput.EndsWith([string]$separator, [System.StringComparison]::Ordinal)) {
-                $inputEndsWithSeparator = $true
-                break
-            }
-        }
-    }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parentPath = '.'
-        $leaf = ''
-    } elseif ($inputEndsWithSeparator) {
-        $parentPath = $cleanInput
-        $leaf = ''
+    # Candidates keep the directory part exactly as typed (.\, ./, ..\, C:\, sub/).
+    $lastSeparator = $cleanInput.LastIndexOfAny($pathSeparatorChars)
+    $typedDirectory = if ($lastSeparator -ge 0) {
+        $cleanInput.Substring(0, $lastSeparator + 1)
+    } elseif ($cleanInput -match '^[A-Za-z]:') {
+        $cleanInput.Substring(0, 2)
     } else {
-        $parentPath = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parentPath)) {
-            $parentPath = '.'
-        }
-        $leaf = Split-Path -Path $cleanInput -Leaf
+        ''
+    }
+    $leaf = $cleanInput.Substring($typedDirectory.Length)
+    $parentPath = if ($typedDirectory) { $typedDirectory } else { '.' }
+
+    if (-not (Test-Path -LiteralPath $parentPath -PathType Container -ErrorAction Ignore)) {
+        return @()
     }
 
-    $filter = if ([string]::IsNullOrWhiteSpace($leaf)) { '*' } else { "$leaf*" }
-    $items = @(Get-ChildItem -Path $parentPath -Filter $filter -ErrorAction SilentlyContinue)
+    # A plain prefix test: -like skips control characters (a typed "a`b), so a*-style matches leak through.
+    $items = @(Get-ChildItem -LiteralPath $parentPath -ErrorAction Ignore | Where-Object { $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase) })
     if ($DirectoriesOnly) {
         $items = @($items | Where-Object { $_.PSIsContainer })
     }
 
     $results = foreach ($item in $items) {
-        $completionPath = if ([System.IO.Path]::IsPathRooted($cleanInput)) {
-            Join-Path -Path $parentPath -ChildPath $item.Name
-        } elseif ($parentPath -eq '.') {
-            $item.Name
+        # A bare name starting with a dash would parse as a parameter, so it gets .\ like PowerShell's own file completion.
+        $completionPath = if (-not $typedDirectory -and -not $TokenPrefix -and $item.Name -match '^[-\u2013-\u2015]') {
+            '.' + [System.IO.Path]::DirectorySeparatorChar + $item.Name
         } else {
-            Join-Path -Path $parentPath -ChildPath $item.Name
+            $typedDirectory + $item.Name
         }
 
         if ($item.PSIsContainer -and -not $completionPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $completionPath += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        if (($null -ne $quoteCharacter) -or ($completionPath -match '\s')) {
-            $completionPath = ConvertTo-GroffQuotedValue -Value $completionPath -QuoteCharacter $quoteCharacter
-        }
-
+        # Attached forms keep the option bare: -F'sub dir\' is still one constant argument.
+        $quotedPath = ConvertTo-GroffQuotedValue -Value $completionPath -QuoteCharacter $quoteCharacter
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
-        New-GroffCompletionResult -CompletionText $completionPath -ResultType $resultType -ToolTip $item.FullName
+        New-GroffCompletionResult -CompletionText ($TokenPrefix + $quotedPath) -ListItemText ($TokenPrefix + $completionPath) -ResultType $resultType -ToolTip $item.FullName
     }
 
     @($results)
@@ -777,15 +785,7 @@ function Get-GroffDirectoryValueCompletions {
         )
     }
 
-    $results = @(
-        foreach ($pathResult in @(Get-GroffPathCompletions -InputPath $CurrentValue -DirectoriesOnly)) {
-            if ([string]::IsNullOrWhiteSpace($TokenPrefix)) {
-                $pathResult
-            } else {
-                New-GroffCompletionResult -CompletionText ($TokenPrefix + $pathResult.CompletionText) -ResultType $pathResult.ResultType -ToolTip $pathResult.ToolTip
-            }
-        }
-    )
+    $results = @(Get-GroffPathCompletions -InputPath $CurrentValue -TokenPrefix $TokenPrefix -DirectoriesOnly)
 
     if ($results.Count -gt 0) {
         return $results

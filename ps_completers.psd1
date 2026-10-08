@@ -464,7 +464,7 @@
         @{
             Path    = 'groff_completer/groff_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:E5AABB51EB10A76B9365B9C5911C7602D8650AF56E28899FC3C20FF3382802ED'
+            Hash    = 'SHA256:E9081C484868332E7C79EA3F06064F355AA7C78BF8646F307B480B8D84687051'
             Targets = @(
                 @{ CommandName = 'groff'; Native = $true }
                 @{ CommandName = 'groff.exe'; Native = $true }
