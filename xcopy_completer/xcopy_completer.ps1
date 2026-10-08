@@ -62,22 +62,69 @@ function Remove-XcopyOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-XcopyQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function Get-XcopyTypedQuote {
+    # The first quote the user typed in the word ('' when none); the completion quotes the
+    # whole word in it. PowerShell reads ' and U+2018-U+201B as single quotes and " and
+    # U+201C-U+201E as double quotes.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -match '[''"\u2018-\u201E]') {
+        return $Matches[0]
+    }
+
+    ''
+}
+
+function ConvertFrom-XcopyTypedWord {
+    # The value of a typed word. A word holding a quote (ASCII or typographic) is read by the
+    # PowerShell tokenizer as a command argument, which drops the quotes and undoes that quote
+    # style's escapes; adjacent pieces such as 'sub dir'\x are joined into one value.
+    param([string]$Value)
+
+    if (-not (Get-XcopyTypedQuote -Value $Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput('x ' + $Value, [ref]$tokens, [ref]$parseErrors)
+    -join @(
+        foreach ($token in ($tokens | Select-Object -Skip 1)) {
+            if ($token.Kind -eq [System.Management.Automation.Language.TokenKind]::EndOfInput) {
+                continue
+            }
+
+            if ($token -is [System.Management.Automation.Language.StringToken]) { $token.Value } else { $token.Text }
+        }
+    )
+}
+
+function ConvertTo-XcopyQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default).
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
     }
 
-    $Value
+    if (-not $QuoteChar) {
+        # A bare word starting with - or U+2013-U+2015 is read by PowerShell as a parameter.
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Get-XcopyStaticOptionMetadata {
@@ -265,38 +312,44 @@ function Initialize-XcopyCompletionCatalog {
 
 function Get-XcopyCurrentToken {
     param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
+        [System.Management.Automation.Language.CommandAst]$CommandAst,
+        [int]$CursorPosition
     )
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
+    # The typed text of the word at the cursor, quotes included. The parser keeps an
+    # unterminated quoted word as one element running to the cursor. Like PowerShell's own
+    # replacement span, a quoted string followed directly by a \ or / piece ('sub dir'\x) is
+    # one path word.
+    $elements = $CommandAst.CommandElements
+    for ($index = 1; $index -lt $elements.Count; $index++) {
+        $extent = $elements[$index].Extent
+        if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
+            $start = $extent.StartOffset
+            $previous = $elements[$index - 1]
+            if ($index -gt 1 -and $previous.Extent.EndOffset -eq $start -and $extent.Text -match '^[\\/]' -and
+                ($previous -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                    $previous -is [System.Management.Automation.Language.ExpandableStringExpressionAst])) {
+                $start = $previous.Extent.StartOffset
+            }
+
+            return $CommandAst.Extent.Text.Substring($start - $CommandAst.Extent.StartOffset, $CursorPosition - $start)
+        }
     }
 
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
+    ''
 }
 
 function Get-XcopyArgumentList {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition
+        [int]$WordStart
     )
 
+    # The arguments before the word being completed (adjacent elements reach a native command
+    # as separate arguments).
     $arguments = @()
     foreach ($element in $CommandAst.CommandElements | Select-Object -Skip 1) {
-        if ($element.Extent.EndOffset -lt $CursorPosition) {
+        if ($element.Extent.EndOffset -lt $WordStart) {
             $arguments += $element.Extent.Text
         }
     }
@@ -368,28 +421,16 @@ function Get-XcopyPathCompletions {
     param(
         [string]$InputPath,
         [string]$Kind,
-        [string]$CompletionPrefix = ''
+        [string]$CompletionPrefix = '',
+        [string]$QuoteChar = ''
     )
 
-    $cleanInput = Remove-XcopyOuterQuotes $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
+    # InputPath is the unquoted value; the whole word (CompletionPrefix + path) is quoted as
+    # one argument in QuoteChar, the quote the user typed. The directory part is kept exactly
+    # as typed (.\, ./, C:\), so no typed text is dropped.
+    $directoryText = if ($InputPath -match '^(.*[\\/]|[A-Za-z]:)') { $Matches[1] } else { '' }
+    $leaf = $InputPath.Substring($directoryText.Length)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
 
     # Filter during enumeration and cap the result: a completion menu past a few hundred
     # entries is unusable, and %TEMP%-sized directories (30k entries) must not take seconds.
@@ -405,20 +446,18 @@ function Get-XcopyPathCompletions {
     )
 
     foreach ($item in $items | Sort-Object -Property Name) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+        if (-not $directoryText -and -not $CompletionPrefix -and $pathText -match '^[-\u2013-\u2015]') {
+            # A whole word starting with a dash would be read as a parameter: anchor it like
+            # PowerShell's own file completion does (.\-name).
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-XcopyQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
-        $completionText = $CompletionPrefix + $quotedPath
+        $completionText = ConvertTo-XcopyQuotedValue -Value ($CompletionPrefix + $pathText) -QuoteChar $QuoteChar
         $listItemText = $CompletionPrefix + $pathText
 
         New-XcopyCompletionResult `
@@ -434,14 +473,15 @@ function Get-XcopyPrefixedSuggestions {
         [string]$Prefix,
         [string]$CurrentValue,
         [string[]]$Suggestions,
-        [string]$ToolTip
+        [string]$ToolTip,
+        [string]$QuoteChar = ''
     )
 
     $cleanCurrentValue = if ($null -eq $CurrentValue) { '' } else { $CurrentValue }
     foreach ($suggestion in ($Suggestions | Sort-Object -Unique)) {
         if ($suggestion.StartsWith($cleanCurrentValue, [System.StringComparison]::OrdinalIgnoreCase)) {
             $tokenText = $Prefix + $suggestion
-            New-XcopyCompletionResult -CompletionText $tokenText -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
+            New-XcopyCompletionResult -CompletionText (ConvertTo-XcopyQuotedValue -Value $tokenText -QuoteChar $QuoteChar) -ListItemText $tokenText -ResultType 'ParameterValue' -ToolTip $ToolTip
         }
     }
 }
@@ -450,7 +490,8 @@ function Get-XcopyChainedPathCompletions {
     param(
         [string]$Prefix,
         [string]$CurrentValue,
-        [string]$Kind
+        [string]$Kind,
+        [string]$QuoteChar = ''
     )
 
     $valuePrefix = ''
@@ -462,16 +503,21 @@ function Get-XcopyChainedPathCompletions {
         $currentSegment = $CurrentValue.Substring($lastPlusIndex + 1)
     }
 
-    @(Get-XcopyPathCompletions -InputPath $currentSegment -Kind $Kind -CompletionPrefix ($Prefix + $valuePrefix))
+    @(Get-XcopyPathCompletions -InputPath $currentSegment -Kind $Kind -CompletionPrefix ($Prefix + $valuePrefix) -QuoteChar $QuoteChar)
 }
 
 function Get-XcopyInlineValueCompletions {
-    param([string]$WordToComplete)
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
 
     Initialize-XcopyCompletionCatalog
 
-    $cleanWord = Remove-XcopyOuterQuotes $WordToComplete
-    $match = [regex]::Match($cleanWord, '^(?<root>/-?[A-Za-z?][A-Za-z0-9-]*)(?<separator>:)(?<value>.*)$')
+    # Value is the unquoted word. The quote may open the whole word ('/EXCLUDE:a) or sit
+    # anywhere in it (/EXCLUDE:'a, /EXCLUDE:a+'b); either way the completion quotes the whole
+    # word as one constant argument.
+    $match = [regex]::Match($Value, '^(?<root>/-?[A-Za-z?][A-Za-z0-9-]*)(?<separator>:)(?<value>.*)$')
     if (-not $match.Success) {
         return @()
     }
@@ -491,12 +537,12 @@ function Get-XcopyInlineValueCompletions {
 
     switch ($optionInfo.InlineValueKind) {
         'List' {
-            return @(Get-XcopyPrefixedSuggestions -Prefix $prefix -CurrentValue $currentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description)
+            return @(Get-XcopyPrefixedSuggestions -Prefix $prefix -CurrentValue $currentValue -Suggestions $optionInfo.Suggestions -ToolTip $optionInfo.Description -QuoteChar $QuoteChar)
         }
         'PathChain' {
             # The value is a path to an exclude-list file; directories are offered (with a
             # trailing backslash) so the user can navigate to a file outside the current directory.
-            return @(Get-XcopyChainedPathCompletions -Prefix $prefix -CurrentValue $currentValue -Kind 'Any')
+            return @(Get-XcopyChainedPathCompletions -Prefix $prefix -CurrentValue $currentValue -Kind 'Any' -QuoteChar $QuoteChar)
         }
     }
 
@@ -504,20 +550,20 @@ function Get-XcopyInlineValueCompletions {
 }
 
 function Get-XcopyOptionCompletions {
-    param([string]$WordToComplete)
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
 
     Initialize-XcopyCompletionCatalog
 
-    $prefix = if ([string]::IsNullOrWhiteSpace($WordToComplete)) {
-        ''
-    } else {
-        (Remove-XcopyOuterQuotes $WordToComplete).ToUpperInvariant()
-    }
+    # Value is the unquoted word; a typed quote is kept around the switch.
+    $prefix = if ([string]::IsNullOrWhiteSpace($Value)) { '' } else { $Value.ToUpperInvariant() }
 
     foreach ($option in $script:XcopyCompletionCatalog.Options) {
         if ($option.CompletionText.ToUpperInvariant().StartsWith($prefix) -or $option.Display.ToUpperInvariant().StartsWith($prefix)) {
             New-XcopyCompletionResult `
-                -CompletionText $option.CompletionText `
+                -CompletionText (ConvertTo-XcopyQuotedValue -Value $option.CompletionText -QuoteChar $QuoteChar) `
                 -ListItemText $option.Display `
                 -ResultType 'ParameterName' `
                 -ToolTip $option.Description
@@ -526,6 +572,7 @@ function Get-XcopyOptionCompletions {
 }
 
 function Complete-Xcopy {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'wordToComplete', Justification = 'The word is cut from the CommandAst element at the cursor; wordToComplete spans past the cursor and unescapes quotes.')]
     param(
         [string]$wordToComplete,
         [System.Management.Automation.Language.CommandAst]$commandAst,
@@ -538,31 +585,32 @@ function Complete-Xcopy {
 
     Initialize-XcopyCompletionCatalog
 
-    $currentWord = if ($null -eq $wordToComplete) { '' } else { $wordToComplete }
-    if ([string]::IsNullOrWhiteSpace($currentWord) -and $cursorPosition -le $commandAst.Extent.EndOffset) {
-        $currentWord = Get-XcopyCurrentToken -Line $commandAst.ToString() -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete
-    }
+    # The word is cut from the CommandAst element at the cursor: wordToComplete spans past the
+    # cursor and drops the quotes the user typed.
+    $currentWord = Get-XcopyCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition
+    $currentValue = ConvertFrom-XcopyTypedWord -Value $currentWord
+    $quoteChar = Get-XcopyTypedQuote -Value $currentWord
 
-    if (-not [string]::IsNullOrEmpty($currentWord) -and (Remove-XcopyOuterQuotes $currentWord).StartsWith('/')) {
-        $inlineValueCompletions = @(Get-XcopyInlineValueCompletions -WordToComplete $currentWord)
+    if (-not [string]::IsNullOrEmpty($currentValue) -and $currentValue.StartsWith('/')) {
+        $inlineValueCompletions = @(Get-XcopyInlineValueCompletions -Value $currentValue -QuoteChar $quoteChar)
         if ($inlineValueCompletions.Count -gt 0) {
             return $inlineValueCompletions
         }
 
-        return @(Get-XcopyOptionCompletions -WordToComplete $currentWord)
+        return @(Get-XcopyOptionCompletions -Value $currentValue -QuoteChar $quoteChar)
     }
 
-    $arguments = @(Get-XcopyArgumentList -CommandAst $commandAst -CursorPosition $cursorPosition)
+    $arguments = @(Get-XcopyArgumentList -CommandAst $commandAst -WordStart ($cursorPosition - $currentWord.Length))
     $context = Get-XcopyCompletionContext -Arguments $arguments
 
     if ($context.Positionals.Count -lt 2) {
         $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
-        foreach ($result in @(Get-XcopyPathCompletions -InputPath $currentWord -Kind 'Any')) {
+        foreach ($result in @(Get-XcopyPathCompletions -InputPath $currentValue -Kind 'Any' -QuoteChar $quoteChar)) {
             $results.Add($result)
         }
 
         if ([string]::IsNullOrWhiteSpace($currentWord)) {
-            foreach ($result in @(Get-XcopyOptionCompletions -WordToComplete $currentWord)) {
+            foreach ($result in @(Get-XcopyOptionCompletions -Value $currentValue)) {
                 $results.Add($result)
             }
         }
@@ -571,7 +619,7 @@ function Complete-Xcopy {
     }
 
     if ([string]::IsNullOrWhiteSpace($currentWord)) {
-        return @(Get-XcopyOptionCompletions -WordToComplete $currentWord)
+        return @(Get-XcopyOptionCompletions -Value $currentValue)
     }
 
     @()

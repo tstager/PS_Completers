@@ -9,7 +9,7 @@ The completer builds a cached switch catalog from local `xcopy.exe /?` output, t
 - `/D[:date]`
 - `/EXCLUDE:file1[+file2][+file3]...`
 
-It also completes positional source and destination paths with Windows-style quoting and trailing backslashes for directories.
+It also completes positional source and destination paths with trailing backslashes for directories. A name with spaces or PowerShell metacharacters is quoted (single quotes by default, or the quote you typed, including typographic quotes) so it reaches `xcopy.exe` as one literal argument. A name starting with a dash is completed as `.\-name` so PowerShell does not read it as a parameter, and a typed `.\` or `./` prefix is kept.
 
 ## Registration and command names
 
@@ -65,6 +65,7 @@ Supported inline-value completions:
 - `/D:` suggests a few reasonable `m-d-yyyy` and `MM-dd-yyyy` samples
 - `/EXCLUDE:` completes paths to exclude-list files; directories are offered with a trailing `\` so the file can live outside the current directory
 - `/EXCLUDE:file1+...` continues completing the segment after the last `+`
+- when a path needs quoting, the whole word is quoted (`'/EXCLUDE:a b.txt'`), whether the quote was typed before the switch or after the colon
 
 Regular switch-name completion comes from the parsed local help surface, so entries such as `/A`, `/M`, `/COMPRESS`, `/NOCLONE`, `/SPARSE`, and `/-SPARSE` track the installed `xcopy.exe`.
 

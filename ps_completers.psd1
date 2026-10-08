@@ -1559,7 +1559,7 @@
         @{
             Path    = 'xcopy_completer/xcopy_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:5972E47B4C2537DC44C657B30AEDFF6597C5A9B3B506B258A7B06BEF2237913D'
+            Hash    = 'SHA256:2EE2ECCD9B09EDB1DD75C9F0D20F6BFA1EC44852A6FDC0652601E48A5E237513'
             Targets = @(
                 @{ CommandName = 'xcopy'; Native = $true }
                 @{ CommandName = 'xcopy.exe'; Native = $true }
