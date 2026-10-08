@@ -544,6 +544,49 @@ function Find-PlaywrightCliOptionSpec {
     $null
 }
 
+function ConvertFrom-PlaywrightCliTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-PlaywrightCliQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function Get-PlaywrightCliPathCompletions {
     param(
         [string]$PathPrefix,
@@ -551,7 +594,8 @@ function Get-PlaywrightCliPathCompletions {
         [string]$CompletionPrefix = ''
     )
 
-    $items = [System.Management.Automation.CompletionCompleters]::CompleteFilename($PathPrefix)
+    $quoteChar = if ($PathPrefix -match '^[''"\u2018-\u201E]') { $PathPrefix.Substring(0, 1) } else { '' }
+    $items = [System.Management.Automation.CompletionCompleters]::CompleteFilename((ConvertFrom-PlaywrightCliTypedWord -Value $PathPrefix))
     foreach ($item in @($items)) {
         # CompleteFilename already quotes a path with spaces, so Test-Path on CompletionText would
         # drop every such directory; its ResultType says whether the entry is a container.
@@ -559,13 +603,20 @@ function Get-PlaywrightCliPathCompletions {
             continue
         }
 
-        if ([string]::IsNullOrEmpty($CompletionPrefix)) {
-            $item
-            continue
+        # CompleteFilename quotes for PowerShell and wildcard-escapes for -Path parameters
+        # (tick``x.txt), so unwrap it with the parser and unescape before quoting once here.
+        $path = $item.CompletionText
+        if ($path -match '^[''"\u2018-\u201E]') {
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($path, [ref]$null, [ref]$null)
+            $constant = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+            if ($constant) {
+                $path = $constant.Value
+            }
         }
 
+        $path = [System.Management.Automation.WildcardPattern]::Unescape($path)
         New-PlaywrightCliCompletionResult `
-            -CompletionText "$CompletionPrefix$($item.CompletionText)" `
+            -CompletionText "$CompletionPrefix$(ConvertTo-PlaywrightCliQuotedValue -Value $path -QuoteChar $quoteChar)" `
             -ListItemText $item.ListItemText `
             -ResultType $item.ResultType `
             -ToolTip $item.ToolTip
@@ -577,7 +628,8 @@ function Get-PlaywrightCliValueCompletions {
         [string]$ValueKind,
         [string]$WordToComplete,
         [string]$ContextToken,
-        [string]$InlinePrefix
+        [string]$InlinePrefix,
+        [string]$TypedValue = $WordToComplete
     )
 
     $metadata = Get-PlaywrightCliMetadata
@@ -723,12 +775,12 @@ function Get-PlaywrightCliValueCompletions {
             }
         }
         'FilePath' {
-            foreach ($item in @(Get-PlaywrightCliPathCompletions -PathPrefix $WordToComplete -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PlaywrightCliPathCompletions -PathPrefix $TypedValue -CompletionPrefix $InlinePrefix)) {
                 [void]$results.Add($item)
             }
         }
         'DirectoryPath' {
-            foreach ($item in @(Get-PlaywrightCliPathCompletions -PathPrefix $WordToComplete -DirectoriesOnly -CompletionPrefix $InlinePrefix)) {
+            foreach ($item in @(Get-PlaywrightCliPathCompletions -PathPrefix $TypedValue -DirectoriesOnly -CompletionPrefix $InlinePrefix)) {
                 [void]$results.Add($item)
             }
         }
@@ -891,6 +943,17 @@ function Complete-PlaywrightCli {
 
     $metadata = Get-PlaywrightCliMetadata
     $tokens = @(Get-PlaywrightCliProcessedTokens -CommandAst $CommandAst -WordToComplete $WordToComplete -CursorPosition $CursorPosition)
+
+    # PowerShell hands a quoted word over re-quoted ("'it" arrives as "'it'", a typographic quote
+    # as ') and drops the quote inside an attached "--opt='it", while it replaces the word as typed;
+    # path candidates keep the typed quote, so they read the word from the element under the cursor.
+    $typedWord = $WordToComplete
+    $cursorElement = $CommandAst.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.StartOffset -lt $CursorPosition -and $_.Extent.EndOffset -ge $CursorPosition } |
+        Select-Object -First 1
+    if ($cursorElement -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        $typedWord = $cursorElement.Extent.Text.Substring(0, $CursorPosition - $cursorElement.Extent.StartOffset)
+    }
     $commandSpec = $null
     $positionalsConsumed = 0
     $expectingValue = $null
@@ -971,13 +1034,13 @@ function Complete-PlaywrightCli {
         $options = if ($commandSpec) { @($metadata.GlobalOptions + $commandSpec.Options) } else { $metadata.GlobalOptions }
         $inlineOption = Find-PlaywrightCliOptionSpec -Token $flagPart -Options $options
         if ($inlineOption -and $inlineOption.ValueKind) {
-            Get-PlaywrightCliValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -ContextToken $inlineOption.Token -InlinePrefix "$flagPart="
+            Get-PlaywrightCliValueCompletions -ValueKind $inlineOption.ValueKind -WordToComplete $valuePrefix -TypedValue $typedWord.Substring($typedWord.IndexOf('=') + 1) -ContextToken $inlineOption.Token -InlinePrefix "$flagPart="
             return
         }
     }
 
     if ($expectingValue) {
-        Get-PlaywrightCliValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -ContextToken $expectingValue.Token
+        Get-PlaywrightCliValueCompletions -ValueKind $expectingValue.ValueKind -WordToComplete $WordToComplete -TypedValue $typedWord -ContextToken $expectingValue.Token
         return
     }
 
@@ -1011,7 +1074,7 @@ function Complete-PlaywrightCli {
         }
 
         if ($valueKind) {
-            foreach ($item in @(Get-PlaywrightCliValueCompletions -ValueKind $valueKind -WordToComplete $WordToComplete -ContextToken $commandSpec.Name)) {
+            foreach ($item in @(Get-PlaywrightCliValueCompletions -ValueKind $valueKind -WordToComplete $WordToComplete -TypedValue $typedWord -ContextToken $commandSpec.Name)) {
                 [void]$results.Add($item)
             }
         }

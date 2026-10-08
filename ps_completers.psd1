@@ -733,7 +733,7 @@
         @{
             Path    = 'playwright_cli_completer/playwright_cli_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:14DE7C75807FF8B6283243130A776F619902DD18552D56F2BA8CB31FE34A45D5'
+            Hash    = 'SHA256:CD4CA2C7E1918D15B827A1D5EBA698A2658CB6D2DE541F8C4355F9F219E403A4'
             Targets = @(
                 @{ CommandName = 'playwright-cli'; Native = $true }
                 @{ CommandName = 'playwright-cli.cmd'; Native = $true }

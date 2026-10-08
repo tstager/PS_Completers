@@ -71,7 +71,7 @@ That lets the completer switch between:
 
 ### 3. Path-aware value completion
 
-`Get-PlaywrightCliPathCompletions` uses PowerShell's filename completer so path-bearing slots behave like normal shell completion.
+`Get-PlaywrightCliPathCompletions` uses PowerShell's filename completer so path-bearing slots behave like normal shell completion. Each result is unwrapped and re-quoted once, keeping the quote the user typed (ASCII or typographic), so names with spaces, `$`, backticks or quotes stay one literal argument, including attached `--option='value'` forms.
 
 This is used for:
 
