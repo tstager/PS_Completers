@@ -65,22 +65,68 @@ function Remove-ContigOuterQuotes {
     $Value.Trim([char[]]@([char]34, [char]39))
 }
 
-function ConvertTo-ContigQuotedValue {
-    param(
-        [string]$Value,
-        [bool]$AlwaysQuote = $false
-    )
+function ConvertFrom-ContigTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    # Returns $null when the quote closes mid-word ('sp'ace): PowerShell then completes only
+    # the text after the quote, so the word has no single value to complete.
+    param([string]$Value)
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    if ($tokens[0].Extent.EndOffset -lt $Value.Length) {
+        return $null
     }
 
-    $Value
+    $tokens[0].Value
+}
+
+function ConvertTo-ContigQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]|^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
+function Get-ContigQuoteClass {
+    # 1 = single-quote family (' and U+2018-U+201B), 2 = double-quote family (" and U+201C-U+201E).
+    param([char]$Character)
+
+    if ($Character -eq [char]39 -or ($Character -ge [char]0x2018 -and $Character -le [char]0x201B)) {
+        return 1
+    }
+
+    if ($Character -eq [char]34 -or ($Character -ge [char]0x201C -and $Character -le [char]0x201E)) {
+        return 2
+    }
+
+    0
 }
 
 function Get-ContigTokenState {
@@ -97,21 +143,36 @@ function Get-ContigTokenState {
     $prefix = $Line.Substring(0, $safeCursor)
     $tokens = New-Object System.Collections.Generic.List[string]
     $builder = New-Object System.Text.StringBuilder
-    $quoteChar = [char]0
+    $quoteClass = 0
+    $escapeNext = $false
 
     foreach ($character in $prefix.ToCharArray()) {
-        if (($character -eq [char]34) -or ($character -eq [char]39)) {
-            if ($quoteChar -eq [char]0) {
-                $quoteChar = $character
-            } elseif ($quoteChar -eq $character) {
-                $quoteChar = [char]0
+        if ($escapeNext) {
+            $escapeNext = $false
+            [void]$builder.Append($character)
+            continue
+        }
+
+        # A backtick escapes the next character everywhere except inside single quotes.
+        if ($character -eq [char]96 -and $quoteClass -ne 1) {
+            $escapeNext = $true
+            [void]$builder.Append($character)
+            continue
+        }
+
+        $characterClass = Get-ContigQuoteClass -Character $character
+        if ($characterClass -ne 0) {
+            if ($quoteClass -eq 0) {
+                $quoteClass = $characterClass
+            } elseif ($quoteClass -eq $characterClass) {
+                $quoteClass = 0
             }
 
             [void]$builder.Append($character)
             continue
         }
 
-        if ([char]::IsWhiteSpace($character) -and $quoteChar -eq [char]0) {
+        if ([char]::IsWhiteSpace($character) -and $quoteClass -eq 0) {
             if ($builder.Length -gt 0) {
                 $tokens.Add($builder.ToString())
                 [void]$builder.Clear()
@@ -253,42 +314,40 @@ function Get-ContigSwitchCompletions {
 function Get-ContigPathCompletions {
     param([string]$InputPath)
 
-    $cleanInput = Remove-ContigOuterQuotes -Value $InputPath
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
-
-        $leaf = Split-Path -Path $cleanInput -Leaf
+    $cleanInput = ConvertFrom-ContigTypedWord -Value $InputPath
+    if ($null -eq $cleanInput) {
+        return
     }
 
-    $inputIsRooted = -not [string]::IsNullOrWhiteSpace($cleanInput) -and [System.IO.Path]::IsPathRooted($cleanInput)
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
+
+    # Candidates keep the typed directory text exactly (.\, ./, ..\, C:, sub/) and add the item name.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    if ($separatorIndex -lt 0 -and $cleanInput -match '^[A-Za-z]:') {
+        $separatorIndex = 1
+    }
+
+    $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
+
     $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
     $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') }
 
     foreach ($item in ($items | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)) {
-        if ($inputIsRooted) {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
-        } elseif ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $pathText = $item.Name
-        } else {
-            $pathText = Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+
+        # A bare word starting with a dash is parsed as a parameter, so a dash-leading name in
+        # the current directory gets the .\ prefix PowerShell's own file completion uses.
+        if (-not $directoryText -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + [System.IO.Path]::DirectorySeparatorChar + $pathText
         }
 
         if ($item.PSIsContainer -and -not $pathText.EndsWith('\')) {
             $pathText += '\'
         }
 
-        $quotedPath = ConvertTo-ContigQuotedValue -Value $pathText -AlwaysQuote $alwaysQuote
+        $quotedPath = ConvertTo-ContigQuotedValue -Value $pathText -QuoteChar $quoteChar
         $resultType = if ($item.PSIsContainer) { 'ProviderContainer' } else { 'ParameterValue' }
         New-ContigCompletionResult -CompletionText $quotedPath -ListItemText $pathText -ResultType $resultType -ToolTip $item.FullName
     }
@@ -297,10 +356,15 @@ function Get-ContigPathCompletions {
 function Get-ContigMetadataCompletions {
     param([string]$CurrentWord)
 
-    $cleanCurrent = Remove-ContigOuterQuotes -Value $CurrentWord
+    $cleanCurrent = ConvertFrom-ContigTypedWord -Value $CurrentWord
+    if ($null -eq $cleanCurrent) {
+        return
+    }
+
+    $quoteChar = if ($CurrentWord -match '^[''"\u2018-\u201E]') { $CurrentWord.Substring(0, 1) } else { '' }
     foreach ($metadataName in $script:ContigCompletionCatalog.MetadataFiles) {
         if ($metadataName.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
-            New-ContigCompletionResult -CompletionText ("'" + $metadataName + "'") -ListItemText $metadataName -ResultType 'ParameterValue' -ToolTip 'NTFS metadata file supported by Contig.'
+            New-ContigCompletionResult -CompletionText (ConvertTo-ContigQuotedValue -Value $metadataName -QuoteChar $quoteChar) -ListItemText $metadataName -ResultType 'ParameterValue' -ToolTip 'NTFS metadata file supported by Contig.'
         }
     }
 }

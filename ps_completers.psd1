@@ -194,7 +194,7 @@
         @{
             Path    = 'contig_completer/contig_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:A421E86CFD8F95E668A3B527752EAF07A65B8EE7FE65D6080D1AE00BF0EBD477'
+            Hash    = 'SHA256:91AE717BB3951A8474981688FD3C8603C77446BC1399B284C13CB4DCC2488BF0'
             Targets = @(
                 @{ CommandName = 'contig'; Native = $true }
                 @{ CommandName = 'contig.exe'; Native = $true }
