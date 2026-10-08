@@ -83,6 +83,7 @@ The completer routes to specific value completion for:
 - `--exclude` / `--include` → pattern hints plus path suggestions
 
 A quoted path that is still open (`tar -c -f "C:\Program Fi<Tab>`) is tokenized as one value and completes inside the quoted directory.
+The typed directory part (`.\`, `./`, `..\`, and its separators) is kept as typed, and a file name that starts with a dash is offered as `.\-name` so PowerShell does not read it as a parameter.
 
 It also understands compact forms such as `-cf`, `-xf`, and attached-value prefixes well enough to complete the value after the short option.
 

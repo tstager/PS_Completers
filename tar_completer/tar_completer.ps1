@@ -23,7 +23,6 @@ if (-not (Get-Variable -Name TarCompletionCatalog -Scope Script -ErrorAction Ign
         CompressProgramHints = @('gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'lzop')
         DefaultPatterns   = @('*', '*/*', '*.txt', '*.log')
         StandaloneEntries = @()
-        TokenPattern      = '"[^"]*"|''[^'']*''|"[^"]*$|''[^'']*$|\S+'
     }
 }
 
@@ -269,32 +268,58 @@ function New-TarCompletionResult {
     )
 }
 
-function Remove-TarOuterQuotes {
+function Get-TarTypedQuote {
+    # The quote character a typed word opens with (ASCII or typographic), or ''.
     param([string]$Value)
 
-    if ($null -eq $Value) {
+    if ($Value -match '^[''"\u2018-\u201E]') {
+        return $Value.Substring(0, 1)
+    }
+
+    ''
+}
+
+function ConvertFrom-TarTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if (-not (Get-TarTypedQuote -Value $Value)) {
         return $Value
     }
 
-    $Value.Trim([char[]]@([char]34, [char]39))
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
 }
 
 function ConvertTo-TarQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
     param(
         [string]$Value,
-        [bool]$AlwaysQuote = $false
+        [string]$QuoteChar = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return $Value
     }
 
-    if (($AlwaysQuote -or $Value -match '\s') -and -not ($Value.StartsWith('"') -and $Value.EndsWith('"'))) {
-        $escaped = $Value.Replace('`', '``').Replace('"', '`"')
-        return '"' + $escaped + '"'
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+            return $Value
+        }
+
+        $QuoteChar = if ($script:TarAvoidSingleQuote) { '"' } else { "'" }
     }
 
-    $Value
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
 }
 
 function Test-TarStartsWith {
@@ -955,31 +980,6 @@ function Get-TarDateHintList {
     )
 }
 
-function Get-TarCurrentToken {
-    param(
-        [string]$Line,
-        [int]$CursorPosition,
-        [string]$Fallback
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return $Fallback
-    }
-
-    $safeCursor = [Math]::Min([Math]::Max($CursorPosition, 0), $Line.Length)
-    $prefix = $Line.Substring(0, $safeCursor)
-    if ($prefix -match '\s$') {
-        return ''
-    }
-
-    $parts = @([regex]::Matches($prefix, $script:TarCompletionCatalog.TokenPattern) | ForEach-Object { $_.Value })
-    if ($parts.Count -gt 0) {
-        return $parts[-1]
-    }
-
-    $Fallback
-}
-
 function Test-TarBareBundle {
     param(
         [string]$Token,
@@ -1323,11 +1323,11 @@ function Get-TarSimpleValueResults {
         [string]$Prefix
     )
 
-    $alwaysQuote = $CurrentValue.StartsWith('"') -or $CurrentValue.StartsWith("'")
-    $cleanCurrent = Remove-TarOuterQuotes -Value $CurrentValue
+    $quoteChar = Get-TarTypedQuote -Value $CurrentValue
+    $cleanCurrent = ConvertFrom-TarTypedWord -Value $CurrentValue
     foreach ($value in ($Values | Sort-Object -Unique)) {
         if (Test-TarStartsWith -Value $value -Prefix $cleanCurrent) {
-            $completionText = ConvertTo-TarQuotedValue -Value $value -AlwaysQuote:$alwaysQuote
+            $completionText = ConvertTo-TarQuotedValue -Value $value -QuoteChar $quoteChar
             if ($Prefix) {
                 $completionText = $Prefix + $completionText
             }
@@ -1342,43 +1342,30 @@ function Get-TarPathCompletionResults {
     param(
         [string]$CurrentValue,
         [string]$Prefix,
+        [string]$ValuePrefix = '',
         [switch]$DirectoryOnly,
         [string]$ToolTipPrefix = 'Path'
     )
 
-    $startedQuoted = $CurrentValue.StartsWith('"') -or $CurrentValue.StartsWith("'")
-    $pathText = Remove-TarOuterQuotes -Value $CurrentValue
-    $isRootDrive = $pathText -match '^[A-Za-z]:$'
-
-    if ([string]::IsNullOrEmpty($pathText)) {
-        $searchBase = '.'
+    # $Prefix stays outside the quotes (--file='a b'); $ValuePrefix goes inside them ('@a b'),
+    # since a bare @ starts a splat.
+    $quoteChar = Get-TarTypedQuote -Value $CurrentValue
+    $pathText = (ConvertFrom-TarTypedWord -Value $CurrentValue).Substring($ValuePrefix.Length)
+    # The typed directory part is kept verbatim (.\ ./ ..\ and the typed separators), so
+    # accepting a candidate never deletes typed text.
+    if ($pathText -match '^[A-Za-z]:$') {
+        $parentText = $pathText + '\'
         $leaf = ''
-        $useParentInCompletion = $false
-    }
-    elseif ($isRootDrive) {
-        $searchBase = $pathText + '\'
-        $leaf = ''
-        $useParentInCompletion = $true
-    }
-    elseif ($pathText.EndsWith('\') -or $pathText.EndsWith('/')) {
-        $searchBase = $pathText
-        $leaf = ''
-        $useParentInCompletion = $true
     }
     else {
-        $parentPath = Split-Path -Path $pathText -Parent
-        $leaf = Split-Path -Path $pathText -Leaf
-        if ([string]::IsNullOrEmpty($parentPath)) {
-            $searchBase = '.'
-            $useParentInCompletion = $false
-        }
-        else {
-            $searchBase = $parentPath
-            $useParentInCompletion = $true
-        }
+        $separatorIndex = $pathText.LastIndexOfAny([char[]]'\/')
+        $parentText = $pathText.Substring(0, $separatorIndex + 1)
+        $leaf = $pathText.Substring($separatorIndex + 1)
     }
 
-    $items = @(Get-ChildItem -LiteralPath $searchBase -ErrorAction SilentlyContinue |
+    $searchBase = if ($parentText) { $parentText } else { '.' }
+
+    $items = @(Get-ChildItem -LiteralPath $searchBase -ErrorAction Ignore |
             Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name)
 
     foreach ($item in $items) {
@@ -1390,21 +1377,17 @@ function Get-TarPathCompletionResults {
             continue
         }
 
-        $candidate = if ($useParentInCompletion) {
-            Join-Path -Path $searchBase -ChildPath $item.Name
-        }
-        else {
-            $item.Name
+        $candidate = $parentText + $item.Name
+        if (-not $parentText -and -not ($Prefix + $ValuePrefix) -and $item.Name -match '^[-\u2013-\u2015]') {
+            # A word starting with a dash parses as a parameter; prefix .\ as PowerShell's file completion does.
+            $candidate = '.' + [System.IO.Path]::DirectorySeparatorChar + $candidate
         }
 
         if ($item.PSIsContainer) {
             $candidate += [System.IO.Path]::DirectorySeparatorChar
         }
 
-        $completionText = ConvertTo-TarQuotedValue -Value $candidate -AlwaysQuote:$startedQuoted
-        if ($Prefix) {
-            $completionText = $Prefix + $completionText
-        }
+        $completionText = $Prefix + (ConvertTo-TarQuotedValue -Value ($ValuePrefix + $candidate) -QuoteChar $quoteChar)
 
         $toolTip = $ToolTipPrefix
         if ($item.PSIsContainer) {
@@ -1414,7 +1397,7 @@ function Get-TarPathCompletionResults {
             $toolTip += ' file'
         }
 
-        New-TarCompletionResult -CompletionText $completionText -ResultType 'ProviderItem' -ToolTip $toolTip
+        New-TarCompletionResult -CompletionText $completionText -ListItemText $candidate -ResultType 'ProviderItem' -ToolTip $toolTip
     }
 }
 
@@ -1425,8 +1408,8 @@ function Get-TarPatternCompletionResults {
         [string]$ToolTipPrefix = 'Pattern'
     )
 
-    $alwaysQuote = $CurrentValue.StartsWith('"') -or $CurrentValue.StartsWith("'")
-    $cleanCurrent = Remove-TarOuterQuotes -Value $CurrentValue
+    $quoteChar = Get-TarTypedQuote -Value $CurrentValue
+    $cleanCurrent = ConvertFrom-TarTypedWord -Value $CurrentValue
     $suggestions = New-Object System.Collections.Generic.List[string]
 
     foreach ($defaultPattern in $script:TarCompletionCatalog.DefaultPatterns) {
@@ -1447,7 +1430,7 @@ function Get-TarPatternCompletionResults {
 
     foreach ($value in ($suggestions | Sort-Object -Unique)) {
         if (Test-TarStartsWith -Value $value -Prefix $cleanCurrent) {
-            $completionText = ConvertTo-TarQuotedValue -Value $value -AlwaysQuote:$alwaysQuote
+            $completionText = ConvertTo-TarQuotedValue -Value $value -QuoteChar $quoteChar
             if ($Prefix) {
                 $completionText = $Prefix + $completionText
             }
@@ -1535,11 +1518,7 @@ function Get-TarArchiveMemberList {
     # bounded (5 s, 5000 entries); cached until the archive's size or write time changes.
     param([string]$ArchiveFile)
 
-    $path = Remove-TarOuterQuotes -Value $ArchiveFile
-    if ($ArchiveFile.StartsWith("'", [System.StringComparison]::Ordinal)) {
-        $path = $path.Replace("''", "'")
-    }
-
+    $path = ConvertFrom-TarTypedWord -Value $ArchiveFile
     if ([string]::IsNullOrWhiteSpace($path) -or $path -eq '-') {
         return @()
     }
@@ -1605,24 +1584,6 @@ function Get-TarArchiveMemberList {
     $members
 }
 
-function ConvertTo-TarMemberCompletionText {
-    # Member names may hold spaces or argument-mode metacharacters; keep the user's quote character.
-    param(
-        [string]$Value,
-        [string]$TypedValue
-    )
-
-    if ($TypedValue.StartsWith('"', [System.StringComparison]::Ordinal)) {
-        return '"' + ($Value -replace '([`"$])', '`$1') + '"'
-    }
-
-    if ($TypedValue.StartsWith("'", [System.StringComparison]::Ordinal) -or $Value -match '[\s{}();,|&<>''"`$]|^[@#]') {
-        return "'" + $Value.Replace("'", "''") + "'"
-    }
-
-    $Value
-}
-
 function Get-TarArchiveMemberCompletion {
     param(
         [string]$ArchiveFile,
@@ -1630,13 +1591,13 @@ function Get-TarArchiveMemberCompletion {
     )
 
     # Inlined match and result construction: an archive can hold thousands of members.
-    $cleanCurrent = [string](Remove-TarOuterQuotes -Value $CurrentValue)
-    $typedQuote = $CurrentValue -match '^[''"]'
+    $cleanCurrent = [string](ConvertFrom-TarTypedWord -Value $CurrentValue)
+    $quoteChar = Get-TarTypedQuote -Value $CurrentValue
     foreach ($member in (Get-TarArchiveMemberList -ArchiveFile $ArchiveFile)) {
         if ($member.StartsWith($cleanCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
             $completionText = $member
-            if ($typedQuote -or $member -match '[\s{}();,|&<>''"`$]|^[@#]') {
-                $completionText = ConvertTo-TarMemberCompletionText -Value $member -TypedValue $CurrentValue
+            if ($quoteChar -or $member -match '[\s{}();,|&<>''"`$@#\u2018-\u201E]') {
+                $completionText = ConvertTo-TarQuotedValue -Value $member -QuoteChar $quoteChar
             }
 
             [System.Management.Automation.CompletionResult]::new($completionText, $member, 'ParameterValue', 'Archive member: ' + $member)
@@ -1674,8 +1635,8 @@ function Invoke-TarPositionalCompletion {
     }
 
     if ($Mode -in @('c', 'r', 'u', 'A')) {
-        if ($CurrentValue.StartsWith('@')) {
-            foreach ($item in (Get-TarPathCompletionResults -CurrentValue $CurrentValue.Substring(1) -Prefix '@' -ToolTipPrefix 'Source archive')) {
+        if ((ConvertFrom-TarTypedWord -Value $CurrentValue).StartsWith('@')) {
+            foreach ($item in (Get-TarPathCompletionResults -CurrentValue $CurrentValue -ValuePrefix '@' -ToolTipPrefix 'Source archive')) {
                 if (-not $seen.ContainsKey($item.CompletionText)) {
                     $seen[$item.CompletionText] = $true
                     $results.Add($item)
@@ -1719,26 +1680,33 @@ function Complete-Tar {
     $line = $commandAst.ToString()
     $prefixLength = [Math]::Min([Math]::Max($cursorPosition - $commandAst.Extent.StartOffset, 0), $line.Length)
     $linePrefix = $line.Substring(0, $prefixLength)
-    $tokens = @([regex]::Matches($linePrefix, $script:TarCompletionCatalog.TokenPattern) | ForEach-Object { $_.Value })
     $hasTrailingSpace = ($linePrefix -match '\s$') -or (($cursorPosition - $commandAst.Extent.StartOffset) -gt $line.Length)
-    $currentToken = if ($hasTrailingSpace) { '' } else { Get-TarCurrentToken -Line $line -CursorPosition ($cursorPosition - $commandAst.Extent.StartOffset) -Fallback $wordToComplete }
 
-    [object[]]$argumentTokens = if ($tokens.Count -gt 1) {
-        @($tokens[1..($tokens.Count - 1)])
+    # Words come from the parser, so a quoted word keeps its spaces and doubled quotes, and an
+    # unterminated one runs to the cursor.
+    $elements = @($commandAst.CommandElements | Select-Object -Skip 1 | Where-Object { $_.Extent.StartOffset -lt $cursorPosition })
+    $currentElement = $null
+    if (-not $hasTrailingSpace -and $elements.Count -gt 0 -and $elements[-1].Extent.EndOffset -ge $cursorPosition) {
+        $currentElement = $elements[-1]
+        $elements = @($elements | Select-Object -SkipLast 1)
+    }
+
+    # A word glued to a closed single-quoted word (''sp) must not open with a single quote:
+    # it would merge with that word.
+    $script:TarAvoidSingleQuote = $currentElement -and $currentElement.Extent.StartOffset -gt $commandAst.Extent.StartOffset -and
+        $line[$currentElement.Extent.StartOffset - $commandAst.Extent.StartOffset - 1] -match '[''\u2018-\u201B]'
+
+    $currentToken = if ($hasTrailingSpace) {
+        ''
+    }
+    elseif ($currentElement) {
+        $currentElement.Extent.Text.Substring(0, $cursorPosition - $currentElement.Extent.StartOffset)
     }
     else {
-        @()
+        $wordToComplete
     }
 
-    [object[]]$completedTokens = if ($hasTrailingSpace) {
-        @($argumentTokens)
-    }
-    elseif ($argumentTokens.Count -gt 1) {
-        @($argumentTokens[0..($argumentTokens.Count - 2)])
-    }
-    else {
-        @()
-    }
+    [object[]]$completedTokens = @($elements | ForEach-Object { $_.Extent.Text })
 
     $state = Get-TarCompletionState -Tokens $completedTokens
 
