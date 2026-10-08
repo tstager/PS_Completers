@@ -157,7 +157,7 @@
         @{
             Path    = 'codex_completer/codex_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:277E78544429DB49A7C9E1003A1DD20A9AA6B1724A83354639E6EF63521E81C6'
+            Hash    = 'SHA256:60010ACF6D5024AB3B84E3BB62CEAB2F44E13D63155A13C06278CF26B19BA98A'
             Targets = @(
                 @{ CommandName = 'codex'; Native = $true }
                 @{ CommandName = 'codex.cmd'; Native = $true }

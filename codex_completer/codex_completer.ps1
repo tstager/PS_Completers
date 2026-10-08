@@ -35,7 +35,8 @@ function Get-CodexCompletionExecutablePath {
             @{ Name = 'codex'; CommandType = 'Application' }
             @{ Name = 'codex.ps1'; CommandType = 'ExternalScript' }
         )) {
-        $command = Get-Command -Name $candidate.Name -CommandType $candidate.CommandType -ErrorAction SilentlyContinue |
+        # A launcher name that is not installed is an expected miss; SilentlyContinue would still record it in $Error.
+        $command = Get-Command -Name $candidate.Name -CommandType $candidate.CommandType -ErrorAction Ignore |
             Select-Object -First 1
 
         if ($null -eq $command) {
@@ -162,18 +163,14 @@ function Get-CodexStateFileValue {
 function ConvertFrom-CodexJson {
     param([string]$Json)
 
-    # A malformed or half-written state file is an expected miss while completing,
-    # not a fault to leave behind in $Error (a caught exception is still recorded).
-    $errorCountBefore = $Error.Count
-    try {
-        $Json | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-    } catch {
-        Write-Debug ('codex completer: cannot parse JSON state: ' + $_.Exception.Message)
-    } finally {
-        while ($Error.Count -gt $errorCountBefore) {
-            $Error.RemoveAt(0)
-        }
+    # A malformed or half-written state file is an expected miss while completing.
+    # Reject it up front: a caught parse exception is still recorded in $Error, and
+    # under the managed import that is not the $Error this function could clean up.
+    if ([string]::IsNullOrWhiteSpace($Json) -or -not (Test-Json -Json $Json -ErrorAction Ignore)) {
+        return
     }
+
+    $Json | ConvertFrom-Json -AsHashtable
 }
 
 function Get-CodexSessionValue {
