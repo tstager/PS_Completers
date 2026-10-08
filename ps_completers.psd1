@@ -674,7 +674,7 @@
         @{
             Path    = 'onemd_completer/onemd_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:8BB2A3E45493925E7506938F1B5A2B806B2896E1DEB309D80F5CDA15DC036125'
+            Hash    = 'SHA256:75A3AE1DB5155D6EE0673092064CF0E16F1CF4D1127FC943A842AD437634A250'
             Targets = @(
                 @{ CommandName = 'onemd'; Native = $true }
                 @{ CommandName = 'onemd.cmd'; Native = $true }

@@ -29,7 +29,7 @@ function New-OnemdCompletionResult {
 
 function Get-OnemdCommandPath {
     foreach ($candidate in @('onemd', 'onemd.cmd', 'onemd.ps1', 'onemd.exe')) {
-        $command = Get-Command -Name $candidate -ErrorAction SilentlyContinue |
+        $command = Get-Command -Name $candidate -ErrorAction Ignore |
             Where-Object { $_.CommandType -in @('Application', 'ExternalScript', 'Script') } |
             Select-Object -First 1
 
@@ -409,34 +409,74 @@ function Get-OnemdCommandTokens {
     }
 }
 
+function ConvertFrom-OnemdTypedWord {
+    # The value of a typed word. A word opened with a quote (ASCII or typographic) is read by
+    # the PowerShell tokenizer, which drops the quotes and undoes that quote style's escapes.
+    param([string]$Value)
+
+    if ($Value -notmatch '^[''"\u2018-\u201E]') {
+        return $Value
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($Value, [ref]$tokens, [ref]$parseErrors)
+    $tokens[0].Value
+}
+
+function ConvertTo-OnemdQuotedValue {
+    # Renders a value as one PowerShell argument: bare when safe and no quote was typed,
+    # otherwise in the quote the user typed (single by default). PowerShell reads ' and
+    # U+2018-U+201B as single quotes and " and U+201C-U+201E as double quotes.
+    param(
+        [string]$Value,
+        [string]$QuoteChar = ''
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $Value
+    }
+
+    if (-not $QuoteChar) {
+        if ($Value -notmatch '[\s{}();,|&<>''"`$@#\u2018-\u201E]' -and $Value -notmatch '^[-\u2013-\u2015]') {
+            return $Value
+        }
+
+        $QuoteChar = "'"
+    }
+
+    if ($QuoteChar -match '^[''\u2018-\u201B]$') {
+        return $QuoteChar + ($Value -replace '([''\u2018-\u201B])', '$1$1') + $QuoteChar
+    }
+
+    $QuoteChar + ($Value -replace '([`"$\u201C-\u201E])', '`$1') + $QuoteChar
+}
+
 function Get-OnemdPathCompletions {
     param([string]$InputPath, [bool]$DirectoryOnly, [string]$Extension = '', [string]$InlinePrefix = '')
 
-    $cleanInput = if ($null -eq $InputPath) { '' } else { $InputPath }
-    $alwaysQuote = -not [string]::IsNullOrEmpty($InputPath) -and ($InputPath.StartsWith('"') -or $InputPath.StartsWith("'"))
-    $cleanInput = $cleanInput.Trim('"', "'")
+    $cleanInput = ConvertFrom-OnemdTypedWord -Value $InputPath
+    $quoteChar = if ($InputPath -match '^[''"\u2018-\u201E]') { $InputPath.Substring(0, 1) } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($cleanInput)) {
-        $parent = '.'
-        $leaf = ''
-    } elseif ($cleanInput -match '[\\/]+$') {
-        $parent = $cleanInput
-        $leaf = ''
-    } else {
-        $parent = Split-Path -Path $cleanInput -Parent
-        if ([string]::IsNullOrWhiteSpace($parent)) {
-            $parent = '.'
-        }
+    # The typed directory part is kept verbatim (a typed .\ or ./ prefix included); only the leaf is completed.
+    $separatorIndex = $cleanInput.LastIndexOfAny([char[]]@('\', '/'))
+    $directoryText = $cleanInput.Substring(0, $separatorIndex + 1)
+    $leaf = $cleanInput.Substring($separatorIndex + 1)
+    $parent = if ($directoryText) { $directoryText } else { '.' }
+    $separator = if ($separatorIndex -ge 0) { $cleanInput[$separatorIndex] } else { [System.IO.Path]::DirectorySeparatorChar }
 
-        $leaf = Split-Path -Path $cleanInput -Leaf
-    }
-
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $parent -PathType Container -ErrorAction Ignore)) {
         return @()
     }
 
-    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction SilentlyContinue)
-    $items = $items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name
+    $items = @(Get-ChildItem -LiteralPath $parent -ErrorAction Ignore)
+    $items = @($items | Where-Object { $_.Name -like ([System.Management.Automation.WildcardPattern]::Escape($leaf) + '*') } | Sort-Object -Property Name)
+
+    # When no entry fits the slot's extension, list every file: an empty answer hands the word to PowerShell's own
+    # file name completion, which mis-quotes some names.
+    if ($Extension -and @($items | Where-Object { $_.PSIsContainer -or $_.Name.EndsWith($Extension, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) {
+        $Extension = ''
+    }
 
     foreach ($item in $items) {
         if (-not $item.PSIsContainer) {
@@ -449,22 +489,18 @@ function Get-OnemdPathCompletions {
             }
         }
 
-        $pathText = if ($parent -eq '.' -or [string]::IsNullOrWhiteSpace($cleanInput)) {
-            $item.Name
-        } else {
-            Join-Path -Path $parent -ChildPath $item.Name
+        $pathText = $directoryText + $item.Name
+
+        # A whole word starting with a dash parses as a parameter, so a bare relative name gets the .\ prefix.
+        if (-not $directoryText -and -not $InlinePrefix -and $pathText -match '^[-\u2013-\u2015]') {
+            $pathText = '.' + $separator + $pathText
         }
 
-        if ($item.PSIsContainer -and -not $pathText.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-            $pathText += [System.IO.Path]::DirectorySeparatorChar
+        if ($item.PSIsContainer) {
+            $pathText += $separator
         }
 
-        $quotedPath = $pathText
-        if (($alwaysQuote -or $pathText -match '\s') -and -not ($pathText.StartsWith('"') -and $pathText.EndsWith('"'))) {
-            $escaped = $pathText.Replace('`', '``').Replace('"', '`"')
-            $quotedPath = '"' + $escaped + '"'
-        }
-
+        $quotedPath = ConvertTo-OnemdQuotedValue -Value $pathText -QuoteChar $quoteChar
         if ($item.PSIsContainer) {
             New-OnemdCompletionResult -CompletionText ($InlinePrefix + $quotedPath) -ListItemText $pathText -ResultType 'ProviderContainer' -ToolTip $item.FullName
         } else {
