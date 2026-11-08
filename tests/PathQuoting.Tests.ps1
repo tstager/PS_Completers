@@ -189,6 +189,7 @@ BeforeDiscovery {
         'wpr'              = 'wpr -merge ', 'wpr -profiles '
         'wsb'              = 'wsb share -f '
         'wslc'             = 'wslc load --input ', 'wslc build '
+        'wtcli'            = 'wtcli new-tab -d ', 'wtcli new-tab --cwd='
         'xargs'            = 'xargs -a ', 'xargs --arg-file='
         'xcopy'            = 'xcopy '
         'zip'              = 'zip '

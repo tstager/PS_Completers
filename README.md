@@ -25,7 +25,7 @@ Import-CompleterSet -Name PS_Completers
 The package contains nothing that runs on import: a manifest, the set file, and
 the completer scripts. Each script loads on its first tab press, under the strict
 import grammar, so profile start pays for one small file read instead of parsing
-173 scripts. Update with `Update-PSResource PS_Completers`.
+175 scripts. Update with `Update-PSResource PS_Completers`.
 
 ### Use the repository directly
 
@@ -265,6 +265,7 @@ GitHub Actions on every push and pull request.
 | `wslc`, `wslc.exe` | [wslc_completer.ps1](wslc_completer/wslc_completer.ps1) | [wslc_completer.md](wslc_completer/wslc_completer.md) | Help-driven WSL container CLI completer with nested commands, live object names, option values, and paths. |
 | `wslconfig`, `wslconfig.exe` | [wslconfig_completer.ps1](wslconfig_completer/wslconfig_completer.ps1) | [wslconfig_completer.md](wslconfig_completer/wslconfig_completer.md) | Static-first `wslconfig` completer with legacy slash-switch coverage, `/list` mode options, and local distribution-name completion. |
 | `wt`, `wt.exe` | [wt_completer.ps1](wt_completer/wt_completer.ps1) | [wt_completer.md](wt_completer/wt_completer.md) | Native PowerShell argument completer for Windows Terminal. |
+| `wtcli`, `wtcli.exe` | [wtcli_completer.ps1](wtcli_completer/wtcli_completer.ps1) | [wtcli_completer.md](wtcli_completer/wtcli_completer.md) | Help-driven Intelligent Terminal CLI completer with aliases, option enums, event topics, and live window, tab, pane, and profile values inside an Intelligent Terminal pane. |
 | `xargs`, `xargs.exe` | [xargs_completer.ps1](xargs_completer/xargs_completer.ps1) | [xargs_completer.md](xargs_completer/xargs_completer.md) | Static-first `xargs` completer with documented option coverage, value-aware slots for files and numeric/replace/eof values, and command-name suggestions for the trailing command operand. |
 | `xcopy`, `xcopy.exe` | [xcopy_completer.ps1](xcopy_completer/xcopy_completer.ps1) | [xcopy_completer.md](xcopy_completer/xcopy_completer.md) | Native PowerShell argument completer for `xcopy` with help-driven switches and inline `/D:` and `/EXCLUDE:` completion. |
 | `yes`, `yes.exe` | [yes_completer.ps1](yes_completer/yes_completer.ps1) | [yes_completer.md](yes_completer/yes_completer.md) | Help-driven `yes` completer with a static fallback and help-line tooltips, filesystem operand completion. |

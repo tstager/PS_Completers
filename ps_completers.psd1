@@ -1548,6 +1548,15 @@
             )
         }
         @{
+            Path    = 'wtcli_completer/wtcli_completer.ps1'
+            Trusted = $false
+            Hash    = 'SHA256:251286D0D6DDDF29C3F3A2D8709497BE157557A305910905EFB2769D236AA7B2'
+            Targets = @(
+                @{ CommandName = 'wtcli'; Native = $true }
+                @{ CommandName = 'wtcli.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'xargs_completer/xargs_completer.ps1'
             Trusted = $false
             Hash    = 'SHA256:12F1CB00DDA2FDC68B798E1D19DA7EA7EF8213B758C655724E764F70BF59E396'
