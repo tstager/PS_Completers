@@ -13,7 +13,7 @@ Recent additions include standalone completers for the coreutils tools `comm`, `
 The completers ship as the
 [PS_Completers](https://www.powershellgallery.com/packages/PS_Completers)
 package, a [CompleterActions](https://www.powershellgallery.com/packages/CompleterActions)
-completer set. Installing it installs CompleterActions 2.2.0 or later, and one
+completer set. Installing it installs CompleterActions 3.0.0 or later, and one
 line in your profile registers every completer lazily. Nothing runs until the
 first tab press on a command:
 
@@ -29,7 +29,7 @@ import grammar, so profile start pays for one small file read instead of parsing
 
 ### Use the repository directly
 
-From a clone, with CompleterActions 2.0.0 or later installed, the same line
+From a clone, with CompleterActions 3.0.0 or later installed, the same line
 takes the path to the set file instead of the package name:
 
 ```powershell
@@ -73,7 +73,7 @@ registered lazily without being executed. The Pester gate under `tests` runs
 `Test-CompleterScript` over all of them, reporting each finding with its line,
 construct, and fix hint, then imports the set lazily and checks it lists
 exactly the scripts in the repository. It needs CompleterActions
-2.0.0-preview1 or later and runs in its own profile-free process:
+3.0.0 or later and runs in its own profile-free process:
 
 ```powershell
 pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"

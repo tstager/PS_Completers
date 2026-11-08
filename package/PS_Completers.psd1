@@ -10,7 +10,7 @@
     Author            = 'Trent Stager'
     Description       = 'Argument completers for native commands, as a CompleterActions completer set.'
     PowerShellVersion = '7.0'
-    RequiredModules   = @(@{ ModuleName = 'CompleterActions'; ModuleVersion = '2.2.0' })
+    RequiredModules   = @(@{ ModuleName = 'CompleterActions'; ModuleVersion = '3.0.0' })
     FunctionsToExport = @()
     CmdletsToExport   = @()
     VariablesToExport = @()

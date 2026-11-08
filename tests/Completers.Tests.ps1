@@ -17,7 +17,7 @@ its package layout checks), and imports the staged package by name from a
 test-drive module root to check it registers the same lazy records as the
 repository's set. Those records are unregistered again; no script is loaded.
 
-Needs CompleterActions 2.2.0 or later (2.2.0-preview1 satisfies it). Run it
+Needs CompleterActions 3.0.0 or later. Run it
 in its own profile-free process:
 
     pwsh -NoProfile -Command "Invoke-Pester -Path ./tests -Output Detailed"
@@ -36,7 +36,7 @@ BeforeDiscovery {
 
 Describe 'Completer scripts conform to the CompleterActions strict import grammar' {
     BeforeAll {
-        Import-Module -Name CompleterActions -MinimumVersion 2.0.0 -ErrorAction Stop
+        Import-Module -Name CompleterActions -MinimumVersion 3.0.0 -ErrorAction Stop
     }
 
     It 'discovers the completer scripts' {
@@ -53,7 +53,7 @@ Describe 'Completer scripts conform to the CompleterActions strict import gramma
 
 Describe 'ps_completers.psd1 matches the repository' {
     BeforeAll {
-        Import-Module -Name CompleterActions -MinimumVersion 2.1.0 -ErrorAction Stop
+        Import-Module -Name CompleterActions -MinimumVersion 3.0.0 -ErrorAction Stop
 
         $script:SetPath = Join-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -ChildPath 'ps_completers.psd1'
     }
@@ -73,7 +73,7 @@ Describe 'ps_completers.psd1 matches the repository' {
 
 Describe 'The staged PS_Completers package is a conforming completer-set package' {
     BeforeAll {
-        Import-Module -Name CompleterActions -MinimumVersion 2.2.0 -ErrorAction Stop
+        Import-Module -Name CompleterActions -MinimumVersion 3.0.0 -ErrorAction Stop
 
         $repoRoot = Split-Path -Path $PSScriptRoot -Parent
         $script:RepoSetPath = Join-Path -Path $repoRoot -ChildPath 'ps_completers.psd1'

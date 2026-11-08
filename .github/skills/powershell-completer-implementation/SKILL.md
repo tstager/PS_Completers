@@ -106,7 +106,7 @@ For every value-bearing option, handle the separate form (`--time mod`), the att
 
 ### Keep the top level inside the CompleterActions strict import grammar
 
-Every script must import under the CompleterActions strict tier (`Import-CompleterScript`, and `Import-CompleterSet` for the whole repository). The grammar is documented in `about_Import_Completers` (CompleterActions 2.0.0 or later) and enforced by `Test-CompleterScript`. Script scope may contain only:
+Every script must import under the CompleterActions strict tier (`Import-CompleterScript`, and `Import-CompleterSet` for the whole repository). The grammar is documented in `about_Import_Completers` and enforced by `Test-CompleterScript`. Script scope may contain only:
 
 - `Set-StrictMode`
 - function definitions
@@ -125,13 +125,13 @@ Everything else is rejected at script scope and must live inside a function body
 Check a script with:
 
 ```powershell
-Import-Module CompleterActions -MinimumVersion 2.2.0
+Import-Module CompleterActions -MinimumVersion 3.0.0
 Test-CompleterScript -LiteralPath .\<name>_completer\<name>_completer.ps1
 ```
 
 A conforming script returns nothing. Each finding carries `Line`, `Column`, `Construct`, `Message` and `Hint`; every strict-grammar finding has severity `Error`, and a script that does not parse yields one finding per parse error.
 
-The repository gate `tests/Completers.Tests.ps1` needs CompleterActions 2.2.0 or later. CI installs the latest release including prereleases (3.0.0-rc1 at the time of writing), so a CompleterActions release that tightens the grammar or set schema fails there first. The gate checks three things:
+The repository gate `tests/Completers.Tests.ps1` needs CompleterActions 3.0.0 or later. CI installs the latest release including prereleases, so a CompleterActions release that tightens the grammar or set schema fails there first. The gate checks three things:
 
 1. `Test-CompleterScript` reports no `Error` finding for any script.
 2. `ps_completers.psd1` keeps every entry on the strict tier (none `Trusted`), and `Test-CompleterSet` reports no drift between the set and the scripts.
