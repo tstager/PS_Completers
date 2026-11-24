@@ -4,7 +4,7 @@
 
 This repository contains standalone PowerShell argument completer scripts for native tools. Each `*_completer` folder contains a self-contained `*_completer.ps1` script that can be dot-sourced into a PowerShell session or profile, plus a companion `*_completer.md` document describing coverage and implementation details. These scripts can be imported with the CompleterActions module.
 
-Recent additions include standalone completers for the coreutils tools `comm`, `cut`, `date`, `df`, `env`, `head`, `join`, `ln`, `mktemp`, `printf`, `ptx`, `readlink`, `realpath`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shred`, `shuf`, `split`, `stat`, `stdbuf`, `sum`, `tac`, `tail`, `test`, `touch`, `tr`, `truncate`, `tsort`, `tty`, `tskill`, `uniq`, `uname`, `unexpand`, `unlink`, `uptime`, `vdir`, and `yes`.
+Recent additions include a standalone completer for the Chocolatey `choco` CLI and standalone completers for the coreutils tools `comm`, `cut`, `date`, `df`, `env`, `head`, `join`, `ln`, `mktemp`, `printf`, `ptx`, `readlink`, `realpath`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shred`, `shuf`, `split`, `stat`, `stdbuf`, `sum`, `tac`, `tail`, `test`, `touch`, `tr`, `truncate`, `tsort`, `tty`, `tskill`, `uniq`, `uname`, `unexpand`, `unlink`, `uptime`, `vdir`, and `yes`.
 
 ## Quick start
 
@@ -25,7 +25,7 @@ Import-CompleterSet -Name PS_Completers
 The package contains nothing that runs on import: a manifest, the set file, and
 the completer scripts. Each script loads on its first tab press, under the strict
 import grammar, so profile start pays for one small file read instead of parsing
-175 scripts. Update with `Update-PSResource PS_Completers`.
+176 scripts. Update with `Update-PSResource PS_Completers`.
 
 ### Use the repository directly
 
@@ -108,6 +108,7 @@ GitHub Actions on every push and pull request.
 | `cargo-binstall`, `cargo-binstall.exe` | [cargo_binstall_completer.ps1](cargo_binstall_completer/cargo_binstall_completer.ps1) | [cargo_binstall_completer.md](cargo_binstall_completer/cargo_binstall_completer.md) | Static-first `cargo-binstall` completer with package install switches, path-aware overrides, and enum values for formats, strategies, TLS versions, and log levels. |
 | `cargo-clippy`, `cargo-clippy.exe` | [cargo_clippy_completer.ps1](cargo_clippy_completer/cargo_clippy_completer.ps1) | [cargo_clippy_completer.md](cargo_clippy_completer/cargo_clippy_completer.md) | Static-first `cargo-clippy` completer with Clippy lint controls plus Cargo check package, target, feature, compilation, and manifest options. |
 | `cargo`, `cargo.exe` | [cargo_completer.ps1](cargo_completer/cargo_completer.ps1) | [cargo_completer.md](cargo_completer/cargo_completer.md) | Help-driven Cargo completer with root and subcommand switch coverage, enum-aware value hints, and path-safe completion for manifest/config slots. |
+| `choco`, `choco.exe` | [choco_completer.ps1](choco_completer/choco_completer.ps1) | [choco_completer.md](choco_completer/choco_completer.md) | Help-driven Chocolatey completer with cached command help, aliases, subcommands, value-aware switches, and safe local package, source, feature, config, rule, and template completion. |
 | `cksum`, `cksum.exe` | [cksum_completer.ps1](cksum_completer/cksum_completer.ps1) | [cksum_completer.md](cksum_completer/cksum_completer.md) | Help-driven `cksum` completer with a static fallback and help-line tooltips, filesystem operand completion. |
 | `claude`, `claude.exe` | [claude_completer.ps1](claude_completer/claude_completer.ps1) | [claude_completer.md](claude_completer/claude_completer.md) | Static-first Claude Code CLI completer with three-level subcommand tree, command/flag alias normalization, context-aware enum and value completion, model and setting-source hints, path-safe slots, and conservative optional-value flag handling. |
 | `cmd`, `cmd.exe` | [cmd_completer.ps1](cmd_completer/cmd_completer.ps1) | [cmd_completer.md](cmd_completer/cmd_completer.md) | Static-first `cmd.exe` completer with documented switch coverage, attached `/E:` `/F:` `/V:` `/T:` values, and command-tail suggestions after `/C`, `/K`, or `/R`. |
