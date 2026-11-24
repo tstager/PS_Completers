@@ -65,6 +65,7 @@ BeforeDiscovery {
         'cargo_binstall'   = 'cargo-binstall --root ', 'cargo-binstall --manifest-path '
         'cargo_clippy'     = 'cargo-clippy --manifest-path ', 'cargo-clippy --target-dir '
         'cksum'            = 'cksum '
+        'choco'            = 'choco install ./', 'choco install --source='
         'claude'           = 'claude --add-dir ', 'claude --mcp-config ', 'claude purge '
         'cmd'              = 'cmd ./', 'cmd /c dir ./'
         'code_insiders'    = 'code-insiders --add ', 'code-insiders --diff '

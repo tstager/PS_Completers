@@ -119,6 +119,15 @@
             )
         }
         @{
+            Path    = 'choco_completer/choco_completer.ps1'
+            Trusted = $false
+            Hash    = 'SHA256:342F3B8909FD0A504C00A52A517C8035AC33CD6B2C772687ED92FD16242D90F2'
+            Targets = @(
+                @{ CommandName = 'choco'; Native = $true }
+                @{ CommandName = 'choco.exe'; Native = $true }
+            )
+        }
+        @{
             Path    = 'cksum_completer/cksum_completer.ps1'
             Trusted = $false
             Hash    = 'SHA256:1DD9519D1AA159753643572495EF27BB9D7DF234AA91D5CA180BD478E0B869BE'
