@@ -64,9 +64,10 @@ The completer uses bounded, short-lived caches for read-only local commands:
 Processes close standard input, redirect output, and use a short timeout, so
 completion cannot wait for interactive input.
 
-Sensitive slots are deliberately placeholder-only. API keys, passwords,
-certificate passwords, installer arguments, and package parameters are never
-enumerated from Chocolatey configuration or package state.
+Empty sensitive slots show a placeholder. Once you type any part of an API
+key, password, certificate password, installer argument, or package parameter,
+Tab offers no replacement, including matching filenames. The completer never
+reads these values from Chocolatey configuration or package state.
 
 ## Path and value completion
 
@@ -78,8 +79,9 @@ Path-aware completion is provided for:
 
 The completer also provides enum and numeric candidates for documented values
 such as checksum algorithms, search ordering, source priorities, timeouts,
-and pagination. Unknown value-bearing options receive an explicit `<value>`
-placeholder, suppressing PowerShell's unrelated file fallback.
+and pagination. A documented value-bearing option without a specialized hint
+gets a `<value>` placeholder in its empty value slot. Adding `=` to a flag
+such as `--help` or to an unrecognized option does not offer a value.
 
 ## Validation
 
