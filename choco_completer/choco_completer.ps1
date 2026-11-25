@@ -1203,24 +1203,31 @@ function Get-ChocoOptionSuggestions {
     }
 }
 
-function Get-ChocoCurrentToken {
+function Get-ChocoCurrentTokenExtent {
     param(
         [System.Management.Automation.Language.CommandAst]$CommandAst,
-        [int]$CursorPosition,
-        [string]$WordToComplete
+        [int]$CursorPosition
     )
 
-    foreach ($element in @($CommandAst.CommandElements)) {
+    foreach ($element in $CommandAst.CommandElements) {
         $extent = $element.Extent
         if ($extent.StartOffset -lt $CursorPosition -and $CursorPosition -le $extent.EndOffset) {
-            $length = [Math]::Min($extent.Text.Length, $CursorPosition - $extent.StartOffset)
-            if ($length -gt 0) {
-                return $extent.Text.Substring(0, $length)
-            }
+            return $extent
         }
     }
+}
 
-    if ($null -eq $WordToComplete) { '' } else { $WordToComplete }
+function Complete-ChocoNoReplacement {
+    param([string]$TokenText)
+
+    if ($PSVersionTable.PSVersion -ge [version]'7.7') {
+        # PowerShell 7.7+ accepts a null result to suppress its filename fallback.
+        return $null
+    }
+
+    # Older PowerShell needs a nonempty result. Preserve the entire token, including
+    # any text after the cursor, without showing the argument in the completion menu.
+    [System.Management.Automation.CompletionResult]::new($TokenText, 'No completion', 'Text', 'Leave the argument unchanged.')
 }
 
 function Split-ChocoTypedToken {
@@ -1278,7 +1285,14 @@ function Complete-ChocoNative {
         $tokensBeforeCurrent = @($tokensBeforeCurrent.ToArray())
     }
 
-    $typed = Split-ChocoTypedToken -Token (Get-ChocoCurrentToken -CommandAst $commandAst -CursorPosition $cursorPosition -WordToComplete $wordToComplete)
+    $currentExtent = Get-ChocoCurrentTokenExtent -CommandAst $commandAst -CursorPosition $cursorPosition
+    $tokenText = $wordToComplete
+    $typedText = $wordToComplete
+    if ($currentExtent) {
+        $tokenText = $currentExtent.Text
+        $typedText = $tokenText.Substring(0, [Math]::Min($tokenText.Length, $cursorPosition - $currentExtent.StartOffset))
+    }
+    $typed = Split-ChocoTypedToken -Token $typedText
     $currentToken = $typed.Token
     $quoteChar = $typed.Quote
     $state = Get-ChocoCommandState -TokensBeforeCurrent $tokensBeforeCurrent
@@ -1295,16 +1309,25 @@ function Complete-ChocoNative {
         $typedValue = $matches['value']
         $valuePrefix = $option + '='
         $spec = Get-ChocoOptionByName -Path $state.Path -Name $option
-        if (-not $spec -or -not $spec.TakesValue) { return $null }
+        if (-not $spec -or -not $spec.TakesValue) {
+            Complete-ChocoNoReplacement -TokenText $tokenText
+            return
+        }
     }
 
     if ($spec) {
         $hint = Get-ChocoProtectedValueHint -Names $spec.Names
         if ($hint) {
-            # An explicit null tells native completion not to fall back to filenames.
-            if ($typedValue.Length -gt 0 -or ($commandAst.CommandElements | Where-Object {
-                $_.Extent.StartOffset -le $cursorPosition -and $cursorPosition -lt $_.Extent.EndOffset
-            })) { return $null }
+            # PowerShell selects no text at the start of a separate value. Only 7.7+
+            # can suppress completion there without inserting text in the empty slot.
+            if ($typedValue.Length -gt 0 -or ($currentExtent -and $cursorPosition -lt $currentExtent.EndOffset) -or (
+                $PSVersionTable.PSVersion -ge [version]'7.7' -and ($commandAst.CommandElements | Where-Object {
+                    $_.Extent.StartOffset -eq $cursorPosition
+                })
+            )) {
+                Complete-ChocoNoReplacement -TokenText $tokenText
+                return
+            }
             New-ChocoCompletionResult -CompletionText ($valuePrefix + $hint.CompletionText) -ToolTip $hint.ToolTip
             return
         }

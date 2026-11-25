@@ -69,7 +69,7 @@ Describe 'Chocolatey native argument completion' {
         $shell.HadErrors | Should -BeFalse
         $shell.Commands.Clear()
 
-        function Get-ChocoMatches([string]$Line, [switch]$Offline, [int]$Cursor = $Line.Length) {
+        function Get-ChocoCompletion([string]$Line, [switch]$Offline, [int]$Cursor = $Line.Length) {
             $shell.Commands.Clear()
             $result = $shell.AddScript({
                 param($Line, $Offline, $Cursor)
@@ -78,10 +78,31 @@ Describe 'Chocolatey native argument completion' {
                     $script:ChocoCompletionCache.HelpDataByPath.Clear()
                     $script:ChocoCompletionCache.HelpLinesByCommand.Clear()
                 }
-                (TabExpansion2 $Line $Cursor).CompletionMatches
+                TabExpansion2 $Line $Cursor
             }).AddArgument($Line).AddArgument($Offline.IsPresent).AddArgument($Cursor).Invoke()
             $shell.HadErrors | Should -BeFalse
-            $result | ForEach-Object CompletionText
+            $result | Should -HaveCount 1
+            $result[0]
+        }
+
+        function Get-ChocoMatches([string]$Line, [switch]$Offline) {
+            (Get-ChocoCompletion $Line -Offline:$Offline).CompletionMatches | ForEach-Object CompletionText
+        }
+
+        function Assert-ChocoNoReplacement([string]$Line, [int]$Cursor = $Line.Length) {
+            $completion = Get-ChocoCompletion $Line -Cursor $Cursor
+            $matches = $completion.CompletionMatches
+            if ($PSVersionTable.PSVersion -ge [version]'7.7') {
+                $matches | Should -HaveCount 0
+            } else {
+                # Older engines require one no-op candidate. Applying it must preserve the entire line.
+                $matches | Should -HaveCount 1
+                $matches[0].ListItemText | Should -BeExactly 'No completion'
+                $matches[0].ToolTip | Should -BeExactly 'Leave the argument unchanged.'
+                $accepted = $Line.Remove($completion.ReplacementIndex, $completion.ReplacementLength).Insert(
+                    $completion.ReplacementIndex, $matches[0].CompletionText)
+                $accepted | Should -BeExactly $Line
+            }
         }
     }
 
@@ -116,16 +137,17 @@ Describe 'Chocolatey native argument completion' {
         @{ Line = 'choco install --password RE' }
         @{ Line = 'choco install -p RE' }
         @{ Line = 'choco install --password=RE' }
+        @{ Line = 'choco install --password="RE AD"' }
         @{ Line = 'choco apikey add -k RE' }
         @{ Line = 'choco install --password --log-file=RE' }
     ) {
         @(Get-ChocoMatches 'choco install --log-file RE') | Should -Contain 'README.md'
-        @(Get-ChocoMatches $Line).Count | Should -Be 0
+        Assert-ChocoNoReplacement $Line
     }
 
     It 'does not replace an attached password when the cursor is just before its first character' {
         $prefix = 'choco install --password='
-        @(Get-ChocoMatches ($prefix + 'RE') -Cursor $prefix.Length).Count | Should -Be 0
+        Assert-ChocoNoReplacement ($prefix + 'RE') -Cursor $prefix.Length
     }
 
     It 'still hints an empty password slot' {
@@ -137,7 +159,7 @@ Describe 'Chocolatey native argument completion' {
         @{ Option = '--help' }
         @{ Option = '--zzzz' }
     ) {
-        @(Get-ChocoMatches "choco find $Option=").Count | Should -Be 0
+        Assert-ChocoNoReplacement "choco find $Option="
         @(Get-ChocoMatches 'choco find --page-size=3') | Should -Contain '--page-size=30'
     }
 
