@@ -9,6 +9,7 @@ if (-not (Get-Variable -Name ChocoCompletionCache -Scope Script -ErrorAction Ign
         ExecutablePath       = $null
         ExecutablePathProbed = $false
         HelpDataByPath       = @{}
+        HelpLinesByCommand   = @{}
         LocalData            = @{}
         LocalDataTtlSeconds  = 45
     }
@@ -333,6 +334,7 @@ function Get-ChocoCommandFallbackOptions {
         ) }
         'template' { @(
             New-ChocoOptionSpec @('-n', '--name') 'Template name.' $true
+            New-ChocoOptionSpec @('--reduce-output') 'Reduce template list output.' $false
         ) }
         { $_ -in @('search', 'list') } { @(
             New-ChocoOptionSpec @('-s', '--source') 'Package source.' $true
@@ -359,7 +361,8 @@ function Get-ChocoCommandFallbackOptions {
 function ConvertFrom-ChocoHelp {
     param(
         [string[]]$Lines,
-        [string]$Command
+        [string]$Command,
+        [string]$Subcommand
     )
 
     $commands = New-Object System.Collections.Generic.List[object]
@@ -370,7 +373,6 @@ function ConvertFrom-ChocoHelp {
     $currentDescription = New-Object System.Collections.Generic.List[string]
     $optionLinePattern = '^\s+(?:-\?|[/\-]{1,2}[A-Za-z][A-Za-z0-9-]*)'
     $inOptionSection = $false
-    $text = @($Lines) -join "`n"
 
     foreach ($line in @($Lines)) {
         if ($line -match '^\s*(?:Default\s+)?Options and Switches\s*$') {
@@ -423,16 +425,8 @@ function ConvertFrom-ChocoHelp {
     }
 
     if ($Command -ne '') {
-        foreach ($candidate in @(Get-ChocoStaticSubcommands -Command $Command)) {
-            $escapedCandidate = [regex]::Escape($candidate)
-            $escapedCommand = [regex]::Escape($Command)
-            if ($text -match ('(?m)^\s*choco(?:\.exe)?\s+{0}\s+(?:\[)?{1}(?:\b|\]|\|)' -f $escapedCommand, $escapedCandidate)) {
-                [void]$subcommands.Add($candidate)
-            }
-        }
-
-        # A few valid switches are shown only in a command example (for
-        # example cache remove --expired and template list --reduce-output).
+        $staticSubcommands = @(Get-ChocoStaticSubcommands -Command $Command)
+        # Some switches (e.g. template list --reduce-output) appear only in examples.
         $knownOptionNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($option in $options.ToArray()) {
             foreach ($name in @($option.Names)) {
@@ -440,17 +434,34 @@ function ConvertFrom-ChocoHelp {
             }
         }
         foreach ($line in @($Lines)) {
-            if ($line -notmatch ('^\s*choco(?:\.exe)?\s+{0}\b' -f [regex]::Escape($Command))) {
+            if ($line -notmatch '^\s*choco(?:\.exe)?\s+(?<command>[A-Za-z][\w-]*)\s+(?<first>\S+)') {
+                continue
+            }
+            $first = $matches['first']
+            if ((Get-ChocoCanonicalCommand -Command $matches['command']) -ne $Command) {
                 continue
             }
 
-            foreach ($match in [regex]::Matches($line, '(?<!\S)(?<name>(?:--|/)[A-Za-z][A-Za-z0-9-]*)(?:=(?<value>\S+))?')) {
-                $name = $match.Groups['name'].Value
-                if (-not $knownOptionNames.Add($name)) {
-                    continue
+            if ($first -match '^\[?[A-Za-z][\w-]*\]?(?:\|\[?[A-Za-z][\w-]*\]?)+$') {
+                foreach ($verb in $first.Split('|')) {
+                    [void]$subcommands.Add($verb.Trim('[]'))
                 }
+                continue
+            }
+            $verb = $first.Trim('[]')
+            if ($verb -in $staticSubcommands -or $verb -in $subcommands) {
+                [void]$subcommands.Add($verb)
+                if ($Subcommand -and $verb -ne $Subcommand) { continue }
+            }
 
-                [void]$options.Add((New-ChocoOptionSpec -Names @($name) -Description ('Option documented in choco {0} help examples.' -f $Command) -TakesValue $match.Groups['value'].Success))
+            # Inspect whole tokens, not switch-like substrings inside a quoted payload.
+            $tokens = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseInput($line, [ref]$tokens, [ref]$null)
+            foreach ($token in $tokens) {
+                if ($token.Text -notmatch '^(?<name>(?:--|/)[A-Za-z][A-Za-z0-9-]*)(?<value>=.*)?$') { continue }
+                $name = $matches['name']
+                if (-not $knownOptionNames.Add($name)) { continue }
+                [void]$options.Add((New-ChocoOptionSpec -Names @($name) -Description ('Option documented in choco {0} help examples.' -f $Command) -TakesValue $matches.ContainsKey('value')))
             }
         }
     }
@@ -472,32 +483,33 @@ function Get-ChocoHelpData {
     }
 
     $command = if ($canonicalPath.Count -gt 0) { $canonicalPath[0] } else { '' }
-    $arguments = if ([string]::IsNullOrWhiteSpace($command)) {
-        @('--help')
-    } else {
-        @($command, '--help')
+    # Chocolatey 2.x prints the parent help for all its subcommands.
+    $helpLines = $script:ChocoCompletionCache.HelpLinesByCommand
+    if (-not $helpLines.ContainsKey($command)) {
+        $arguments = if ($command) { @($command, '--help') } else { @('--help') }
+        $helpLines[$command] = @(Invoke-ChocoCapture -Arguments $arguments)
     }
-    $lines = @(Invoke-ChocoCapture -Arguments $arguments)
-    $helpData = ConvertFrom-ChocoHelp -Lines $lines -Command $command
+    $lines = $helpLines[$command]
+    $subcommand = if ($canonicalPath.Count -gt 1) { $canonicalPath[1] } else { '' }
+    $helpData = ConvertFrom-ChocoHelp -Lines $lines -Command $command -Subcommand $subcommand
 
     if (@($helpData.Options).Count -eq 0) {
-        if ([string]::IsNullOrWhiteSpace($command)) {
-            $helpData = [pscustomobject]@{
-                Commands    = @(Get-ChocoStaticCommands)
-                Options     = @((Get-ChocoGlobalFallbackOptions) + (New-ChocoOptionSpec @('--version') 'Print the Chocolatey version.' $false))
-                Subcommands = @()
-            }
+        if ($command) {
+            $helpData.Options = @(Get-ChocoCommandFallbackOptions -Command $command)
         } else {
-            $helpData = [pscustomobject]@{
-                Commands    = @()
-                Options     = @(Get-ChocoCommandFallbackOptions -Command $command)
-                Subcommands = @(Get-ChocoStaticSubcommands -Command $command)
-            }
+            $helpData.Options = @((Get-ChocoGlobalFallbackOptions) + (New-ChocoOptionSpec @('--version') 'Print the Chocolatey version.' $false))
         }
-    } elseif ($command -eq '') {
-        $liveCommands = @($helpData.Commands)
-        if ($liveCommands.Count -eq 0) {
-            $helpData.Commands = @(Get-ChocoStaticCommands)
+    }
+    if (-not $command -and $helpData.Commands.Count -eq 0) {
+        $helpData.Commands = @(Get-ChocoStaticCommands)
+    }
+
+    # Chocolatey prints parent-level option definitions even for child --help.
+    if ($subcommand) {
+        if ($command -eq 'cache' -and $subcommand -ne 'remove') {
+            $helpData.Options = @($helpData.Options | Where-Object { '--expired' -notin $_.Names })
+        } elseif ($command -eq 'template' -and $subcommand -ne 'list') {
+            $helpData.Options = @($helpData.Options | Where-Object { '--reduce-output' -notin $_.Names })
         }
     }
 
@@ -562,7 +574,7 @@ function Get-ChocoCommandState {
         if (Test-ChocoOptionToken -Token $token) {
             $spec = Get-ChocoOptionByName -Path @($path.ToArray()) -Name $token
             if ($spec -and $spec.TakesValue) {
-                $expectingValueOption = $token
+                $expectingValueOption = @{ Name = $token; Spec = $spec }
             }
             continue
         }
@@ -872,6 +884,18 @@ function Test-ChocoPathLike {
     )
 }
 
+function Get-ChocoProtectedValueHint {
+    param([string[]]$Names)
+
+    if ($Names -match '^[-/]+(?:password|proxy-password|certpassword|cp|key|apikey|api-key)$') {
+        New-ChocoSuggestion -CompletionText '<secret>' -ToolTip 'Secret value; deliberately not discovered from local state.'
+    } elseif ($Names -match '^[-/]+(?:ia|ua|(?:un)?install-?(?:args|arguments))$') {
+        New-ChocoSuggestion -CompletionText '<installer-arguments>' -ToolTip 'Arguments passed to the native installer.'
+    } elseif ($Names -match '^[-/]+(?:params|parameters|pkgparameters|package-?parameters)$') {
+        New-ChocoSuggestion -CompletionText '<package-parameters>' -ToolTip 'Parameters consumed by package scripts.'
+    }
+}
+
 function Get-ChocoOptionValueSuggestions {
     param(
         [string[]]$Path,
@@ -933,17 +957,8 @@ function Get-ChocoOptionValueSuggestions {
                 [void]$suggestions.Add((New-ChocoSuggestion -CompletionText '<certificate-path>' -ToolTip 'Path to a client certificate.'))
             }
         }
-        { $_ -match '^(password|proxy-password|certpassword|cp|key|apikey|api-key)$' } {
-            [void]$suggestions.Add((New-ChocoSuggestion -CompletionText '<secret>' -ToolTip 'Secret value; deliberately not discovered from local state.'))
-        }
         { $_ -in @('user', 'proxy-user', 'u') } {
             [void]$suggestions.Add((New-ChocoSuggestion -CompletionText '<username>' -ToolTip 'Authenticated user name.'))
-        }
-        { $_ -in @('ia', 'installargs', 'install-args', 'installarguments', 'install-arguments', 'ua', 'uninstallargs', 'uninstallarguments', 'uninstall-arguments') } {
-            [void]$suggestions.Add((New-ChocoSuggestion -CompletionText '<installer-arguments>' -ToolTip 'Arguments passed to the native installer.'))
-        }
-        { $_ -in @('params', 'parameters', 'pkgparameters', 'packageparameters', 'package-parameters') } {
-            [void]$suggestions.Add((New-ChocoSuggestion -CompletionText '<package-parameters>' -ToolTip 'Parameters consumed by package scripts.'))
         }
         { $_ -in @('checksumtype', 'checksum-type', 'downloadchecksumtype', 'download-checksum-type', 'checksumtype64', 'checksumtypex64', 'checksum-type-x64', 'downloadchecksumtypex64', 'download-checksum-type-x64') } {
             foreach ($value in @('md5', 'sha1', 'sha256', 'sha512')) {
@@ -1269,22 +1284,37 @@ function Complete-ChocoNative {
     $state = Get-ChocoCommandState -TokensBeforeCurrent $tokensBeforeCurrent
     $suggestions = New-Object System.Collections.Generic.List[object]
 
-    if ($currentToken -match '^(?<option>(?:--?|/)[^=]+)=(?<value>.*)$') {
+    $spec = $null
+    $valuePrefix = ''
+    if ($null -ne $state.ExpectingValueOption) {
+        $spec = $state.ExpectingValueOption.Spec
+        $option = $state.ExpectingValueOption.Name
+        $typedValue = $currentToken
+    } elseif ($currentToken -match '^(?<option>(?:--?|/)[^=]+)=(?<value>.*)$') {
         $option = $matches['option']
         $typedValue = $matches['value']
-        foreach ($item in @(Get-ChocoOptionValueSuggestions -Path $state.Path -Option $option -TypedValue $typedValue -Positionals $state.Positionals)) {
-            if ($item) {
-                [void]$suggestions.Add((New-ChocoSuggestion -CompletionText ('{0}={1}' -f $option, $item.CompletionText) -ToolTip $item.ToolTip -ResultType $item.ResultType))
-            }
-        }
-        $valuePrefix = '{0}=' -f $option
-        Add-ChocoQuote -Results (ConvertTo-ChocoCompletionResults -Suggestions $suggestions -Prefix ($valuePrefix + $typedValue)) -Quote $quoteChar -ValuePrefix $valuePrefix
-        return
+        $valuePrefix = $option + '='
+        $spec = Get-ChocoOptionByName -Path $state.Path -Name $option
+        if (-not $spec -or -not $spec.TakesValue) { return $null }
     }
 
-    if ($null -ne $state.ExpectingValueOption) {
-        $items = Get-ChocoOptionValueSuggestions -Path $state.Path -Option $state.ExpectingValueOption -TypedValue $currentToken -Positionals $state.Positionals
-        Add-ChocoQuote -Results (ConvertTo-ChocoCompletionResults -Suggestions $items -Prefix $currentToken) -Quote $quoteChar
+    if ($spec) {
+        $hint = Get-ChocoProtectedValueHint -Names $spec.Names
+        if ($hint) {
+            # An explicit null tells native completion not to fall back to filenames.
+            if ($typedValue.Length -gt 0 -or ($commandAst.CommandElements | Where-Object {
+                $_.Extent.StartOffset -le $cursorPosition -and $cursorPosition -lt $_.Extent.EndOffset
+            })) { return $null }
+            New-ChocoCompletionResult -CompletionText ($valuePrefix + $hint.CompletionText) -ToolTip $hint.ToolTip
+            return
+        }
+
+        foreach ($item in @(Get-ChocoOptionValueSuggestions -Path $state.Path -Option $option -TypedValue $typedValue -Positionals $state.Positionals)) {
+            if ($item) {
+                [void]$suggestions.Add((New-ChocoSuggestion -CompletionText ($valuePrefix + $item.CompletionText) -ToolTip $item.ToolTip -ResultType $item.ResultType))
+            }
+        }
+        Add-ChocoQuote -Results (ConvertTo-ChocoCompletionResults -Suggestions $suggestions -Prefix ($valuePrefix + $typedValue)) -Quote $quoteChar -ValuePrefix $valuePrefix
         return
     }
 

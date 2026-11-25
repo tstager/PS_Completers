@@ -121,7 +121,7 @@
         @{
             Path    = 'choco_completer/choco_completer.ps1'
             Trusted = $false
-            Hash    = 'SHA256:342F3B8909FD0A504C00A52A517C8035AC33CD6B2C772687ED92FD16242D90F2'
+            Hash    = 'SHA256:CC9101652764AD70F47393AA60D2389BCB7D96926A6B0C83A088AE507EA325A7'
             Targets = @(
                 @{ CommandName = 'choco'; Native = $true }
                 @{ CommandName = 'choco.exe'; Native = $true }
